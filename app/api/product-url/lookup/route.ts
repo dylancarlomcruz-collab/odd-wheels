@@ -195,7 +195,7 @@ function safeJsonParse(raw: string) {
   }
 }
 
-function cleanText(value: string) {
+function cleanText(value: string | null | undefined) {
   const trimmed = String(value ?? "").replace(/\s+/g, " ").trim();
   return trimmed ? decodeHtml(trimmed) : "";
 }
