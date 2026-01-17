@@ -132,81 +132,81 @@ function TradeProductCard({
   const image = product.image_urls?.[0] ?? null;
   const canAdd = Boolean(selected) && selectedQty > 0;
 
-  return (
-    <div className="rounded-2xl overflow-hidden bg-paper/5 border border-white/10 text-left shadow-sm hover:border-accent-500/40 hover:shadow-accent-500/10 transition">
-      <div className="aspect-[4/3] bg-black/10 flex items-center justify-center">
-        {image ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={image} alt={product.title} className="h-full w-full object-contain bg-neutral-50" />
-        ) : (
-          <div className="text-white/60 text-sm">No image</div>
-        )}
-      </div>
-
-      <div className="p-4 space-y-2">
-        {pick ? (
-          <div className="text-xs text-amber-200">In picks: {pick.qty}</div>
-        ) : null}
-
-        <div className="text-white font-semibold line-clamp-2">
-          {product.title}
-        </div>
-        <div className="text-white/60 text-xs line-clamp-1">
-          {product.brand ?? "Unknown"}
-          {product.model ? ` - ${product.model}` : ""}
-          {product.variation ? ` - ${product.variation}` : ""}
+    return (
+      <div className="rounded-xl sm:rounded-2xl overflow-hidden bg-paper/5 border border-white/10 text-left shadow-sm hover:border-accent-500/40 hover:shadow-accent-500/10 transition">
+        <div className="aspect-[4/3] bg-black/10 flex items-center justify-center">
+          {image ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={image} alt={product.title} className="h-full w-full object-contain bg-neutral-50" />
+          ) : (
+            <div className="text-white/60 text-sm">No image</div>
+          )}
         </div>
 
-        <div className="flex items-center justify-between pt-2">
-          <div className="text-price">{selectedPrice}</div>
-          <div className="text-xs text-white/60">{selectedQty} in stock</div>
-        </div>
+        <div className="p-3 sm:p-4 space-y-2">
+          {pick ? (
+            <div className="text-xs text-amber-200">In picks: {pick.qty}</div>
+          ) : null}
 
-        <div className="pt-2 space-y-2">
-          <div className="flex flex-wrap gap-2">
-            {displayVariants.map((v) => (
-              <button
-                key={v.id}
-                type="button"
-                onClick={() => setSelectedId(v.id)}
-                className={[
-                  "rounded-full px-3 py-1 text-xs border",
-                  selectedId === v.id
-                    ? "bg-amber-600 text-black border-amber-500"
-                    : "border-white/10 bg-paper/5 text-white/70 hover:bg-paper/10",
-                ].join(" ")}
-              >
-                {conditionLabel(v.condition)}
-              </button>
-            ))}
+          <div className="text-sm sm:text-base text-white font-semibold line-clamp-2">
+            {product.title}
           </div>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={!canAdd}
-            onClick={() => {
-              if (!selected) return;
-              onAdd(
-                {
-                  product_id: product.id,
-                  variant_id: selected.id,
-                  qty: 1,
-                  snapshot_title: product.title,
-                  snapshot_price: Number(selected.price ?? 0),
-                  snapshot_image_url: image,
-                  snapshot_condition: selected.condition,
-                },
-                selectedQty
-              );
-            }}
-          >
-            {canAdd ? "Add to trade picks" : "Sold out"}
-          </Button>
+          <div className="text-white/60 text-[11px] sm:text-xs line-clamp-1">
+            {product.brand ?? "Unknown"}
+            {product.model ? ` - ${product.model}` : ""}
+            {product.variation ? ` - ${product.variation}` : ""}
+          </div>
+
+          <div className="flex items-center justify-between pt-2">
+            <div className="text-price text-sm sm:text-base">{selectedPrice}</div>
+            <div className="text-[11px] sm:text-xs text-white/60">{selectedQty} in stock</div>
+          </div>
+
+          <div className="pt-2 space-y-2">
+            <div className="flex flex-wrap gap-2">
+              {displayVariants.map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => setSelectedId(v.id)}
+                  className={[
+                    "rounded-full px-2 py-0.5 text-[11px] sm:px-3 sm:py-1 sm:text-xs border",
+                    selectedId === v.id
+                      ? "bg-amber-600 text-black border-amber-500"
+                      : "border-white/10 bg-paper/5 text-white/70 hover:bg-paper/10",
+                  ].join(" ")}
+                >
+                  {conditionLabel(v.condition)}
+                </button>
+              ))}
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!canAdd}
+              onClick={() => {
+                if (!selected) return;
+                onAdd(
+                  {
+                    product_id: product.id,
+                    variant_id: selected.id,
+                    qty: 1,
+                    snapshot_title: product.title,
+                    snapshot_price: Number(selected.price ?? 0),
+                    snapshot_image_url: image,
+                    snapshot_condition: selected.condition,
+                  },
+                  selectedQty
+                );
+              }}
+            >
+              {canAdd ? "Add to trade picks" : "Sold out"}
+            </Button>
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
 function PicksPanel({
   picks,
@@ -465,7 +465,7 @@ export function TradeInventoryPicker({
 
       {error ? <div className="text-red-300">{error}</div> : null}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
         {filteredRows.map((p) => (
           <TradeProductCard
             key={p.id}

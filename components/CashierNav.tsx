@@ -25,7 +25,7 @@ export function CashierNav() {
             key={l.href}
             href={l.href}
             className={cn(
-              "flex items-center gap-2 rounded-xl border px-3 py-2 text-sm transition",
+              "flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs transition sm:py-2 sm:text-sm",
               active
                 ? "border-accent-500/40 bg-accent-500/15 text-accent-900 dark:text-accent-100"
                 : "border-white/10 bg-paper/5 text-white/70 hover:bg-paper/10"

@@ -127,7 +127,7 @@ function AdminProductCard({
           onClick();
         }
       }}
-      className="group h-full rounded-2xl overflow-hidden bg-paper/5 border border-white/10 text-left shadow-sm hover:border-accent-500/40 hover:shadow-accent-500/10 transition"
+      className="group h-full rounded-xl sm:rounded-2xl overflow-hidden bg-paper/5 border border-white/10 text-left shadow-sm hover:border-accent-500/40 hover:shadow-accent-500/10 transition"
     >
       <div className="aspect-[4/3] bg-black/10 flex items-center justify-center">
         {product.image_urls?.[0] ? (
@@ -142,7 +142,7 @@ function AdminProductCard({
         )}
       </div>
 
-      <div className="p-4 space-y-2">
+      <div className="p-3 sm:p-4 space-y-2">
         <div className="flex items-start gap-2">
           <Badge
             className={
@@ -432,7 +432,7 @@ export function InventoryBrowseGrid({
 
       {error ? <div className="text-red-300">{error}</div> : null}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
         {filteredRows.map((p) => (
           <AdminProductCard
             key={p.id}
@@ -443,7 +443,7 @@ export function InventoryBrowseGrid({
         ))}
       </div>
 
-      {loading ? <div className="text-white/60">Loading…</div> : null}
+      {loading ? <div className="text-white/60">Loading...</div> : null}
 
       {!loading && !filteredRows.length ? (
         <div className="text-white/60">No products match your filters.</div>

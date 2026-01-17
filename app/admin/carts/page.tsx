@@ -202,26 +202,26 @@ export default function AdminCartInsightsPage() {
           <Badge>{rows.length} items</Badge>
         </CardHeader>
         <CardBody className="space-y-6">
-          <div className="grid gap-3 md:grid-cols-4">
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
               <div className="text-sm text-white/60">Cart lines</div>
               <div className="text-2xl font-semibold">{stats.lines}</div>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
+            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
               <div className="text-sm text-white/60">Distinct customers</div>
               <div className="text-2xl font-semibold">{stats.customers}</div>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
+            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
               <div className="text-sm text-white/60">Total qty in carts</div>
               <div className="text-2xl font-semibold">{stats.qty}</div>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
+            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
               <div className="text-sm text-white/60">Variants in carts</div>
               <div className="text-2xl font-semibold">{stats.variants}</div>
             </div>
           </div>
 
-          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
             <div className="font-semibold">Filters</div>
             <div className="mt-3 flex flex-wrap items-end gap-3">
               <Input
@@ -259,7 +259,7 @@ export default function AdminCartInsightsPage() {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
             <div className="font-semibold">Most in carts</div>
             <div className="mt-3 space-y-2">
               {loading ? (
@@ -273,7 +273,7 @@ export default function AdminCartInsightsPage() {
                   return (
                     <div
                       key={row.key}
-                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-paper/5 px-3 py-3"
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-paper/5 px-3 py-2 sm:py-3"
                     >
                       <div className="flex min-w-[240px] flex-1 items-center gap-3">
                         <div className="h-14 w-14 rounded-lg border border-white/10 bg-bg-800 overflow-hidden flex-shrink-0">
