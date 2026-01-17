@@ -8,13 +8,23 @@ import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { useRouter } from "next/navigation";
 import { isSupabaseConfigured } from "@/lib/env";
+import { Checkbox } from "@/components/ui/Checkbox";
+import { REMEMBER_ME_KEY, SUPABASE_AUTH_STORAGE_KEY } from "@/lib/supabase/browser";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [identifier, setIdentifier] = React.useState("");
+  const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [rememberMe, setRememberMe] = React.useState(true);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(REMEMBER_ME_KEY);
+    if (stored === "true") setRememberMe(true);
+    if (stored === "false") setRememberMe(false);
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -31,24 +41,21 @@ export default function LoginPage() {
     }
 
     setLoading(true);
-    const id = identifier.trim();
-    let email = id;
-    if (!id.includes("@")) {
-      const r = await fetch("/api/auth/resolve-email", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ identifier: id })
-      });
-      const j = await r.json();
-      if (!j.ok || !j.email) {
-        setLoading(false);
-        setError(j.error ?? "Unable to find account for that username/phone.");
-        return;
+    const emailValue = email.trim();
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(REMEMBER_ME_KEY, rememberMe ? "true" : "false");
+      if (rememberMe) {
+        window.sessionStorage.removeItem(SUPABASE_AUTH_STORAGE_KEY);
+      } else {
+        window.localStorage.removeItem(SUPABASE_AUTH_STORAGE_KEY);
       }
-      email = j.email;
     }
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({
+      email: emailValue,
+      password,
+    });
     setLoading(false);
 
     if (error) {
@@ -69,12 +76,21 @@ export default function LoginPage() {
         <CardBody>
           <form onSubmit={onSubmit} className="space-y-4">
             <Input
-              label="Email / Username / Phone"
-              value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
+              label="Email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               required
+              type="email"
             />
             <Input label="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+
+            <div className="flex items-center justify-between">
+              <Checkbox
+                checked={rememberMe}
+                onChange={setRememberMe}
+                label="Remember me"
+              />
+            </div>
 
             {error ? <div className="text-sm text-red-400">{error}</div> : null}
 

@@ -18,6 +18,7 @@ export default function RegisterPage() {
   const [address, setAddress] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [acceptedTerms, setAcceptedTerms] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -46,6 +47,10 @@ export default function RegisterPage() {
     }
     if (!validatePhone11(sanitizedContact)) {
       setError("Use an 11-digit PH mobile number (09XXXXXXXXX).");
+      return;
+    }
+    if (!acceptedTerms) {
+      setError("Please accept the Terms of Service and Privacy Policy.");
       return;
     }
 
@@ -114,7 +119,7 @@ export default function RegisterPage() {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               required
-              hint="Used for login. Must be unique."
+              hint="Shown on your profile and receipts."
             />
             <Input
               label="Contact Number"
@@ -124,11 +129,39 @@ export default function RegisterPage() {
               inputMode="numeric"
               pattern="[0-9]*"
               maxLength={PHONE_MAX_LENGTH}
-              hint="Used for login. 11-digit PH mobile number."
+              hint="For delivery updates. 11-digit PH mobile number."
             />
             <Input label="Address (optional)" value={address} onChange={(e) => setAddress(e.target.value)} />
             <Input label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
             <Input label="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required hint="Use at least 8 characters." />
+
+            <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3">
+              <label className="flex items-start gap-2 text-sm text-white/70">
+                <input
+                  type="checkbox"
+                  checked={acceptedTerms}
+                  onChange={(e) => setAcceptedTerms(e.target.checked)}
+                  className="mt-1 h-4 w-4 accent-accent-500"
+                />
+                <span className="leading-5">
+                  I agree to the{" "}
+                  <Link
+                    href="/terms"
+                    className="text-accent-700 hover:underline dark:text-accent-200"
+                  >
+                    Terms of Service
+                  </Link>{" "}
+                  and{" "}
+                  <Link
+                    href="/privacy"
+                    className="text-accent-700 hover:underline dark:text-accent-200"
+                  >
+                    Privacy Policy
+                  </Link>
+                  .
+                </span>
+              </label>
+            </div>
 
             {error ? <div className="text-sm text-red-400">{error}</div> : null}
 

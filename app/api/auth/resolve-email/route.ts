@@ -38,7 +38,7 @@ export async function POST(req: Request) {
 
     const email = (data as any)?.email as string | undefined;
     if (!email) {
-      return NextResponse.json({ ok: false, error: "No account found for that username/phone." }, { status: 200 });
+      return NextResponse.json({ ok: false, error: "No account found for that identifier." }, { status: 200 });
     }
 
     return NextResponse.json({ ok: true, email }, { status: 200 });
@@ -47,7 +47,7 @@ export async function POST(req: Request) {
       {
         ok: false,
         error: e?.message ?? "Failed to resolve email.",
-        hint: "Set SUPABASE_SERVICE_ROLE_KEY in .env.local to enable username/phone login."
+        hint: "Set SUPABASE_SERVICE_ROLE_KEY in .env.local to enable identifier lookup."
       },
       { status: 200 }
     );

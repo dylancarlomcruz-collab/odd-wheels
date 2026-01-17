@@ -136,14 +136,14 @@ function CartContent() {
                         <button
                           type="button"
                           onClick={() => openPreview(l)}
-                          className="h-14 w-14 rounded-xl overflow-hidden border border-white/10 bg-bg-900/40 transition hover:border-white/30"
+                          className="h-20 w-20 md:h-16 md:w-16 rounded-xl overflow-hidden border border-white/10 bg-bg-900/40 transition hover:border-white/30 shrink-0"
                           aria-label={`View ${l.variant.product.title}`}
                         >
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
                             src={l.variant.product.image_urls?.[0] ?? ""}
                             alt=""
-                            className="h-full w-full object-cover"
+                            className="h-full w-full object-contain bg-neutral-50"
                             onError={(e) =>
                               ((e.currentTarget.style.display = "none"))
                             }

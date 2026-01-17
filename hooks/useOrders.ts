@@ -118,7 +118,9 @@ export function useOrder(orderId: string) {
 
       const { data: it, error: iErr } = await supabase
         .from("order_items")
-        .select("*")
+        .select(
+          "*, product_variant:product_variants(id,barcode,condition,issue_notes,price,qty,product:products(id,title,brand,model,variation,image_urls))"
+        )
         .eq("order_id", orderId)
         .order("id", { ascending: true });
 

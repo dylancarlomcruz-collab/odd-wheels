@@ -879,30 +879,63 @@ function OrderDetailContent() {
                   Number.isFinite(storedTotal) && storedTotal > 0
                     ? storedTotal
                     : qty * unitPrice;
+                const productFromVariant = it?.product_variant?.product ?? null;
+                const title =
+                  it?.item_name ??
+                  it?.product_title ??
+                  productFromVariant?.title ??
+                  it?.product?.title ??
+                  it?.item_id ??
+                  "Item";
+                const image =
+                  (Array.isArray(productFromVariant?.image_urls) &&
+                  productFromVariant.image_urls.length
+                    ? productFromVariant.image_urls[0]
+                    : null) ||
+                  (Array.isArray(it?.product?.image_urls) &&
+                  it.product.image_urls.length
+                    ? it.product.image_urls[0]
+                    : null);
 
                 return (
                   <div
                     key={it.id}
                     className="flex items-start justify-between gap-3 border-b border-white/10 pb-3 last:border-b-0 last:pb-0"
                   >
-                    <div className="min-w-0">
-                      <div className="font-medium truncate flex items-center gap-2">
-                        <span>{it.item_name ?? it.item_id}</span>
+                    <div className="min-w-0 flex items-start gap-3">
+                      <div className="h-12 w-12 rounded-lg border border-white/10 bg-bg-800/60 overflow-hidden flex-shrink-0">
+                        {image ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={image}
+                            alt=""
+                            className="h-full w-full object-contain bg-neutral-50"
+                          />
+                        ) : (
+                          <div className="h-full w-full grid place-items-center text-[10px] text-white/40">
+                            No image
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-medium truncate flex items-center gap-2">
+                          <span>{title}</span>
                         {soldOut ? (
                           <Badge className="border-red-500/30 text-red-200">
                             Sold out
                           </Badge>
                         ) : null}
-                      </div>
-                      <div className="text-xs text-white/60">
-                        {String(it.condition ?? "").toUpperCase()} x {qty}
-                      </div>
-                      {String(it.condition) === "with_issues" &&
-                      it.issue_notes ? (
-                        <div className="text-xs text-red-200/80 truncate">
-                          Issue: {it.issue_notes}
                         </div>
-                      ) : null}
+                        <div className="text-xs text-white/60">
+                          {String(it.condition ?? "").toUpperCase()} x {qty}
+                        </div>
+                        {String(it.condition) === "with_issues" &&
+                        it.issue_notes ? (
+                          <div className="text-xs text-red-200/80 truncate">
+                            Issue: {it.issue_notes}
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                     <div className="text-sm text-white/80">
                       {formatPHP(Number.isFinite(lineTotal) ? lineTotal : 0)}
