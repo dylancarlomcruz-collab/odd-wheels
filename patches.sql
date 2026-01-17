@@ -635,6 +635,10 @@ alter table public.settings
   add column if not exists pickup_schedule jsonb not null default '{}'::jsonb,
   add column if not exists pickup_unavailable boolean not null default false;
 
+-- Issue photo support for variants
+alter table public.product_variants
+  add column if not exists issue_photo_urls text[] null;
+
 update public.settings
   set pickup_schedule_text = coalesce(
         pickup_schedule_text,

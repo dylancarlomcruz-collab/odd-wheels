@@ -47,6 +47,8 @@ export function InventoryEditorDrawer({
   const [variation, setVariation] = React.useState("");
   const [images, setImages] = React.useState<string[]>([]);
   const [newImage, setNewImage] = React.useState("");
+  const [uploadingImages, setUploadingImages] = React.useState(false);
+  const [issueUploadId, setIssueUploadId] = React.useState<string | null>(null);
   const [isActive, setIsActive] = React.useState(true);
   const [variants, setVariants] = React.useState<VariantDraft[]>([]);
   const [saving, setSaving] = React.useState(false);
@@ -63,6 +65,7 @@ export function InventoryEditorDrawer({
     setVariants(
       (product.product_variants ?? []).map((v) => ({
         ...v,
+        issue_photo_urls: Array.isArray(v.issue_photo_urls) ? v.issue_photo_urls : [],
         _isNew: false,
         _delete: false,
       }))
@@ -73,6 +76,58 @@ export function InventoryEditorDrawer({
   if (!product) return null;
 
   const productId = product.id;
+
+  async function uploadImageFile(
+    file: File,
+    productIdForPath: string,
+    options?: { skipLoading?: boolean }
+  ) {
+    if (!options?.skipLoading) setUploadingImages(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("productId", productIdForPath);
+
+      const r = await fetch("/api/images/upload", {
+        method: "POST",
+        body: form,
+      });
+      const j = await r.json();
+      if (!j.ok || !j.publicUrl) throw new Error(j.error ?? "Upload failed");
+
+      const url = j.publicUrl as string;
+      setImages((prev) => Array.from(new Set([...prev, url])));
+    } finally {
+      if (!options?.skipLoading) setUploadingImages(false);
+    }
+  }
+
+  async function uploadImageFiles(files: File[], productIdForPath: string) {
+    if (!files.length) return;
+    setUploadingImages(true);
+    try {
+      for (const file of files) {
+        try {
+          await uploadImageFile(file, productIdForPath, { skipLoading: true });
+        } catch (e) {
+          console.error("Image upload failed", e);
+        }
+      }
+    } finally {
+      setUploadingImages(false);
+    }
+  }
+
+  function handleImagePaste(e: React.ClipboardEvent) {
+    const items = Array.from(e.clipboardData?.items ?? []);
+    const files = items
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter(Boolean) as File[];
+    if (!files.length) return;
+    e.preventDefault();
+    void uploadImageFiles(files, productId);
+  }
 
   function addImage() {
     const url = newImage.trim();
@@ -85,6 +140,87 @@ export function InventoryEditorDrawer({
     setImages((prev) => prev.filter((u) => u !== url));
   }
 
+  async function uploadIssueFiles(v: VariantDraft, files: File[]) {
+    if (!files.length) return;
+    setIssueUploadId(v.id);
+    try {
+      const uploaded: string[] = [];
+      for (const file of files) {
+        try {
+          const form = new FormData();
+          form.append("file", file);
+          form.append("productId", `issue-${v.id}`);
+
+          const r = await fetch("/api/images/upload", {
+            method: "POST",
+            body: form,
+          });
+          const j = await r.json();
+          if (!j.ok || !j.publicUrl) throw new Error(j.error ?? "Upload failed");
+
+          uploaded.push(j.publicUrl as string);
+        } catch (e) {
+          console.error("Issue photo upload failed", e);
+        }
+      }
+      if (!uploaded.length) return;
+      updateVariant(v.id, {
+        issue_photo_urls: Array.from(
+          new Set([...(v.issue_photo_urls ?? []), ...uploaded])
+        ),
+      });
+    } finally {
+      setIssueUploadId(null);
+    }
+  }
+
+  function handleIssuePaste(v: VariantDraft, e: React.ClipboardEvent) {
+    const items = Array.from(e.clipboardData?.items ?? []);
+    const files = items
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter(Boolean) as File[];
+    if (!files.length) return;
+    e.preventDefault();
+    void uploadIssueFiles(v, files);
+  }
+
+  function removeIssuePhoto(v: VariantDraft, url: string) {
+    const next = (v.issue_photo_urls ?? []).filter((u) => u !== url);
+    updateVariant(v.id, { issue_photo_urls: next });
+  }
+
+  function stepVariantQty(v: VariantDraft, delta: number) {
+    const current = Math.trunc(safeNumber(v.qty) ?? 0);
+    const next = Math.max(0, current + delta);
+    updateVariant(v.id, { qty: next });
+  }
+
+  function reorderImages(fromIndex: number, toIndex: number) {
+    if (fromIndex === toIndex) return;
+    setImages((prev) => {
+      if (
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= prev.length ||
+        toIndex >= prev.length
+      ) {
+        return prev;
+      }
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  }
+
+  function handleImageDrop(e: React.DragEvent, targetIndex: number) {
+    const raw = e.dataTransfer.getData("text/plain");
+    const fromIndex = Number(raw);
+    if (!Number.isFinite(fromIndex)) return;
+    reorderImages(fromIndex, targetIndex);
+  }
+
   function updateVariant(id: string, patch: Partial<VariantDraft>) {
     setVariants((prev) =>
       prev.map((v) => (v.id === id ? { ...v, ...patch } : v))
@@ -93,16 +229,17 @@ export function InventoryEditorDrawer({
 
   function addVariant() {
     setVariants((prev) => [
-      ...prev,
+        ...prev,
       {
         id: `new-${crypto.randomUUID()}`,
-        condition: "sealed",
+        condition: "unsealed",
         barcode: null,
         cost: null,
         price: 0,
-        qty: 0,
+        qty: 1,
         ship_class: null,
         issue_notes: null,
+        issue_photo_urls: [],
         created_at: null,
         _isNew: true,
         _delete: false,
@@ -150,6 +287,10 @@ export function InventoryEditorDrawer({
                   v.condition === "with_issues"
                     ? v.issue_notes || null
                     : null,
+                issue_photo_urls:
+                  v.condition === "with_issues"
+                    ? (v.issue_photo_urls?.length ? v.issue_photo_urls : null)
+                    : null,
               })
               .eq("id", v.id)
           )
@@ -178,6 +319,10 @@ export function InventoryEditorDrawer({
             ship_class: v.ship_class || null,
             issue_notes:
               v.condition === "with_issues" ? v.issue_notes || null : null,
+            issue_photo_urls:
+              v.condition === "with_issues"
+                ? (v.issue_photo_urls?.length ? v.issue_photo_urls : null)
+                : null,
           }))
         );
       }
@@ -255,24 +400,75 @@ export function InventoryEditorDrawer({
                 Add
               </Button>
             </div>
+            <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-2">
+              <div className="text-sm font-medium">Upload image file</div>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (!f) return;
+                  void uploadImageFile(f, productId);
+                  e.currentTarget.value = "";
+                }}
+              />
+              <div className="text-xs text-white/50">Take photo</div>
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (!f) return;
+                  void uploadImageFile(f, productId);
+                  e.currentTarget.value = "";
+                }}
+              />
+            </div>
+            {uploadingImages ? (
+              <div className="text-xs text-white/60">Uploading...</div>
+            ) : null}
+            <div
+              className="rounded-xl border border-dashed border-white/15 bg-bg-900/40 p-3 text-sm text-white/60"
+              tabIndex={0}
+              onClick={(e) => (e.currentTarget as HTMLDivElement).focus()}
+              onPaste={handleImagePaste}
+            >
+              Paste image here (click box, then press Ctrl+V).
+            </div>
             {images.length ? (
-              <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
-                {images.map((u) => (
-                  <div
-                    key={u}
-                    className="rounded-xl border border-white/10 bg-bg-800/60 overflow-hidden"
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={u} alt="" className="h-32 w-full object-cover" />
-                    <div className="flex items-center justify-between px-3 py-2 text-xs text-white/70">
-                      <span className="truncate">{u}</span>
-                      <Button variant="ghost" onClick={() => removeImage(u)}>
-                        Remove
-                      </Button>
+              <>
+                <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+                  {images.map((u, idx) => (
+                    <div
+                      key={u}
+                      draggable
+                      className="rounded-xl border border-white/10 bg-bg-800/60 overflow-hidden"
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData("text/plain", String(idx));
+                        e.dataTransfer.effectAllowed = "move";
+                      }}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        handleImageDrop(e, idx);
+                      }}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={u} alt="" className="h-32 w-full object-cover" />
+                      <div className="flex items-center justify-between px-3 py-2 text-xs text-white/70">
+                        <span className="truncate">{u}</span>
+                        <Button variant="ghost" onClick={() => removeImage(u)}>
+                          Remove
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+                <div className="text-xs text-white/50">
+                  Drag images to reorder.
+                </div>
+              </>
             ) : (
               <div className="text-sm text-white/60">No images yet.</div>
             )}
@@ -338,16 +534,43 @@ export function InventoryEditorDrawer({
                           value={v.price ?? ""}
                           onChange={(e) => updateVariant(v.id, { price: safeNumber(e.target.value) })}
                         />
-                        <Input
-                          label="Quantity"
-                          type="number"
-                          value={v.qty ?? 0}
-                          onChange={(e) =>
-                            updateVariant(v.id, {
-                              qty: Math.max(0, Math.trunc(safeNumber(e.target.value) ?? 0)),
-                            })
-                          }
-                        />
+                        <div className="space-y-1">
+                          <div className="text-sm text-white/80">Quantity</div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="ghost"
+                              type="button"
+                              className="h-10 w-10 px-0"
+                              onClick={() => stepVariantQty(v, -1)}
+                              aria-label="Decrease quantity"
+                            >
+                              -
+                            </Button>
+                            <div className="flex-1">
+                              <Input
+                                type="number"
+                                value={v.qty ?? 0}
+                                onChange={(e) =>
+                                  updateVariant(v.id, {
+                                    qty: Math.max(
+                                      0,
+                                      Math.trunc(safeNumber(e.target.value) ?? 0)
+                                    ),
+                                  })
+                                }
+                              />
+                            </div>
+                            <Button
+                              variant="ghost"
+                              type="button"
+                              className="h-10 w-10 px-0"
+                              onClick={() => stepVariantQty(v, 1)}
+                              aria-label="Increase quantity"
+                            >
+                              +
+                            </Button>
+                          </div>
+                        </div>
                         <Select
                           label="Ship class"
                           value={v.ship_class ?? ""}
@@ -363,14 +586,84 @@ export function InventoryEditorDrawer({
                           ))}
                         </Select>
                         {v.condition === "with_issues" ? (
-                          <Textarea
-                            label="Issue notes"
-                            value={v.issue_notes ?? ""}
-                            onChange={(e) =>
-                              updateVariant(v.id, { issue_notes: e.target.value || null })
-                            }
-                            className="md:col-span-3"
-                          />
+                          <div className="md:col-span-3 space-y-3">
+                            <Textarea
+                              label="Issue notes"
+                              value={v.issue_notes ?? ""}
+                              onChange={(e) =>
+                                updateVariant(v.id, { issue_notes: e.target.value || null })
+                              }
+                            />
+
+                            <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3">
+                              <div className="text-sm font-medium">Issue photos</div>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                onChange={(e) => {
+                                  const list = Array.from(e.target.files ?? []);
+                                  if (!list.length) return;
+                                  void uploadIssueFiles(v, list);
+                                  e.currentTarget.value = "";
+                                }}
+                              />
+                              <div className="text-xs text-white/50">Take photo</div>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                capture="environment"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0];
+                                  if (!f) return;
+                                  void uploadIssueFiles(v, [f]);
+                                  e.currentTarget.value = "";
+                                }}
+                              />
+                              <div
+                                className="rounded-lg border border-dashed border-white/15 bg-bg-900/40 p-2 text-xs text-white/60"
+                                tabIndex={0}
+                                onClick={(e) =>
+                                  (e.currentTarget as HTMLDivElement).focus()
+                                }
+                                onPaste={(e) => handleIssuePaste(v, e)}
+                              >
+                                Paste issue photo here (click box, then press Ctrl+V).
+                              </div>
+                              {issueUploadId === v.id ? (
+                                <div className="text-xs text-white/60">
+                                  Uploading...
+                                </div>
+                              ) : null}
+
+                              {v.issue_photo_urls?.length ? (
+                                <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+                                  {v.issue_photo_urls.map((u) => (
+                                    <div
+                                      key={u}
+                                      className="rounded-xl border border-white/10 bg-bg-900/40 overflow-hidden"
+                                    >
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img src={u} alt="" className="h-32 w-full object-cover" />
+                                      <div className="p-2">
+                                        <Button
+                                          variant="ghost"
+                                          type="button"
+                                          onClick={() => removeIssuePhoto(v, u)}
+                                        >
+                                          Remove
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-xs text-white/50">
+                                  No issue photos yet.
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         ) : null}
                       </div>
                     </div>

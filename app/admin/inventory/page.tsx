@@ -15,6 +15,7 @@ import {
   normalizeTitleBrandAliases,
 } from "@/lib/titleInference";
 import { formatPHP } from "@/lib/money";
+import { toast } from "@/components/ui/toast";
 
 type Product = {
   id: string;
@@ -32,6 +33,7 @@ type Variant = {
   product_id: string;
   condition: "sealed" | "unsealed" | "with_issues";
   issue_notes: string | null;
+  issue_photo_urls: string[] | null;
   cost: number | null;
   price: number;
   qty: number;
@@ -48,6 +50,9 @@ type GoogleLookupData = {
   model: string | null;
   variation: string | null;
   images: string[];
+};
+type ProductUrlLookupData = GoogleLookupData & {
+  source_url?: string;
 };
 
 type InventoryValuation = {
@@ -142,6 +147,19 @@ export default function AdminInventoryPage() {
   const [barcodeLookup, setBarcodeLookup] = React.useState("");
   const [lookupLoading, setLookupLoading] = React.useState(false);
   const [lookupMsg, setLookupMsg] = React.useState<string | null>(null);
+  const barcodeLookupTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastAutoLookupRef = React.useRef("");
+  const barcodeInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  // Product URL lookup
+  const [productUrl, setProductUrl] = React.useState("");
+  const [productUrlLoading, setProductUrlLoading] = React.useState(false);
+  const [productUrlMsg, setProductUrlMsg] = React.useState<string | null>(null);
+  const [productUrlResult, setProductUrlResult] =
+    React.useState<ProductUrlLookupData | null>(null);
+  const [productUrlSelectedImages, setProductUrlSelectedImages] = React.useState<
+    Record<string, boolean>
+  >({});
 
   // Google search lookup
   const [googleQuery, setGoogleQuery] = React.useState("");
@@ -169,11 +187,15 @@ export default function AdminInventoryPage() {
   const [manualUploadLoading, setManualUploadLoading] = React.useState(false);
 
   // New variant fields
-  const [condition, setCondition] = React.useState<VariantCondition>("sealed");
+  const [condition, setCondition] = React.useState<VariantCondition>("unsealed");
   const [issueNotes, setIssueNotes] = React.useState("");
+  const [issuePhotos, setIssuePhotos] = React.useState<string[]>([]);
+  const [issuePhotosUploading, setIssuePhotosUploading] = React.useState(false);
+  const [issuePhotosUploadingId, setIssuePhotosUploadingId] =
+    React.useState<string | null>(null);
   const [cost, setCost] = React.useState("");
   const [price, setPrice] = React.useState("");
-  const [qty, setQty] = React.useState("");
+  const [qty, setQty] = React.useState("1");
   const [shipClass, setShipClass] = React.useState<ShipClass>("MINI_GT");
   const [variantBarcode, setVariantBarcode] = React.useState("");
 
@@ -284,7 +306,7 @@ export default function AdminInventoryPage() {
     const { data, error } = await supabase
       .from("product_variants")
       .select(
-        "id,product_id,condition,issue_notes,cost,price,qty,ship_class,barcode,created_at"
+        "id,product_id,condition,issue_notes,issue_photo_urls,cost,price,qty,ship_class,barcode,created_at"
       )
       .eq("product_id", p.id)
       .order("created_at", { ascending: false });
@@ -314,21 +336,28 @@ export default function AdminInventoryPage() {
     setGoogleResult(null);
     setGoogleSelectedImages({});
     setGoogleMsg(null);
+    setProductUrl("");
+    setProductUrlMsg(null);
+    setProductUrlResult(null);
+    setProductUrlSelectedImages({});
     setBarcodeLookup("");
     setManualImageUrl("");
 
     // also clear variant draft
-    setCondition("sealed");
+    setCondition("unsealed");
     setIssueNotes("");
+    setIssuePhotos([]);
+    setIssuePhotosUploading(false);
+    setIssuePhotosUploadingId(null);
     setCost("");
     setPrice("");
-    setQty("");
+    setQty("1");
     setShipClass("MINI_GT");
     setVariantBarcode("");
   }
 
-  async function lookupBarcode() {
-    const code = barcodeLookup.trim();
+  async function lookupBarcode(override?: string) {
+    const code = (override ?? barcodeLookup).trim();
     if (!code) return;
 
     setLookupLoading(true);
@@ -392,7 +421,37 @@ export default function AdminInventoryPage() {
     }
   }
 
-  function applyGoogleResult(
+  React.useEffect(() => {
+    return () => {
+      if (barcodeLookupTimerRef.current) {
+        clearTimeout(barcodeLookupTimerRef.current);
+      }
+    };
+  }, []);
+
+  function focusBarcodeInput() {
+    requestAnimationFrame(() => {
+      barcodeInputRef.current?.focus();
+    });
+  }
+
+  function scheduleBarcodeLookup(nextValue: string) {
+    const code = nextValue.trim();
+    if (!code || code.length < 6 || lookupLoading) return;
+    if (code === lastAutoLookupRef.current) return;
+    if (barcodeLookupTimerRef.current) {
+      clearTimeout(barcodeLookupTimerRef.current);
+    }
+    barcodeLookupTimerRef.current = setTimeout(() => {
+      if (lookupLoading) return;
+      if (code === lastAutoLookupRef.current) return;
+      lastAutoLookupRef.current = code;
+      setBarcodeLookup(code);
+      lookupBarcode(code);
+    }, 200);
+  }
+
+  function applyLookupResult(
     result: GoogleLookupData,
     options?: { selected?: Record<string, boolean>; applyImages?: boolean }
   ) {
@@ -472,7 +531,7 @@ export default function AdminInventoryPage() {
       setGoogleResult(normalizedResult);
       setGoogleSelectedImages(map);
 
-      applyGoogleResult(normalizedResult, { applyImages: false });
+      applyLookupResult(normalizedResult, { applyImages: false });
 
       setGoogleMsg(
         "Google search success. Review details and confirm images before saving."
@@ -484,26 +543,192 @@ export default function AdminInventoryPage() {
     }
   }
 
-  async function uploadImageFile(file: File, productIdForPath: string) {
-    setManualUploadLoading(true);
+  async function lookupProductUrl() {
+    const url = productUrl.trim();
+    if (!url) return;
+
+    setProductUrlLoading(true);
+    setProductUrlMsg(null);
+
     try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("productId", productIdForPath);
-
-      const r = await fetch("/api/images/upload", {
-        method: "POST",
-        body: form,
-      });
+      const r = await fetch(
+        `/api/product-url/lookup?url=${encodeURIComponent(url)}`
+      );
       const j = await r.json();
-      if (!j.ok || !j.publicUrl) throw new Error(j.error ?? "Upload failed");
 
-      const url = j.publicUrl as string;
+      if (!j.ok) {
+        setProductUrlMsg(j.error ?? "URL lookup failed.");
+        setProductUrlResult(null);
+        setProductUrlSelectedImages({});
+        return;
+      }
+
+      const d = j.data as ProductUrlLookupData;
+      const rawTitle = String(d.title ?? "").trim();
+      const normalizedTitle = normalizeTitleBrandAliases(rawTitle);
+      const normalizedBrand = normalizeBrandAlias(d.brand) ?? d.brand;
+      const imgs = Array.isArray(d.images)
+        ? d.images.filter(Boolean).slice(0, 9)
+        : [];
+      const inferred = inferFieldsFromTitle(normalizedTitle || rawTitle);
+      const normalizedResult: ProductUrlLookupData = {
+        ...d,
+        title: normalizedTitle || d.title,
+        brand: normalizedBrand ?? d.brand ?? inferred.brand ?? null,
+        model: d.model ?? inferred.model ?? null,
+        variation: d.variation ?? inferred.color_style ?? null,
+        images: imgs,
+        source_url: d.source_url ?? url,
+      };
+      const map: Record<string, boolean> = {};
+      imgs.forEach((u) => {
+        map[u] = true;
+      });
+
+      setProductUrlResult(normalizedResult);
+      setProductUrlSelectedImages(map);
+
+      applyLookupResult(normalizedResult, { applyImages: false });
+
+      setProductUrlMsg(
+        "URL lookup success. Review details and confirm images before saving."
+      );
+    } catch (e: any) {
+      setProductUrlMsg(e?.message ?? "Lookup failed.");
+    } finally {
+      setProductUrlLoading(false);
+    }
+  }
+
+  async function uploadFileToStorage(file: File, folderId: string) {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("productId", folderId);
+
+    const r = await fetch("/api/images/upload", {
+      method: "POST",
+      body: form,
+    });
+    const j = await r.json();
+    if (!j.ok || !j.publicUrl) throw new Error(j.error ?? "Upload failed");
+    return j.publicUrl as string;
+  }
+
+  async function uploadImageFile(
+    file: File,
+    productIdForPath: string,
+    options?: { skipLoading?: boolean }
+  ) {
+    if (!options?.skipLoading) setManualUploadLoading(true);
+    try {
+      const url = await uploadFileToStorage(file, productIdForPath);
       setImages((prev) => uniq([...prev, url]));
       setSelectedImages((prev) => ({ ...prev, [url]: true }));
     } finally {
+      if (!options?.skipLoading) setManualUploadLoading(false);
+    }
+  }
+
+  async function uploadImageFiles(files: File[], productIdForPath: string) {
+    if (!files.length) return;
+    setManualUploadLoading(true);
+    try {
+      for (const file of files) {
+        try {
+          await uploadImageFile(file, productIdForPath, { skipLoading: true });
+        } catch (e) {
+          console.error("Image upload failed", e);
+        }
+      }
+    } finally {
       setManualUploadLoading(false);
     }
+  }
+
+  function handleImagePaste(e: React.ClipboardEvent) {
+    const items = Array.from(e.clipboardData?.items ?? []);
+    const files = items
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter(Boolean) as File[];
+    if (!files.length) return;
+    e.preventDefault();
+    const pid = selectedProduct?.id ?? crypto.randomUUID();
+    void uploadImageFiles(files, pid);
+  }
+
+  async function uploadIssueFiles(files: File[], folderId: string) {
+    if (!files.length) return;
+    setIssuePhotosUploading(true);
+    try {
+      const uploaded: string[] = [];
+      for (const file of files) {
+        try {
+          const url = await uploadFileToStorage(file, folderId);
+          uploaded.push(url);
+        } catch (e) {
+          console.error("Issue photo upload failed", e);
+        }
+      }
+      if (uploaded.length) {
+        setIssuePhotos((prev) => uniq([...prev, ...uploaded]));
+      }
+    } finally {
+      setIssuePhotosUploading(false);
+    }
+  }
+
+  function handleIssuePaste(e: React.ClipboardEvent) {
+    const items = Array.from(e.clipboardData?.items ?? []);
+    const files = items
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter(Boolean) as File[];
+    if (!files.length) return;
+    e.preventDefault();
+    const folderId = `issue-${selectedProduct?.id ?? crypto.randomUUID()}`;
+    void uploadIssueFiles(files, folderId);
+  }
+
+  function removeIssuePhoto(url: string) {
+    setIssuePhotos((prev) => prev.filter((u) => u !== url));
+  }
+
+  async function uploadVariantIssueFiles(v: Variant, files: File[]) {
+    if (!files.length) return;
+    setIssuePhotosUploadingId(v.id);
+    try {
+      const uploaded: string[] = [];
+      for (const file of files) {
+        try {
+          const url = await uploadFileToStorage(file, `issue-${v.id}`);
+          uploaded.push(url);
+        } catch (e) {
+          console.error("Issue photo upload failed", e);
+        }
+      }
+      if (!uploaded.length) return;
+      const next = uniq([...(v.issue_photo_urls ?? []), ...uploaded]);
+      await updateVariant(v, { issue_photo_urls: next });
+    } finally {
+      setIssuePhotosUploadingId(null);
+    }
+  }
+
+  function handleVariantIssuePaste(v: Variant, e: React.ClipboardEvent) {
+    const items = Array.from(e.clipboardData?.items ?? []);
+    const files = items
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter(Boolean) as File[];
+    if (!files.length) return;
+    e.preventDefault();
+    void uploadVariantIssueFiles(v, files);
+  }
+
+  async function removeVariantIssuePhoto(v: Variant, url: string) {
+    const next = (v.issue_photo_urls ?? []).filter((u) => u !== url);
+    await updateVariant(v, { issue_photo_urls: next.length ? next : null });
   }
 
   function addManualUrl() {
@@ -514,10 +739,47 @@ export default function AdminInventoryPage() {
     setManualImageUrl("");
   }
 
+  function stepNewQty(delta: number) {
+    setQty((prev) => {
+      const current = Math.trunc(n(prev));
+      const next = Math.max(0, current + delta);
+      return String(next);
+    });
+  }
+
+  function stepExistingQty(v: Variant, delta: number) {
+    const current = Math.trunc(n(v.qty));
+    const next = Math.max(0, current + delta);
+    updateVariant(v, { qty: next });
+  }
+
+  function reorderImages(fromIndex: number, toIndex: number) {
+    if (fromIndex === toIndex) return;
+    setImages((prev) => {
+      if (
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= prev.length ||
+        toIndex >= prev.length
+      ) {
+        return prev;
+      }
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  }
+
+  function handleImageDrop(e: React.DragEvent, targetIndex: number) {
+    const raw = e.dataTransfer.getData("text/plain");
+    const fromIndex = Number(raw);
+    if (!Number.isFinite(fromIndex)) return;
+    reorderImages(fromIndex, targetIndex);
+  }
+
   async function importSelectedImages(productId: string) {
-    const selected = Object.entries(selectedImages)
-      .filter(([, v]) => v)
-      .map(([k]) => k);
+    const selected = images.filter((u) => selectedImages[u]);
 
     const kept: string[] = [];
 
@@ -543,7 +805,7 @@ export default function AdminInventoryPage() {
 
   async function saveProductOnly() {
     if (!selectedProduct) {
-      alert("Select a product first.");
+      toast({ intent: "error", message: "Select a product first." });
       return;
     }
 
@@ -582,9 +844,10 @@ export default function AdminInventoryPage() {
       if (error) throw error;
       if (data) await loadProduct(data as any);
 
-      alert("Product updated.");
+      toast({ intent: "success", message: "Product updated." });
+      focusBarcodeInput();
     } catch (e: any) {
-      alert(e?.message ?? "Update failed");
+      toast({ intent: "error", message: e?.message ?? "Update failed" });
     } finally {
       setSaving(false);
     }
@@ -612,7 +875,7 @@ export default function AdminInventoryPage() {
       if (error) throw error;
       if (data) await loadProduct(data as any);
     } catch (e: any) {
-      alert(e?.message ?? "Update failed");
+      toast({ intent: "error", message: e?.message ?? "Update failed" });
     } finally {
       setSaving(false);
     }
@@ -687,6 +950,10 @@ export default function AdminInventoryPage() {
         product_id: productId!,
         condition,
         issue_notes: condition === "with_issues" ? issueNotes.trim() : null,
+        issue_photo_urls:
+          condition === "with_issues" && issuePhotos.length
+            ? issuePhotos
+            : null,
         cost: costN,
         price: priceN,
         qty: qtyN,
@@ -696,21 +963,23 @@ export default function AdminInventoryPage() {
 
       if (vErr) throw vErr;
 
-      alert("Saved product + variant.");
+      toast({ intent: "success", message: "Saved product + variant." });
 
       // Reset draft fields
-      setCondition("sealed");
+      setCondition("unsealed");
       setIssueNotes("");
+      setIssuePhotos([]);
       setCost("");
       setPrice("");
-      setQty("");
+      setQty("1");
       setShipClass("MINI_GT");
       setVariantBarcode("");
 
       clearProduct();
+      focusBarcodeInput();
       return;
     } catch (e: any) {
-      alert(e?.message ?? "Save failed");
+      toast({ intent: "error", message: e?.message ?? "Save failed" });
     } finally {
       setSaving(false);
     }
@@ -723,7 +992,7 @@ export default function AdminInventoryPage() {
       .eq("id", v.id);
 
     if (error) {
-      alert(error.message);
+      toast({ intent: "error", message: error.message });
       return;
     }
     if (selectedProduct) await loadProduct(selectedProduct);
@@ -740,7 +1009,7 @@ export default function AdminInventoryPage() {
       .delete()
       .eq("id", v.id);
 
-    if (error) alert(error.message);
+    if (error) toast({ intent: "error", message: error.message });
     if (selectedProduct) await loadProduct(selectedProduct);
   }
 
@@ -953,7 +1222,19 @@ export default function AdminInventoryPage() {
                 <Input
                   placeholder="Scan or enter barcode..."
                   value={barcodeLookup}
-                  onChange={(e) => setBarcodeLookup(e.target.value)}
+                  autoFocus
+                  ref={barcodeInputRef}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setBarcodeLookup(next);
+                    scheduleBarcodeLookup(next);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      lookupBarcode();
+                    }
+                  }}
                 />
               </div>
               <Button
@@ -967,6 +1248,117 @@ export default function AdminInventoryPage() {
 
             {lookupMsg ? (
               <div className="text-sm text-white/70">{lookupMsg}</div>
+            ) : null}
+          </div>
+
+          {/* Product URL lookup */}
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+            <div className="font-semibold">Item URL Lookup</div>
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <Input
+                  placeholder="Paste product URL..."
+                  value={productUrl}
+                  onChange={(e) => setProductUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      lookupProductUrl();
+                    }
+                  }}
+                />
+              </div>
+              <Button
+                variant="secondary"
+                onClick={lookupProductUrl}
+                disabled={productUrlLoading}
+              >
+                {productUrlLoading ? "Looking up..." : "Lookup URL"}
+              </Button>
+            </div>
+
+            {productUrlMsg ? (
+              <div className="text-sm text-white/70">{productUrlMsg}</div>
+            ) : null}
+
+            {productUrlResult ? (
+              <div className="space-y-3">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Input
+                    label="Suggested Title"
+                    value={productUrlResult.title ?? ""}
+                    readOnly
+                  />
+                  <Input
+                    label="Suggested Brand"
+                    value={productUrlResult.brand ?? ""}
+                    readOnly
+                  />
+                  <Input
+                    label="Suggested Model"
+                    value={productUrlResult.model ?? ""}
+                    readOnly
+                  />
+                  <Input
+                    label="Suggested Variation"
+                    value={productUrlResult.variation ?? ""}
+                    readOnly
+                  />
+                  <div className="md:col-span-2">
+                    <Input
+                      label="Source URL"
+                      value={productUrlResult.source_url ?? ""}
+                      readOnly
+                    />
+                  </div>
+                </div>
+
+                {productUrlResult.images?.length ? (
+                  <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+                    {productUrlResult.images.slice(0, 9).map((u) => (
+                      <div
+                        key={u}
+                        className="rounded-xl border border-white/10 bg-bg-900/40 overflow-hidden"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={u} alt="" className="h-40 w-full object-cover" />
+                        <div className="p-3">
+                          <Checkbox
+                            checked={!!productUrlSelectedImages[u]}
+                            onChange={(v) =>
+                              setProductUrlSelectedImages((m) => ({
+                                ...m,
+                                [u]: v,
+                              }))
+                            }
+                            label="Include image"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm text-white/50">
+                    No images found for this URL.
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="secondary"
+                    type="button"
+                    onClick={() =>
+                      productUrlResult &&
+                      applyLookupResult(productUrlResult, {
+                        selected: productUrlSelectedImages,
+                      })
+                    }
+                    disabled={productUrlLoading || !productUrlResult}
+                  >
+                    Use result
+                  </Button>
+                </div>
+              </div>
             ) : null}
           </div>
 
@@ -1055,7 +1447,7 @@ export default function AdminInventoryPage() {
                     type="button"
                     onClick={() =>
                       googleResult &&
-                      applyGoogleResult(googleResult, {
+                      applyLookupResult(googleResult, {
                         selected: googleSelectedImages,
                       })
                     }
@@ -1175,6 +1567,21 @@ export default function AdminInventoryPage() {
                   uploadImageFile(f, pid);
                 }}
               />
+              <div className="mt-2">
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (!f) return;
+                    const pid = selectedProduct?.id ?? crypto.randomUUID();
+                    uploadImageFile(f, pid);
+                    e.currentTarget.value = "";
+                  }}
+                />
+                <div className="text-xs text-white/50 mt-1">Take photo</div>
+              </div>
               {manualUploadLoading ? (
                 <div className="text-xs text-white/60 mt-1">Uploading...</div>
               ) : null}
@@ -1184,29 +1591,53 @@ export default function AdminInventoryPage() {
               </div>
             </div>
 
+            <div
+              className="rounded-xl border border-dashed border-white/15 bg-bg-900/40 p-3 text-sm text-white/60"
+              tabIndex={0}
+              onClick={(e) => (e.currentTarget as HTMLDivElement).focus()}
+              onPaste={handleImagePaste}
+            >
+              Paste image here (click box, then press Ctrl+V).
+            </div>
+
             {images.length === 0 ? (
               <div className="text-sm text-white/50">No images yet.</div>
             ) : (
-              <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
-                {images.slice(0, 9).map((u) => (
-                  <div
-                    key={u}
-                    className="rounded-xl border border-white/10 bg-bg-900/40 overflow-hidden"
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={u} alt="" className="h-40 w-full object-cover" />
-                    <div className="p-3">
-                      <Checkbox
-                        checked={!!selectedImages[u]}
-                        onChange={(v) =>
-                          setSelectedImages((m) => ({ ...m, [u]: v }))
-                        }
-                        label="Use this image"
-                      />
+              <>
+                <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+                  {images.slice(0, 9).map((u, idx) => (
+                    <div
+                      key={u}
+                      draggable
+                      className="rounded-xl border border-white/10 bg-bg-900/40 overflow-hidden"
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData("text/plain", String(idx));
+                        e.dataTransfer.effectAllowed = "move";
+                      }}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        handleImageDrop(e, idx);
+                      }}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={u} alt="" className="h-40 w-full object-cover" />
+                      <div className="p-3">
+                        <Checkbox
+                          checked={!!selectedImages[u]}
+                          onChange={(v) =>
+                            setSelectedImages((m) => ({ ...m, [u]: v }))
+                          }
+                          label="Use this image"
+                        />
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+                <div className="text-xs text-white/50">
+                  Drag images to reorder.
+                </div>
+              </>
             )}
           </div>
 
@@ -1268,15 +1699,42 @@ export default function AdminInventoryPage() {
                           updateVariant(v, { price: n(e.target.value) })
                         }
                       />
-                      <Input
-                        label="Qty"
-                        value={String(v.qty ?? 0)}
-                        onChange={(e) =>
-                          updateVariant(v, {
-                            qty: Math.max(0, Math.trunc(n(e.target.value))),
-                          })
-                        }
-                      />
+                      <div className="space-y-1">
+                        <div className="text-sm text-white/80">Qty</div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            type="button"
+                            className="h-10 w-10 px-0"
+                            onClick={() => stepExistingQty(v, -1)}
+                            aria-label="Decrease quantity"
+                          >
+                            -
+                          </Button>
+                          <div className="flex-1">
+                            <Input
+                              value={String(v.qty ?? 0)}
+                              onChange={(e) =>
+                                updateVariant(v, {
+                                  qty: Math.max(
+                                    0,
+                                    Math.trunc(n(e.target.value))
+                                  ),
+                                })
+                              }
+                            />
+                          </div>
+                          <Button
+                            variant="ghost"
+                            type="button"
+                            className="h-10 w-10 px-0"
+                            onClick={() => stepExistingQty(v, 1)}
+                            aria-label="Increase quantity"
+                          >
+                            +
+                          </Button>
+                        </div>
+                      </div>
                       <Select
                         label="Ship Class"
                         value={v.ship_class ?? ""}
@@ -1304,7 +1762,7 @@ export default function AdminInventoryPage() {
                       </div>
 
                       {v.condition === "with_issues" ? (
-                        <div className="md:col-span-6">
+                        <div className="md:col-span-6 space-y-3">
                           <Textarea
                             label="Issue Notes"
                             value={v.issue_notes ?? ""}
@@ -1314,6 +1772,81 @@ export default function AdminInventoryPage() {
                               })
                             }
                           />
+
+                          <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3">
+                            <div className="text-sm font-medium">
+                              Issue Photos (optional)
+                            </div>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              multiple
+                              onChange={(e) => {
+                                const list = Array.from(e.target.files ?? []);
+                                if (!list.length) return;
+                                void uploadVariantIssueFiles(v, list);
+                                e.currentTarget.value = "";
+                              }}
+                            />
+                            <div className="text-xs text-white/50">Take photo</div>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                if (!f) return;
+                                void uploadVariantIssueFiles(v, [f]);
+                                e.currentTarget.value = "";
+                              }}
+                            />
+                            <div
+                              className="rounded-lg border border-dashed border-white/15 bg-bg-900/40 p-2 text-xs text-white/60"
+                              tabIndex={0}
+                              onClick={(e) =>
+                                (e.currentTarget as HTMLDivElement).focus()
+                              }
+                              onPaste={(e) => handleVariantIssuePaste(v, e)}
+                            >
+                              Paste issue photo here (click box, then press Ctrl+V).
+                            </div>
+                            {issuePhotosUploadingId === v.id ? (
+                              <div className="text-xs text-white/60">
+                                Uploading...
+                              </div>
+                            ) : null}
+
+                            {v.issue_photo_urls?.length ? (
+                              <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+                                {v.issue_photo_urls.map((u) => (
+                                  <div
+                                    key={u}
+                                    className="rounded-xl border border-white/10 bg-bg-900/40 overflow-hidden"
+                                  >
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                      src={u}
+                                      alt=""
+                                      className="h-32 w-full object-cover"
+                                    />
+                                    <div className="p-2">
+                                      <Button
+                                        variant="ghost"
+                                        type="button"
+                                        onClick={() => removeVariantIssuePhoto(v, u)}
+                                      >
+                                        Remove
+                                      </Button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="text-xs text-white/50">
+                                No issue photos yet.
+                              </div>
+                            )}
+                          </div>
                         </div>
                       ) : null}
                     </div>
@@ -1373,22 +1906,127 @@ export default function AdminInventoryPage() {
                 }
                 placeholder="(empty)"
               />
-              <Input
-                label="Quantity"
-                value={qty}
-                onChange={(e) => setQty(e.target.value.replace(/[^0-9]/g, ""))}
-                placeholder="(empty)"
-              />
+              <div className="space-y-1">
+                <div className="text-sm text-white/80">Quantity</div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    className="h-10 w-10 px-0"
+                    onClick={() => stepNewQty(-1)}
+                    aria-label="Decrease quantity"
+                  >
+                    -
+                  </Button>
+                  <div className="flex-1">
+                    <Input
+                      value={qty}
+                      onChange={(e) =>
+                        setQty(e.target.value.replace(/[^0-9]/g, ""))
+                      }
+                      placeholder="(empty)"
+                    />
+                  </div>
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    className="h-10 w-10 px-0"
+                    onClick={() => stepNewQty(1)}
+                    aria-label="Increase quantity"
+                  >
+                    +
+                  </Button>
+                </div>
+              </div>
 
               {condition === "with_issues" ? (
-                <Textarea
-                  label="Issue Description (Required)"
-                  value={issueNotes}
-                  onChange={(e) => setIssueNotes(e.target.value)}
-                />
+                <div className="space-y-3 md:col-span-2">
+                  <Textarea
+                    label="Issue Description (Required)"
+                    value={issueNotes}
+                    onChange={(e) => setIssueNotes(e.target.value)}
+                  />
+
+                  <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3">
+                    <div className="text-sm font-medium">
+                      Issue Photos (optional)
+                    </div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={(e) => {
+                        const list = Array.from(e.target.files ?? []);
+                        if (!list.length) return;
+                        const folderId = `issue-${selectedProduct?.id ?? crypto.randomUUID()}`;
+                        void uploadIssueFiles(list, folderId);
+                        e.currentTarget.value = "";
+                      }}
+                    />
+                    <div className="text-xs text-white/50">Take photo</div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (!f) return;
+                        const folderId = `issue-${selectedProduct?.id ?? crypto.randomUUID()}`;
+                        void uploadIssueFiles([f], folderId);
+                        e.currentTarget.value = "";
+                      }}
+                    />
+                    <div
+                      className="rounded-lg border border-dashed border-white/15 bg-bg-900/40 p-2 text-xs text-white/60"
+                      tabIndex={0}
+                      onClick={(e) =>
+                        (e.currentTarget as HTMLDivElement).focus()
+                      }
+                      onPaste={handleIssuePaste}
+                    >
+                      Paste issue photo here (click box, then press Ctrl+V).
+                    </div>
+                    {issuePhotosUploading ? (
+                      <div className="text-xs text-white/60">
+                        Uploading...
+                      </div>
+                    ) : null}
+
+                    {issuePhotos.length ? (
+                      <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+                        {issuePhotos.map((u) => (
+                          <div
+                            key={u}
+                            className="rounded-xl border border-white/10 bg-bg-900/40 overflow-hidden"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={u}
+                              alt=""
+                              className="h-32 w-full object-cover"
+                            />
+                            <div className="p-2">
+                              <Button
+                                variant="ghost"
+                                type="button"
+                                onClick={() => removeIssuePhoto(u)}
+                              >
+                                Remove
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-white/50">
+                        No issue photos yet.
+                      </div>
+                    )}
+                  </div>
+                </div>
               ) : (
                 <div className="text-sm text-white/50 md:col-span-2">
-                  Issue description is required only for “With Issues”.
+                  Issue description is required only for "With Issues".
                 </div>
               )}
             </div>
@@ -1398,7 +2036,7 @@ export default function AdminInventoryPage() {
             </Button>
 
             <div className="text-xs text-white/50">
-              Cost/Price/Qty are empty by default and must be typed manually.
+              Cost/Price are empty by default. Qty defaults to 1.
             </div>
           </div>
         </CardBody>

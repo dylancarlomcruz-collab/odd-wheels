@@ -10,6 +10,7 @@ type VariantRow = {
   id: string; // variant id
   condition: string | null;
   issue_notes: string | null;
+  issue_photo_urls: string[] | null;
   price: number | null;
   qty: number | null;
 
@@ -51,7 +52,14 @@ function collapseVariants(rows: VariantRow[]): ShopProduct[] {
     const image_url = (image_urls[0] as string | undefined) ?? null;
 
     // option.id MUST be variant_id for cart.add(variantId)
-    const option = { id: v.id, condition, price, qty, issue_notes: v.issue_notes ?? null };
+    const option = {
+      id: v.id,
+      condition,
+      price,
+      qty,
+      issue_notes: v.issue_notes ?? null,
+      issue_photo_urls: Array.isArray(v.issue_photo_urls) ? v.issue_photo_urls : null,
+    };
 
     const existing = map.get(key);
     if (!existing) {
@@ -108,7 +116,7 @@ export default function Page() {
       const { data, error } = await supabase
         .from("product_variants")
         .select(
-          "id,condition,issue_notes,price,qty, product:products(id,title,brand,model,image_urls,is_active,created_at)"
+          "id,condition,issue_notes,issue_photo_urls,price,qty, product:products(id,title,brand,model,image_urls,is_active,created_at)"
         )
         .gt("qty", 0)
         .order("created_at", { ascending: false });

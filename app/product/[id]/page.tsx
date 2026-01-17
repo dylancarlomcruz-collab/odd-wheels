@@ -12,6 +12,7 @@ import Link from "next/link";
 import { recommendSimilar } from "@/lib/recommendations";
 import { useBuyerProducts } from "@/hooks/useBuyerProducts";
 import { toast } from "@/components/ui/toast";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 
 export default function ProductDetailPage() {
   const params = useParams<{ id: string }>();
@@ -19,9 +20,32 @@ export default function ProductDetailPage() {
   const { product, loading } = useProductDetail(id);
   const { add, isLoggedIn } = useCart();
   const router = useRouter();
+  const [issueViewer, setIssueViewer] = React.useState<{
+    images: string[];
+    condition: string;
+  } | null>(null);
+  const [issueIndex, setIssueIndex] = React.useState(0);
 
   // For similar items, fetch recent products (All) then compute similarity.
   const { products: allProducts } = useBuyerProducts({ brand: "all" });
+
+  React.useEffect(() => {
+    if (!issueViewer) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIssueViewer(null);
+      if (e.key === "ArrowLeft") stepIssue(-1);
+      if (e.key === "ArrowRight") stepIssue(1);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [issueViewer]);
+
+  function stepIssue(delta: number) {
+    if (!issueViewer?.images?.length) return;
+    setIssueIndex((prev) =>
+      (prev + delta + issueViewer.images.length) % issueViewer.images.length
+    );
+  }
 
   if (loading) {
     return <main className="mx-auto max-w-6xl px-4 py-10 text-white/70">Loading...</main>;
@@ -103,6 +127,23 @@ export default function ProductDetailPage() {
                       <div className="mt-2 text-sm text-red-200/80">Issue: {v.issue_notes}</div>
                     ) : null}
 
+                    {Array.isArray(v.issue_photo_urls) && v.issue_photo_urls.length ? (
+                      <div className="mt-3">
+                        <Button
+                          variant="ghost"
+                          onClick={() => {
+                            setIssueIndex(0);
+                            setIssueViewer({
+                              images: v.issue_photo_urls ?? [],
+                              condition: v.condition.toUpperCase(),
+                            });
+                          }}
+                        >
+                          Show issue photos
+                        </Button>
+                      </div>
+                    ) : null}
+
                     <div className="mt-3">
                       {!isLoggedIn ? (
                         <Link href="/auth/login">
@@ -154,6 +195,73 @@ export default function ProductDetailPage() {
           </div>
         </div>
       </div>
+
+      {issueViewer ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setIssueViewer(null)}
+            aria-label="Close issue photos"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="relative w-full max-w-3xl rounded-2xl border border-white/10 bg-bg-900/95 p-5 shadow-soft"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs text-white/50">Issue photos</div>
+                <div className="text-lg font-semibold">{product.title}</div>
+                <div className="text-sm text-white/60">{issueViewer.condition}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIssueViewer(null)}
+                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
+              >
+                <X className="h-4 w-4" />
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 relative rounded-xl border border-white/10 bg-bg-950/50 p-3">
+              {issueViewer.images[issueIndex] ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={issueViewer.images[issueIndex]}
+                  alt="Issue photo"
+                  className="h-72 w-full rounded-lg object-contain"
+                />
+              ) : (
+                <div className="flex h-72 items-center justify-center text-sm text-white/50">
+                  No issue photos available.
+                </div>
+              )}
+              {issueViewer.images.length > 1 ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => stepIssue(-1)}
+                    className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white/90 hover:bg-black/80"
+                    aria-label="Previous issue photo"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepIssue(1)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white/90 hover:bg-black/80"
+                    aria-label="Next issue photo"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

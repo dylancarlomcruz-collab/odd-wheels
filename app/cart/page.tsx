@@ -162,6 +162,11 @@ function CartContent() {
                               {formatPHP(Number(l.variant.price))}
                             </span>
                           </div>
+                          {l.variant.issue_notes ? (
+                            <div className="text-[11px] text-white/50">
+                              Note: {l.variant.issue_notes}
+                            </div>
+                          ) : null}
                           <button
                             type="button"
                             onClick={() => openPreview(l)}

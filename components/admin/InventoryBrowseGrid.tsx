@@ -18,6 +18,7 @@ export type AdminVariant = {
   qty: number | null;
   ship_class: string | null;
   issue_notes: string | null;
+  issue_photo_urls: string[] | null;
   created_at: string | null;
 };
 
@@ -284,7 +285,7 @@ export function InventoryBrowseGrid({
       let query = supabase
         .from("products")
         .select(
-          "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,created_at)"
+          "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,created_at)"
         )
         .order("created_at", { ascending: false })
         .range(from, to);

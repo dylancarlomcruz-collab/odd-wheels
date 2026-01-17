@@ -9,6 +9,7 @@ type ConditionOption = {
   price: number;
   qty: number;
   issue_notes?: string | null;
+  issue_photo_urls?: string[] | null;
 };
 
 export type ShopProduct = {
@@ -50,6 +51,8 @@ export default function ProductCard({
   );
   const [isOpen, setIsOpen] = React.useState(false);
   const [activeIndex, setActiveIndex] = React.useState(0);
+  const [issueOpen, setIssueOpen] = React.useState(false);
+  const [issueIndex, setIssueIndex] = React.useState(0);
 
   const selected = React.useMemo(
     () =>
@@ -66,6 +69,11 @@ export default function ProductCard({
     return list;
   }, [product.image_url, product.image_urls]);
 
+  const issueImages = React.useMemo(
+    () => (selected?.issue_photo_urls ?? []).filter(Boolean) as string[],
+    [selected?.issue_photo_urls]
+  );
+
   const priceLabel =
     product.minPrice === product.maxPrice
       ? peso(product.minPrice)
@@ -77,6 +85,8 @@ export default function ProductCard({
   const isOut = !selected || (selected.qty ?? 0) <= 0;
   const activeImage = images[activeIndex] ?? "";
   const cardImage = product.image_url ?? images[0] ?? null;
+  const activeIssueImage = issueImages[issueIndex] ?? "";
+  const hasIssuePhotos = issueImages.length > 0;
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -90,6 +100,17 @@ export default function ProductCard({
   }, [isOpen, images.length]);
 
   React.useEffect(() => {
+    if (!issueOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIssueOpen(false);
+      if (e.key === "ArrowLeft") stepIssue(-1);
+      if (e.key === "ArrowRight") stepIssue(1);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [issueOpen, issueImages.length]);
+
+  React.useEffect(() => {
     if (activeIndex >= images.length) setActiveIndex(0);
   }, [activeIndex, images.length]);
 
@@ -97,6 +118,11 @@ export default function ProductCard({
     setSelectedId(product.options[0]?.id ?? "");
     setHasPicked((product.options?.length ?? 0) <= 1);
   }, [product.options]);
+
+  React.useEffect(() => {
+    setIssueOpen(false);
+    setIssueIndex(0);
+  }, [selectedId]);
 
   function openPreview() {
     setActiveIndex(0);
@@ -106,6 +132,17 @@ export default function ProductCard({
   function step(delta: number) {
     if (images.length <= 1) return;
     setActiveIndex((prev) => (prev + delta + images.length) % images.length);
+  }
+
+  function openIssuePhotos() {
+    if (!issueImages.length) return;
+    setIssueIndex(0);
+    setIssueOpen(true);
+  }
+
+  function stepIssue(delta: number) {
+    if (issueImages.length <= 1) return;
+    setIssueIndex((prev) => (prev + delta + issueImages.length) % issueImages.length);
   }
 
   return (
@@ -181,6 +218,16 @@ export default function ProductCard({
             >
               Add
             </button>
+
+            {hasIssuePhotos ? (
+              <button
+                type="button"
+                onClick={openIssuePhotos}
+                className="w-full rounded-xl border border-white/10 px-3 py-1.5 text-[11px] sm:text-xs text-white/80 hover:bg-white/10"
+              >
+                Show issue photos
+              </button>
+            ) : null}
           </div>
 
           {isOut ? (
@@ -277,11 +324,6 @@ export default function ProductCard({
                     <span className="text-white/60">Available</span>
                     <span className="text-white/80">{selected?.qty ?? 0} left</span>
                   </div>
-                  {selected?.issue_notes ? (
-                    <div className="text-sm text-red-200/80">
-                      Issue: {selected.issue_notes}
-                    </div>
-                  ) : null}
                 </div>
 
                 <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3">
@@ -307,7 +349,85 @@ export default function ProductCard({
                     })}
                   </div>
                 </div>
+
+                <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
+                    Item notes
+                  </div>
+                  <div className="mt-2 text-sm text-white/70">
+                    {selected?.issue_notes ? selected.issue_notes : "No notes for this item."}
+                  </div>
+                </div>
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {issueOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setIssueOpen(false)}
+            aria-label="Close issue photos"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="relative w-full max-w-3xl rounded-2xl border border-white/10 bg-bg-900/95 p-5 shadow-soft"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs text-white/50">Issue photos</div>
+                <div className="text-lg font-semibold">{product.title}</div>
+                <div className="text-sm text-white/60">
+                  {selected?.condition ?? "-"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIssueOpen(false)}
+                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
+              >
+                <X className="h-4 w-4" />
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 relative rounded-xl border border-white/10 bg-bg-950/50 p-3">
+              {activeIssueImage ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={activeIssueImage}
+                  alt="Issue photo"
+                  className="h-72 w-full rounded-lg object-contain"
+                />
+              ) : (
+                <div className="flex h-72 items-center justify-center text-sm text-white/50">
+                  No issue photos available.
+                </div>
+              )}
+              {issueImages.length > 1 ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => stepIssue(-1)}
+                    className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white/90 hover:bg-black/80"
+                    aria-label="Previous issue photo"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepIssue(1)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white/90 hover:bg-black/80"
+                    aria-label="Next issue photo"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </>
+              ) : null}
             </div>
           </div>
         </div>
