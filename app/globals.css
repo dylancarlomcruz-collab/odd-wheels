@@ -60,10 +60,14 @@ a { color: inherit; text-decoration: none; }
 }
 
 @media (max-width: 640px) {
+  .admin-compact .card {
+    border-radius: 0.75rem;
+  }
+
   .admin-compact .card-header,
   .admin-compact .card-body,
   .admin-compact .card-footer {
-    padding: 1rem;
+    padding: 0.75rem;
   }
 
   .admin-compact label > input,
@@ -75,6 +79,21 @@ a { color: inherit; text-decoration: none; }
 
   .admin-compact label > textarea {
     min-height: 80px;
+  }
+
+  .admin-compact .text-2xl {
+    font-size: 1.25rem;
+    line-height: 1.75rem;
+  }
+
+  .admin-compact .text-xl {
+    font-size: 1.125rem;
+    line-height: 1.5rem;
+  }
+
+  .admin-compact .text-lg {
+    font-size: 1rem;
+    line-height: 1.5rem;
   }
 }
 

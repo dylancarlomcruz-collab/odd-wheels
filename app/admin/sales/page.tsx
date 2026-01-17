@@ -209,7 +209,7 @@ export default function AdminSalesPage() {
 
   return (
     <RequireAuth>
-      <div className="mx-auto max-w-6xl px-4 py-8 space-y-6">
+      <div className="space-y-6">
         <Card>
           <CardHeader className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -255,7 +255,7 @@ export default function AdminSalesPage() {
                     type="date"
                     value={from}
                     onChange={(e) => setFrom(e.target.value)}
-                    className="w-[180px] rounded-xl bg-bg-800 border border-white/10 px-4 py-2 text-white"
+                    className="w-full sm:w-[180px] rounded-xl bg-bg-800 border border-white/10 px-4 py-2 text-white"
                   />
                 </label>
                 <label className="block">
@@ -264,7 +264,7 @@ export default function AdminSalesPage() {
                     type="date"
                     value={to}
                     onChange={(e) => setTo(e.target.value)}
-                    className="w-[180px] rounded-xl bg-bg-800 border border-white/10 px-4 py-2 text-white"
+                    className="w-full sm:w-[180px] rounded-xl bg-bg-800 border border-white/10 px-4 py-2 text-white"
                   />
                 </label>
                 <Button variant="secondary" onClick={run} disabled={loading}>

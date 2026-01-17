@@ -232,7 +232,7 @@ export default function AdminCartInsightsPage() {
                 value={days}
                 onChange={(e) => setDays(e.target.value)}
                 hint="0 = all time"
-                className="w-[160px]"
+                className="w-full sm:w-[160px]"
               />
               <Input
                 label="Max items"
@@ -242,13 +242,13 @@ export default function AdminCartInsightsPage() {
                 value={limit}
                 onChange={(e) => setLimit(e.target.value)}
                 hint="0 = show all"
-                className="w-[160px]"
+                className="w-full sm:w-[160px]"
               />
               <Select
                 label="Sort by"
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value as "qty" | "customers")}
-                className="w-[200px]"
+                className="w-full sm:w-[200px]"
               >
                 <option value="qty">Most qty in carts</option>
                 <option value="customers">Most customers</option>
@@ -275,7 +275,7 @@ export default function AdminCartInsightsPage() {
                       key={row.key}
                       className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-paper/5 px-3 py-2 sm:py-3"
                     >
-                      <div className="flex min-w-[240px] flex-1 items-center gap-3">
+                      <div className="flex min-w-0 flex-1 items-center gap-3 sm:min-w-[240px]">
                         <div className="h-14 w-14 rounded-lg border border-white/10 bg-bg-800 overflow-hidden flex-shrink-0">
                           {row.imageUrl ? (
                             // eslint-disable-next-line @next/next/no-img-element
