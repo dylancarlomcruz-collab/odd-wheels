@@ -544,8 +544,12 @@ export default function AdminInventoryPage() {
   }
 
   async function lookupProductUrl() {
-    const url = productUrl.trim();
+    const url = normalizeUrlInput(productUrl);
     if (!url) return;
+
+    if (url !== productUrl.trim()) {
+      setProductUrl(url);
+    }
 
     setProductUrlLoading(true);
     setProductUrlMsg(null);
@@ -598,6 +602,19 @@ export default function AdminInventoryPage() {
     } finally {
       setProductUrlLoading(false);
     }
+  }
+
+  function normalizeUrlInput(value: string) {
+    const raw = value.trim();
+    if (!raw) return "";
+    const firstIdx = raw.search(/https?:\/\//i);
+    if (firstIdx === -1) return raw;
+    let candidate = raw.slice(firstIdx);
+    const nextIdx = candidate.toLowerCase().indexOf("http", 1);
+    if (nextIdx > 0) {
+      candidate = candidate.slice(0, nextIdx);
+    }
+    return candidate.replace(/[)\],.]+$/g, "").trim();
   }
 
   async function uploadFileToStorage(file: File, folderId: string) {
@@ -1264,7 +1281,7 @@ export default function AdminInventoryPage() {
               </div>
               <Button
                 variant="secondary"
-                onClick={lookupBarcode}
+                onClick={() => lookupBarcode()}
                 disabled={lookupLoading}
               >
                 {lookupLoading ? "Looking up..." : "Lookup"}
@@ -1286,9 +1303,10 @@ export default function AdminInventoryPage() {
                   value={productUrl}
                   onChange={(e) => setProductUrl(e.target.value)}
                   onPaste={(e) => {
-                    const text = e.clipboardData.getData("text").trim();
-                    if (!text) return;
-                    setProductUrl(text);
+                    const text = e.clipboardData.getData("text");
+                    const normalized = normalizeUrlInput(text);
+                    if (!normalized) return;
+                    setProductUrl(normalized);
                     requestAnimationFrame(() => lookupProductUrl());
                   }}
                   onKeyDown={(e) => {
