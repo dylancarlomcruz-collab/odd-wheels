@@ -11,8 +11,13 @@ import { ThemeProvider } from "@/components/theme/ThemeProvider";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Odd Wheels POS",
-  description: "Odd Wheels POS & E-Commerce",
+  title: "Odd Wheels PH",
+  description: "Odd Wheels PH",
+  icons: {
+    icon: "/odd-wheels-logo.png",
+    shortcut: "/odd-wheels-logo.png",
+    apple: "/odd-wheels-logo.png",
+  },
 };
 
 export default function RootLayout({
