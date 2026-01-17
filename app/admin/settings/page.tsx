@@ -105,6 +105,9 @@ export default function AdminSettingsPage() {
     () => buildEmptyPickupScheduleState()
   );
   const [pickupUnavailable, setPickupUnavailable] = React.useState(false);
+  const [headerLogoUrl, setHeaderLogoUrl] = React.useState("");
+  const [logoUploading, setLogoUploading] = React.useState(false);
+  const [logoMsg, setLogoMsg] = React.useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -123,6 +126,7 @@ export default function AdminSettingsPage() {
         )
       );
       setPickupUnavailable(!!data.pickup_unavailable);
+      setHeaderLogoUrl((data as any).header_logo_url ?? "");
     }
 
     setLoading(false);
@@ -143,12 +147,37 @@ export default function AdminSettingsPage() {
       priority_shipping_note: priorityNote || null,
       pickup_schedule_text: pickupSummary || null,
       pickup_schedule: pickupPayload,
-      pickup_unavailable: pickupUnavailable
+      pickup_unavailable: pickupUnavailable,
+      header_logo_url: headerLogoUrl || null
     }).eq("id", 1);
 
     if (error) alert(error.message);
     setSaving(false);
     await load();
+  }
+
+  async function uploadLogo(file: File) {
+    setLogoMsg(null);
+    setLogoUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("productId", "header-logo");
+      const res = await fetch("/api/images/upload", {
+        method: "POST",
+        body: form,
+      });
+      const json = await res.json();
+      if (!json?.ok || !json?.publicUrl) {
+        throw new Error(json?.error ?? "Upload failed.");
+      }
+      setHeaderLogoUrl(String(json.publicUrl));
+      setLogoMsg("Logo uploaded. Click Save settings to apply.");
+    } catch (err: any) {
+      setLogoMsg(err?.message ?? "Logo upload failed.");
+    } finally {
+      setLogoUploading(false);
+    }
   }
 
   return (
@@ -160,6 +189,63 @@ export default function AdminSettingsPage() {
         </CardHeader>
         <CardBody className="space-y-4">
           {loading ? <div className="text-white/60">Loading...</div> : null}
+
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+            <div className="font-semibold">Branding</div>
+            <div className="text-sm text-white/60">
+              Update the header logo with a public image URL.
+            </div>
+            <Input
+              label="Header logo URL"
+              value={headerLogoUrl}
+              onChange={(e) => setHeaderLogoUrl(e.target.value)}
+              placeholder="https://..."
+            />
+            <div>
+              <div className="text-xs text-white/60 mb-2">Upload logo image</div>
+              <input
+                type="file"
+                accept="image/*"
+                disabled={logoUploading}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  await uploadLogo(file);
+                  e.target.value = "";
+                }}
+              />
+              {logoUploading ? (
+                <div className="text-xs text-white/60 mt-2">Uploading...</div>
+              ) : null}
+              {logoMsg ? (
+                <div className="text-xs text-white/60 mt-2">{logoMsg}</div>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="h-12 w-12 rounded-xl border border-white/10 bg-bg-900/40 overflow-hidden">
+                {headerLogoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={headerLogoUrl}
+                    alt="Header logo preview"
+                    className="h-full w-full object-cover bg-neutral-50"
+                  />
+                ) : (
+                  <div className="h-full w-full grid place-items-center text-[10px] text-white/40">
+                    Default
+                  </div>
+                )}
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setHeaderLogoUrl("")}
+              >
+                Use default logo
+              </Button>
+            </div>
+          </div>
 
           <Textarea label="Shipping Schedule (shown on homepage & checkout)" value={schedule} onChange={(e) => setSchedule(e.target.value)} />
           <Input label="Shipping Cut-off (optional)" value={cutoff} onChange={(e) => setCutoff(e.target.value)} />

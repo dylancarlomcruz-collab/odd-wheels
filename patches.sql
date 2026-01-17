@@ -13,6 +13,9 @@ for insert with check (bucket_id = 'sell-trade-uploads' and auth.role() = 'authe
 
 -- Shipping workflow patches
 
+alter table public.settings
+  add column if not exists header_logo_url text;
+
 alter table public.orders
   add column if not exists shipping_status text not null default 'PREPARING TO SHIP';
 

@@ -96,23 +96,25 @@ create table if not exists public.settings (
   shipping_schedule_text text,
   shipping_cutoff_text text,
   priority_shipping_available boolean not null default false,
-  priority_shipping_note text,
-  pickup_schedule_text text,
-  pickup_schedule jsonb not null default '{}'::jsonb,
-  pickup_unavailable boolean not null default false,
-  created_at timestamptz not null default now()
-);
+    priority_shipping_note text,
+    pickup_schedule_text text,
+    pickup_schedule jsonb not null default '{}'::jsonb,
+    pickup_unavailable boolean not null default false,
+    header_logo_url text,
+    created_at timestamptz not null default now()
+  );
 
 insert into public.settings (
   id,
   shipping_schedule_text,
   shipping_cutoff_text,
   priority_shipping_available,
-  priority_shipping_note,
-  pickup_schedule_text,
-  pickup_schedule,
-  pickup_unavailable
-)
+    priority_shipping_note,
+    pickup_schedule_text,
+    pickup_schedule,
+    pickup_unavailable,
+    header_logo_url
+  )
 values (
   1,
   'Set your shipping schedule here.',
@@ -129,9 +131,10 @@ values (
     "FRI": ["10:00 AM - 1:00 PM", "2:00 PM - 6:00 PM"],
     "SAT": ["10:00 AM - 1:00 PM", "2:00 PM - 6:00 PM"],
     "SUN": ["10:00 AM - 1:00 PM", "2:00 PM - 6:00 PM"]
-  }'::jsonb,
-  false
-)
+    }'::jsonb,
+    false,
+    null
+  )
 on conflict (id) do nothing;
 
 -- 5) Products (identity)

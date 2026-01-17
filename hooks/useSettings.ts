@@ -12,6 +12,7 @@ export type Settings = {
   pickup_schedule_text: string | null;
   pickup_unavailable: boolean;
   pickup_schedule: Record<string, string[]> | null;
+  header_logo_url: string | null;
 };
 
 export function useSettings() {

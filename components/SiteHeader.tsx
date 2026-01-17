@@ -12,10 +12,12 @@ import { useActiveOrderCount } from "@/hooks/useActiveOrderCount";
 import { useCart } from "@/hooks/useCart";
 import { Badge } from "@/components/ui/Badge";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
+import { useSettings } from "@/hooks/useSettings";
 
 export function SiteHeader() {
   const { user } = useAuth();
   const { profile } = useProfile();
+  const { settings } = useSettings();
   const router = useRouter();
   const sp = useSearchParams();
   const [q, setQ] = React.useState(sp.get("q") ?? "");
@@ -31,6 +33,7 @@ export function SiteHeader() {
     [cartLines]
   );
   const cartCountLabel = cartCount > 99 ? "99+" : String(cartCount);
+  const logoUrl = settings?.header_logo_url?.trim() || "/odd-wheels-logo.png";
 
   function submitSearch(e: React.FormEvent) {
     e.preventDefault();
@@ -58,7 +61,14 @@ export function SiteHeader() {
         <Link href="/" className="flex items-center gap-2">
           <div className="h-9 w-9 rounded-xl bg-bg-800 border border-white/10 grid place-items-center overflow-hidden shadow-soft">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/odd-wheels-logo.png" alt="Odd Wheels" className="h-full w-full object-cover" />
+            <img
+              src={logoUrl}
+              alt="Odd Wheels"
+              className="h-full w-full object-cover"
+              onError={(e) => {
+                e.currentTarget.src = "/odd-wheels-logo.png";
+              }}
+            />
           </div>
           <div>
             <div className="text-sm font-semibold leading-4">ODD WHEELS</div>
