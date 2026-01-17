@@ -35,6 +35,25 @@ export function SiteHeader() {
   const cartCountLabel = cartCount > 99 ? "99+" : String(cartCount);
   const logoUrl = settings?.header_logo_url?.trim() || "/odd-wheels-logo.png";
 
+  React.useEffect(() => {
+    if (typeof document === "undefined") return;
+    const href = logoUrl || "/odd-wheels-logo.png";
+
+    const ensureLink = (rel: string) => {
+      let link = document.querySelector<HTMLLinkElement>(`link[rel="${rel}"]`);
+      if (!link) {
+        link = document.createElement("link");
+        link.rel = rel;
+        document.head.appendChild(link);
+      }
+      link.href = href;
+    };
+
+    ensureLink("icon");
+    ensureLink("shortcut icon");
+    ensureLink("apple-touch-icon");
+  }, [logoUrl]);
+
   function submitSearch(e: React.FormEvent) {
     e.preventDefault();
     router.push(`/search?q=${encodeURIComponent(q)}`);
