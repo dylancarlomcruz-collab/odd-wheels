@@ -110,7 +110,7 @@ export default function ProductCard({
 
   return (
     <>
-      <div className="rounded-2xl overflow-hidden bg-bg-900/70 dark:bg-paper/5 border border-white/20 dark:border-white/10 shadow-sm">
+      <div className="rounded-xl sm:rounded-2xl overflow-hidden bg-bg-900/70 dark:bg-paper/5 border border-white/20 dark:border-white/10 shadow-sm">
         <button
           type="button"
           onClick={openPreview}
@@ -129,27 +129,27 @@ export default function ProductCard({
           )}
         </button>
 
-        <div className="p-4">
+        <div className="p-3 sm:p-4">
           <button
             type="button"
             onClick={openPreview}
-            className="text-left text-white font-semibold line-clamp-2"
+            className="text-left text-sm sm:text-base text-white font-semibold line-clamp-2"
           >
             {product.title}
           </button>
-          <div className="text-white/60 text-xs mt-1 line-clamp-1">
+          <div className="text-white/60 text-[11px] sm:text-xs mt-1 line-clamp-1">
             {product.brand ?? "-"}
             {product.model ? ` - ${product.model}` : ""}
           </div>
 
-          <div className="mt-3 flex items-center justify-between">
-            <div className="text-price">{displayPrice}</div>
-            <div className="text-xs text-white/60">
+          <div className="mt-2 sm:mt-3 flex items-center justify-between">
+            <div className="text-price text-sm sm:text-base">{displayPrice}</div>
+            <div className="text-[11px] sm:text-xs text-white/60">
               {selected?.qty ?? 0} left ({selected?.condition ?? "-"})
             </div>
           </div>
 
-          <div className="mt-3 space-y-2">
+          <div className="mt-2 sm:mt-3 space-y-2">
             <div className="flex flex-wrap gap-2">
               {product.options.map((o) => {
                 const isSelected = o.id === selectedId;
@@ -162,7 +162,7 @@ export default function ProductCard({
                       setHasPicked(true);
                     }}
                     className={[
-                      "rounded-full border px-3 py-1 text-xs transition",
+                      "rounded-full border px-2 py-0.5 text-[11px] sm:px-3 sm:py-1 sm:text-xs transition",
                       isSelected
                         ? "bg-sky-200 text-sky-900 border-sky-300 dark:bg-sky-500/20 dark:text-sky-100 dark:border-sky-400/40"
                         : "border-white/20 bg-bg-900/60 text-white/80 hover:bg-bg-900/80 dark:border-white/10 dark:bg-paper/5 dark:text-white/70 dark:hover:bg-paper/10",
@@ -175,7 +175,7 @@ export default function ProductCard({
             </div>
 
             <button
-              className="w-full rounded-xl px-4 py-2 bg-amber-600 hover:bg-amber-500 text-black font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full rounded-xl px-3 py-1.5 text-sm sm:px-4 sm:py-2 bg-amber-600 hover:bg-amber-500 text-black font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
               disabled={isOut}
               onClick={() => selected && onAddToCart(selected)}
             >
@@ -184,7 +184,7 @@ export default function ProductCard({
           </div>
 
           {isOut ? (
-            <div className="mt-2 text-xs text-red-300">
+            <div className="mt-2 text-[11px] sm:text-xs text-red-300">
               Selected condition is out of stock.
             </div>
           ) : null}

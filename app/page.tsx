@@ -178,14 +178,14 @@ export default function Page() {
   }
 
   return (
-    <main className="px-4 py-6">
-      <div className="flex gap-2 overflow-x-auto pb-3">
+    <main className="px-3 py-5 sm:px-4 sm:py-6">
+      <div className="flex gap-2 overflow-x-auto pb-2 sm:pb-3">
         {brands.map((b) => (
           <button
             key={b}
             onClick={() => setBrandTab(b)}
             className={[
-              "whitespace-nowrap rounded-full px-4 py-2 text-sm border",
+              "shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-xs border sm:px-4 sm:py-2 sm:text-sm",
               b === brandTab
                 ? "bg-amber-600 text-black border-amber-500"
                 : "bg-paper/5 text-white/80 border-white/10",
@@ -196,10 +196,10 @@ export default function Page() {
         ))}
       </div>
 
-      {loading ? <div className="text-white/60">Loading…</div> : null}
+      {loading ? <div className="text-white/60">Loading...</div> : null}
       {err ? <div className="text-red-300">{err}</div> : null}
 
-      <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
         {filtered.map((p) => (
           <ProductCard
             key={p.key}
