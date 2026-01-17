@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --fg: 15 23 42;
+  --paper: 17 24 39;
+  --bg-950: 236 238 243;
+  --bg-900: 228 231 238;
+  --bg-800: 219 223 232;
+  --bg-700: 209 214 224;
+  --glow-1: 217 106 43;
+  --glow-2: 255 154 82;
+}
+
+html.dark {
+  color-scheme: dark;
+  --fg: 255 255 255;
+  --paper: 255 255 255;
+  --bg-950: 11 11 12;
+  --bg-900: 17 17 20;
+  --bg-800: 22 22 27;
+  --bg-700: 31 31 39;
+  --glow-1: 217 106 43;
+  --glow-2: 255 154 82;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  background: radial-gradient(1200px 600px at 20% 0%, rgba(var(--glow-1), 0.18), transparent 55%),
+              radial-gradient(1000px 500px at 80% 10%, rgba(var(--glow-2), 0.12), transparent 60%),
+              linear-gradient(180deg, rgb(var(--bg-950)), rgb(var(--bg-950)));
+  color: rgb(var(--fg));
+}
+
+html:not(.dark) body {
+  background: radial-gradient(1200px 600px at 20% 0%, rgba(var(--glow-1), 0.1), transparent 55%),
+              radial-gradient(1000px 500px at 80% 10%, rgba(var(--glow-2), 0.06), transparent 60%),
+              linear-gradient(180deg, rgb(var(--bg-950)), rgb(var(--bg-950)));
+}
+
+a { color: inherit; text-decoration: none; }
+
+@layer components {
+  .text-price {
+    @apply font-semibold text-accent-700 dark:text-accent-200;
+  }
+
+  .panel {
+    @apply rounded-xl border border-white/10 bg-bg-900/40 backdrop-blur-sm;
+  }
+
+  .panel-muted {
+    @apply panel bg-bg-950/50;
+  }
+}
+
+/* Hide number input spinners (Cost / Price / Qty requirement) */
+input[type=number]::-webkit-outer-spin-button,
+input[type=number]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type=number] {
+  -moz-appearance: textfield;
+}
