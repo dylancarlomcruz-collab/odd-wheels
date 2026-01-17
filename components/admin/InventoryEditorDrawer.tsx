@@ -72,6 +72,8 @@ export function InventoryEditorDrawer({
 
   if (!product) return null;
 
+  const productId = product.id;
+
   function addImage() {
     const url = newImage.trim();
     if (!url) return;
@@ -126,7 +128,7 @@ export function InventoryEditorDrawer({
           image_urls: images,
           is_active: isActive,
         })
-        .eq("id", product.id);
+        .eq("id", productId);
 
       const existing = variants.filter((v) => !v._isNew && !v._delete);
       const toDelete = variants.filter((v) => v._delete && !v._isNew);
@@ -167,7 +169,7 @@ export function InventoryEditorDrawer({
       if (toInsert.length) {
         await supabase.from("product_variants").insert(
           toInsert.map((v) => ({
-            product_id: product.id,
+            product_id: productId,
             condition: v.condition,
             barcode: v.barcode || null,
             cost: safeNumber(v.cost),
@@ -227,7 +229,7 @@ export function InventoryEditorDrawer({
           <div className="rounded-2xl border border-white/10 bg-bg-900/50 p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div className="font-semibold">Product identity</div>
-              <Badge>{product.id.slice(0, 8)}</Badge>
+              <Badge>{productId.slice(0, 8)}</Badge>
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
