@@ -132,7 +132,26 @@ export function InventoryEditorDrawer({
   function addImage() {
     const url = newImage.trim();
     if (!url) return;
-    setImages((prev) => Array.from(new Set([...prev, url])));
+    addImageUrls([url]);
+    setNewImage("");
+  }
+
+  function addImageUrls(urls: string[]) {
+    const cleaned = urls.map((u) => u.trim()).filter(Boolean);
+    if (!cleaned.length) return;
+    setImages((prev) => Array.from(new Set([...prev, ...cleaned])));
+  }
+
+  function handleNewImagePaste(e: React.ClipboardEvent<HTMLInputElement>) {
+    const text = e.clipboardData.getData("text");
+    if (!text) return;
+    const urls = text
+      .split(/\s+/)
+      .map((u) => u.trim())
+      .filter((u) => /^https?:\/\//i.test(u));
+    if (!urls.length) return;
+    e.preventDefault();
+    addImageUrls(urls);
     setNewImage("");
   }
 
@@ -395,6 +414,7 @@ export function InventoryEditorDrawer({
                 placeholder="Add image URL..."
                 value={newImage}
                 onChange={(e) => setNewImage(e.target.value)}
+                onPaste={handleNewImagePaste}
               />
               <Button variant="secondary" onClick={addImage} disabled={!newImage.trim()}>
                 Add

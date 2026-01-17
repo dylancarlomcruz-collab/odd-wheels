@@ -734,8 +734,33 @@ export default function AdminInventoryPage() {
   function addManualUrl() {
     const u = manualImageUrl.trim();
     if (!u) return;
-    setImages((prev) => uniq([...prev, u]));
-    setSelectedImages((prev) => ({ ...prev, [u]: true }));
+    addImageUrls([u]);
+    setManualImageUrl("");
+  }
+
+  function addImageUrls(urls: string[]) {
+    const cleaned = urls.map((u) => u.trim()).filter(Boolean);
+    if (!cleaned.length) return;
+    setImages((prev) => uniq([...prev, ...cleaned]));
+    setSelectedImages((prev) => {
+      const next = { ...prev };
+      cleaned.forEach((u) => {
+        next[u] = true;
+      });
+      return next;
+    });
+  }
+
+  function handleManualUrlPaste(e: React.ClipboardEvent<HTMLInputElement>) {
+    const text = e.clipboardData.getData("text");
+    if (!text) return;
+    const urls = text
+      .split(/\s+/)
+      .map((u) => u.trim())
+      .filter((u) => /^https?:\/\//i.test(u));
+    if (!urls.length) return;
+    e.preventDefault();
+    addImageUrls(urls);
     setManualImageUrl("");
   }
 
@@ -1260,6 +1285,12 @@ export default function AdminInventoryPage() {
                   placeholder="Paste product URL..."
                   value={productUrl}
                   onChange={(e) => setProductUrl(e.target.value)}
+                  onPaste={(e) => {
+                    const text = e.clipboardData.getData("text").trim();
+                    if (!text) return;
+                    setProductUrl(text);
+                    requestAnimationFrame(() => lookupProductUrl());
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
@@ -1539,6 +1570,7 @@ export default function AdminInventoryPage() {
                   placeholder="https://..."
                   value={manualImageUrl}
                   onChange={(e) => setManualImageUrl(e.target.value)}
+                  onPaste={handleManualUrlPaste}
                 />
               </div>
               <div className="flex items-end gap-2">
