@@ -107,10 +107,15 @@ function TradeProductCard({
       (v) => Number(v.qty ?? 0) > 0
     );
   }, [product.product_variants]);
-  const displayVariants = React.useMemo(() => {
-    const sealed = variants.find((v) => v.condition === "sealed") ?? null;
-    const unsealed = variants.find((v) => v.condition === "unsealed") ?? null;
-    return sealed || unsealed ? [sealed, unsealed].filter(Boolean) : variants;
+  const displayVariants = React.useMemo<TradeVariant[]>(() => {
+    const sealed = variants.find((v) => v.condition === "sealed");
+    const unsealed = variants.find((v) => v.condition === "unsealed");
+    if (sealed || unsealed) {
+      return [sealed, unsealed].filter(
+        (v): v is TradeVariant => Boolean(v)
+      );
+    }
+    return variants;
   }, [variants]);
   const fallback = displayVariants[0] ?? null;
   const [selectedId, setSelectedId] = React.useState<string>(fallback?.id ?? "");
