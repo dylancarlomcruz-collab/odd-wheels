@@ -28,7 +28,7 @@ const CONDITION_OPTIONS: Array<VariantDraft["condition"]> = [
   "with_issues",
 ];
 
-const SHIP_OPTIONS = ["MINI_GT", "KAIDO", "ACRYLIC_TRUE_SCALE"];
+const SHIP_OPTIONS = ["MINI_GT", "KAIDO", "POPRACE", "ACRYLIC_TRUE_SCALE"];
 
 function safeNumber(v: any): number | null {
   if (v === "" || v === null || typeof v === "undefined") return null;

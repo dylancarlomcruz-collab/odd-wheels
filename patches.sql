@@ -640,6 +640,13 @@ alter table public.product_variants
   add column if not exists issue_photo_urls text[] null,
   add column if not exists public_notes text null;
 
+alter table public.product_variants
+  drop constraint if exists product_variants_ship_class_check;
+
+alter table public.product_variants
+  add constraint product_variants_ship_class_check
+  check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE'));
+
 create table if not exists public.barcode_logs (
   id uuid primary key default gen_random_uuid(),
   created_at timestamptz not null default now(),

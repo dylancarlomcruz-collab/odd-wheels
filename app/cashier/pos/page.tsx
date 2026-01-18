@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 import { toast } from "@/components/ui/toast";
+import { normalizeBarcode } from "@/lib/barcode";
 
 type Product = {
   id: string;
@@ -72,10 +73,6 @@ function formatCondition(value: string | null) {
 function variantLabel(v: Variant) {
   const barcode = v.barcode ? ` | ${v.barcode}` : "";
   return `${formatCondition(v.condition)} | ${peso(Number(v.price ?? 0))} | Qty ${Number(v.qty ?? 0)}${barcode}`;
-}
-
-function normalizeBarcode(value: string) {
-  return value.replace(/[^0-9]/g, "");
 }
 
 const BARCODE_CONTROL_KEYS = new Set([

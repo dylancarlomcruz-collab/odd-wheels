@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/Badge";
 import { formatPHP } from "@/lib/money";
 import { toast } from "@/components/ui/toast";
 import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
+import { normalizeBarcode } from "@/lib/barcode";
 
 export type AdminVariant = {
   id: string;
@@ -574,7 +575,9 @@ export function InventoryBrowseGrid({
         open={scannerOpen}
         onClose={() => setScannerOpen(false)}
         onScan={(value) => {
-          applySearchValue(value);
+          const normalized = normalizeBarcode(value);
+          if (!normalized) return;
+          applySearchValue(normalized);
           setScannerOpen(false);
           focusSearchInput();
         }}

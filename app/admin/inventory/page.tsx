@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
+import { normalizeBarcode } from "@/lib/barcode";
 import {
   inferFieldsFromTitle,
   normalizeBrandAlias,
@@ -45,7 +46,7 @@ type Variant = {
 };
 
 type VariantCondition = Variant["condition"];
-type ShipClass = "MINI_GT" | "KAIDO" | "ACRYLIC_TRUE_SCALE";
+type ShipClass = "MINI_GT" | "KAIDO" | "POPRACE" | "ACRYLIC_TRUE_SCALE";
 type GoogleLookupData = {
   title: string | null;
   brand: string | null;
@@ -1441,7 +1442,7 @@ export default function AdminInventoryPage() {
               open={barcodeScannerOpen}
               onClose={() => setBarcodeScannerOpen(false)}
               onScan={(value) => {
-                const next = value.trim();
+                const next = normalizeBarcode(value);
                 if (!next) return;
                 lastAutoLookupRef.current = next;
                 setBarcodeLookup(next);
@@ -1956,6 +1957,7 @@ export default function AdminInventoryPage() {
                         <option value="">—</option>
                         <option value="MINI_GT">MINI_GT</option>
                         <option value="KAIDO">KAIDO</option>
+                        <option value="POPRACE">POPRACE</option>
                         <option value="ACRYLIC_TRUE_SCALE">
                           ACRYLIC_TRUE_SCALE
                         </option>
@@ -2101,6 +2103,7 @@ export default function AdminInventoryPage() {
               >
                 <option value="MINI_GT">Mini GT</option>
                 <option value="KAIDO">Kaido</option>
+                <option value="POPRACE">Pop Race</option>
                 <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
               </Select>
 

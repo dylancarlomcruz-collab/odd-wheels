@@ -158,7 +158,7 @@ create table if not exists public.product_variants (
   cost numeric,
   price numeric not null,
   qty int not null default 0 check (qty >= 0),
-  ship_class text default 'MINI_GT' check (ship_class in ('MINI_GT','KAIDO','ACRYLIC_TRUE_SCALE')),
+  ship_class text default 'MINI_GT' check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE')),
   created_at timestamptz not null default now()
 );
 
