@@ -20,38 +20,68 @@ export function BarcodeScannerModal({
   const controlsRef = React.useRef<IScannerControls | null>(null);
   const handledRef = React.useRef(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [starting, setStarting] = React.useState(false);
+  const [retryKey, setRetryKey] = React.useState(0);
 
   React.useEffect(() => {
     if (!open) return;
 
     handledRef.current = false;
     setError(null);
+    setStarting(true);
 
     if (!navigator?.mediaDevices?.getUserMedia) {
       setError("Camera is not supported in this browser.");
+      setStarting(false);
       return;
     }
 
     const reader = new BrowserMultiFormatReader();
     let active = true;
+    let previewTimer: ReturnType<typeof setTimeout> | null = null;
 
     const start = async () => {
       try {
         const video = videoRef.current;
         if (!video) return;
 
-        controlsRef.current = await reader.decodeFromVideoDevice(
-          undefined,
+        video.setAttribute("playsinline", "true");
+        video.setAttribute("webkit-playsinline", "true");
+        video.muted = true;
+
+        previewTimer = setTimeout(() => {
+          if (!active) return;
+          const hasStream = Boolean(video.srcObject);
+          if (!hasStream) {
+            setError("Camera preview unavailable. Tap retry.");
+          }
+        }, 2500);
+
+        const constraints: MediaStreamConstraints = {
+          video: { facingMode: { ideal: "environment" } },
+          audio: false,
+        };
+
+        controlsRef.current = await reader.decodeFromConstraints(
+          constraints,
           video,
           (result) => {
             if (!active || !result || handledRef.current) return;
             handledRef.current = true;
+            controlsRef.current?.stop();
             onScan(result.getText());
           }
         );
       } catch (err) {
         if (!active) return;
         setError("Unable to access camera. Check permissions.");
+      } finally {
+        if (!active) return;
+        setStarting(false);
+        if (previewTimer) {
+          clearTimeout(previewTimer);
+          previewTimer = null;
+        }
       }
     };
 
@@ -59,10 +89,13 @@ export function BarcodeScannerModal({
 
     return () => {
       active = false;
+      if (previewTimer) {
+        clearTimeout(previewTimer);
+      }
       controlsRef.current?.stop();
       controlsRef.current = null;
     };
-  }, [open, onScan]);
+  }, [open, onScan, retryKey]);
 
   if (!open) return null;
 
@@ -90,10 +123,24 @@ export function BarcodeScannerModal({
               />
             </div>
             {error ? (
-              <div className="text-sm text-red-300">{error}</div>
+              <div className="flex flex-wrap items-center gap-2 text-sm text-red-300">
+                <span>{error}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setError(null);
+                    setRetryKey((prev) => prev + 1);
+                  }}
+                >
+                  Retry
+                </Button>
+              </div>
             ) : (
               <div className="text-sm text-white/60">
-                Point the camera at a barcode to scan automatically.
+                {starting
+                  ? "Starting camera..."
+                  : "Point the camera at a barcode to scan automatically."}
               </div>
             )}
           </CardBody>
