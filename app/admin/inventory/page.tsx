@@ -9,6 +9,7 @@ import { Select } from "@/components/ui/Select";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Checkbox } from "@/components/ui/Checkbox";
+import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 import {
   inferFieldsFromTitle,
   normalizeBrandAlias,
@@ -156,6 +157,7 @@ export default function AdminInventoryPage() {
   const [barcodeLookup, setBarcodeLookup] = React.useState("");
   const [lookupLoading, setLookupLoading] = React.useState(false);
   const [lookupMsg, setLookupMsg] = React.useState<string | null>(null);
+  const [barcodeScannerOpen, setBarcodeScannerOpen] = React.useState(false);
   const barcodeLookupTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastAutoLookupRef = React.useRef("");
   const barcodeInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -1418,6 +1420,12 @@ export default function AdminInventoryPage() {
               </div>
               <Button
                 variant="secondary"
+                onClick={() => setBarcodeScannerOpen(true)}
+              >
+                Scan
+              </Button>
+              <Button
+                variant="secondary"
                 onClick={() => lookupBarcode()}
                 disabled={lookupLoading}
               >
@@ -1428,6 +1436,20 @@ export default function AdminInventoryPage() {
             {lookupMsg ? (
               <div className="text-sm text-white/70">{lookupMsg}</div>
             ) : null}
+
+            <BarcodeScannerModal
+              open={barcodeScannerOpen}
+              onClose={() => setBarcodeScannerOpen(false)}
+              onScan={(value) => {
+                const next = value.trim();
+                if (!next) return;
+                lastAutoLookupRef.current = next;
+                setBarcodeLookup(next);
+                lookupBarcode(next);
+                setBarcodeScannerOpen(false);
+                focusBarcodeInput();
+              }}
+            />
           </div>
 
           {/* Product URL lookup */}
