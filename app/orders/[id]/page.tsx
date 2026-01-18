@@ -410,6 +410,14 @@ function OrderDetailContent() {
     ["AWAITING_PAYMENT", "PAYMENT_SUBMITTED", "PAYMENT_REVIEW"].includes(
       String(order?.status ?? "")
     );
+  const canUploadReceipt = React.useMemo(() => {
+    if (!order) return false;
+    if (order.payment_status === "PAID") return false;
+    const status = String(order.status ?? "");
+    return ["AWAITING_PAYMENT", "PAYMENT_SUBMITTED", "PAYMENT_REVIEW"].includes(
+      status
+    );
+  }, [order]);
   const methodCode = String(order?.payment_method ?? "").trim().toUpperCase();
   const fallbackMessage = paymentMethodError
     ? paymentMethodError
@@ -780,10 +788,10 @@ function OrderDetailContent() {
               {msg ? <div className="text-red-200">{msg}</div> : null}
 
               {/* Receipt uploader */}
-              {order.status === "AWAITING_PAYMENT" ? (
+              {canUploadReceipt ? (
                 <div className="panel p-3 space-y-2">
                   <div className="font-semibold text-white/80">
-                    Upload receipt
+                    {order.receipt_url ? "Replace receipt" : "Upload receipt"}
                   </div>
                   <input
                     type="file"
@@ -792,10 +800,15 @@ function OrderDetailContent() {
                     disabled={uploading}
                   />
                   <div className="text-xs text-white/60">
-                    {uploading ? "Uploading..." : "PNG/JPG supported."}
+                    {uploading
+                      ? "Uploading..."
+                      : order.receipt_url
+                      ? "Upload a new image to replace the current receipt."
+                      : "PNG/JPG supported."}
                   </div>
                 </div>
-              ) : order.receipt_url ? (
+              ) : null}
+              {order.receipt_url ? (
                 <div className="panel p-3 space-y-2">
                   <div className="font-semibold text-white/80">Receipt</div>
                   {/* eslint-disable-next-line @next/next/no-img-element */}

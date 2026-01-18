@@ -19,6 +19,7 @@ export type AdminVariant = {
   ship_class: string | null;
   issue_notes: string | null;
   issue_photo_urls: string[] | null;
+  public_notes: string | null;
   created_at: string | null;
 };
 
@@ -250,6 +251,17 @@ export function InventoryBrowseGrid({
   const [brandTab, setBrandTab] = React.useState("All");
   const [inStockOnly, setInStockOnly] = React.useState(true);
   const [showArchived, setShowArchived] = React.useState(false);
+  const [scannerOpen, setScannerOpen] = React.useState(false);
+  const [scannerError, setScannerError] = React.useState<string | null>(null);
+  const searchTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const searchInputRef = React.useRef<HTMLInputElement | null>(null);
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
+  const streamRef = React.useRef<MediaStream | null>(null);
+  const detectorRef = React.useRef<any>(null);
+  const scanFrameRef = React.useRef<number | null>(null);
+  const scanningRef = React.useRef(false);
 
   const filtersKey = `${searchTerm}|${brandTab}|${inStockOnly}|${showArchived}|${refreshToken}`;
 
@@ -280,43 +292,103 @@ export function InventoryBrowseGrid({
 
       const from = pageIndex * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
-      const like = `%${searchTerm}%`;
+      const rawTerm = searchTerm.trim();
+      const safeTerm = rawTerm.replace(/[(),]/g, " ").trim();
+      const like = `%${safeTerm}%`;
+      const isBarcodeLike = /^[0-9]+$/.test(rawTerm) && rawTerm.length >= 6;
+      let batch: AdminProduct[] = [];
 
-      let query = supabase
-        .from("products")
-        .select(
-          "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,created_at)"
-        )
-        .order("created_at", { ascending: false })
-        .range(from, to);
+      if (rawTerm && safeTerm && isBarcodeLike) {
+        const { data: vData, error: vErr } = await supabase
+          .from("product_variants")
+          .select("product_id")
+          .ilike("barcode", like)
+          .range(from, to);
 
-      if (searchTerm) {
-        query = query.or(
-          `title.ilike.${like},brand.ilike.${like},model.ilike.${like},variation.ilike.${like},product_variants.barcode.ilike.${like}`
-        );
-      }
-      if (brandTab !== "All") {
-        query = query.eq("brand", brandTab);
-      }
-      if (inStockOnly) {
-        query = query.gt("product_variants.qty", 0);
-      }
-      if (!showArchived) {
-        query = query.eq("is_active", true);
+        if (vErr) {
+          setLoading(false);
+          setError(vErr.message || "Failed to load inventory");
+          return;
+        }
+
+        const productIds = Array.from(
+          new Set((vData ?? []).map((row) => row?.product_id).filter(Boolean))
+        ) as string[];
+
+        if (productIds.length === 0) {
+          setLoading(false);
+          setRows((prev) => (replace ? [] : prev));
+          setPage(pageIndex);
+          setHasMore(false);
+          return;
+        }
+
+        let pQuery = supabase
+          .from("products")
+          .select(
+            "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)"
+          )
+          .in("id", productIds)
+          .order("created_at", { ascending: false });
+
+        if (brandTab !== "All") {
+          pQuery = pQuery.eq("brand", brandTab);
+        }
+        if (inStockOnly) {
+          pQuery = pQuery.gt("product_variants.qty", 0);
+        }
+        if (!showArchived) {
+          pQuery = pQuery.eq("is_active", true);
+        }
+
+        const { data, error: pErr } = await pQuery;
+        setLoading(false);
+
+        if (pErr) {
+          setError(pErr.message || "Failed to load inventory");
+          return;
+        }
+
+        batch = (data as AdminProduct[]) ?? [];
+        setHasMore((vData ?? []).length === PAGE_SIZE);
+      } else {
+        let query = supabase
+          .from("products")
+          .select(
+            "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)"
+          )
+          .order("created_at", { ascending: false })
+          .range(from, to);
+
+        if (rawTerm && safeTerm) {
+          query = query.or(
+            `title.ilike.${like},brand.ilike.${like},model.ilike.${like},variation.ilike.${like}`
+          );
+        }
+        if (brandTab !== "All") {
+          query = query.eq("brand", brandTab);
+        }
+        if (inStockOnly) {
+          query = query.gt("product_variants.qty", 0);
+        }
+        if (!showArchived) {
+          query = query.eq("is_active", true);
+        }
+
+        const { data, error: qErr } = await query;
+        setLoading(false);
+
+        if (qErr) {
+          setError(qErr.message || "Failed to load inventory");
+          return;
+        }
+
+        batch = (data as AdminProduct[]) ?? [];
+        setHasMore(batch.length === PAGE_SIZE);
       }
 
-      const { data, error: qErr } = await query;
-      setLoading(false);
-
-      if (qErr) {
-        setError(qErr.message || "Failed to load inventory");
-        return;
-      }
-
-      const batch = (data as AdminProduct[]) ?? [];
       setRows((prev) => (replace ? batch : [...prev, ...batch]));
       setPage(pageIndex);
-      setHasMore(batch.length === PAGE_SIZE);
     },
     [searchTerm, brandTab, inStockOnly, showArchived]
   );
@@ -362,6 +434,137 @@ export function InventoryBrowseGrid({
     [rows]
   );
 
+  function focusSearchInput() {
+    requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+    });
+  }
+
+  function applySearchValue(value: string) {
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+    }
+    setSearchInput(value);
+    setSearchTerm(value.trim());
+  }
+
+  function stopScanner() {
+    scanningRef.current = false;
+    if (scanFrameRef.current !== null) {
+      cancelAnimationFrame(scanFrameRef.current);
+      scanFrameRef.current = null;
+    }
+    if (streamRef.current) {
+      for (const track of streamRef.current.getTracks()) {
+        track.stop();
+      }
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  }
+
+  React.useEffect(() => {
+    if (!scannerOpen) {
+      stopScanner();
+      return;
+    }
+
+    let active = true;
+    const startScanner = async () => {
+      if (typeof window === "undefined") return;
+      const DetectorCtor = (window as any).BarcodeDetector;
+      if (!DetectorCtor) {
+        setScannerError("Barcode scan is not supported on this browser.");
+        return;
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setScannerError("Camera access is unavailable.");
+        return;
+      }
+
+      setScannerError(null);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+        });
+
+        if (!active) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+
+        detectorRef.current = new DetectorCtor({
+          formats: [
+            "ean_13",
+            "ean_8",
+            "upc_a",
+            "upc_e",
+            "code_128",
+            "code_39",
+            "itf",
+            "qr_code",
+          ],
+        });
+
+        scanningRef.current = true;
+
+        const scanLoop = async () => {
+          if (!active || !scanningRef.current) return;
+          if (!videoRef.current || !detectorRef.current) {
+            scanFrameRef.current = requestAnimationFrame(scanLoop);
+            return;
+          }
+          try {
+            const barcodes = await detectorRef.current.detect(videoRef.current);
+            if (Array.isArray(barcodes) && barcodes.length) {
+              const raw = String(
+                barcodes[0]?.rawValue ?? barcodes[0]?.value ?? ""
+              ).trim();
+              if (raw) {
+                applySearchValue(raw);
+                setScannerOpen(false);
+                focusSearchInput();
+                return;
+              }
+            }
+          } catch (err) {
+            setScannerError("Scan failed. Try again.");
+          }
+
+          scanFrameRef.current = requestAnimationFrame(scanLoop);
+        };
+
+        scanFrameRef.current = requestAnimationFrame(scanLoop);
+      } catch (err) {
+        setScannerError("Camera permission denied.");
+      }
+    };
+
+    startScanner();
+
+    return () => {
+      active = false;
+      stopScanner();
+    };
+  }, [scannerOpen]);
+
+  React.useEffect(() => {
+    focusSearchInput();
+    return () => {
+      if (searchTimerRef.current) {
+        clearTimeout(searchTimerRef.current);
+      }
+    };
+  }, []);
+
   React.useEffect(() => {
     // Reset whenever filters change so local state matches fetched results.
     setRows([]);
@@ -378,13 +581,35 @@ export function InventoryBrowseGrid({
             <Input
               placeholder="Search title/brand/model/variation or barcode..."
               value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
+              autoFocus
+              ref={searchInputRef}
+              onChange={(e) => {
+                const next = e.target.value;
+                setSearchInput(next);
+                if (searchTimerRef.current) {
+                  clearTimeout(searchTimerRef.current);
+                }
+                searchTimerRef.current = setTimeout(() => {
+                  setSearchTerm(next.trim());
+                }, 250);
+              }}
             />
           </div>
           <div className="flex gap-2">
             <Button
               variant="secondary"
-              onClick={() => setSearchTerm(searchInput.trim())}
+              onClick={() => {
+                setScannerOpen(true);
+              }}
+            >
+              Scan
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setSearchTerm(searchInput.trim());
+                focusSearchInput();
+              }}
             >
               Search
             </Button>
@@ -393,6 +618,7 @@ export function InventoryBrowseGrid({
               onClick={() => {
                 setSearchInput("");
                 setSearchTerm("");
+                focusSearchInput();
               }}
             >
               Clear
@@ -455,6 +681,43 @@ export function InventoryBrowseGrid({
           <Button variant="secondary" onClick={() => loadPage(page + 1)}>
             Load more
           </Button>
+        </div>
+      ) : null}
+
+      {scannerOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-bg-900 p-4 shadow-xl">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-white/90">
+                Scan barcode
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setScannerOpen(false);
+                }}
+              >
+                Close
+              </Button>
+            </div>
+            <div className="mt-3 overflow-hidden rounded-xl bg-black">
+              <div className="aspect-video">
+                <video
+                  ref={videoRef}
+                  className="h-full w-full object-cover"
+                  muted
+                  playsInline
+                />
+              </div>
+            </div>
+            <div className="mt-3 text-xs text-white/70">
+              Point your camera at the barcode to auto-search.
+            </div>
+            {scannerError ? (
+              <div className="mt-2 text-xs text-red-200">{scannerError}</div>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </div>

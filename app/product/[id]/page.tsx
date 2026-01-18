@@ -127,6 +127,12 @@ export default function ProductDetailPage() {
                       <div className="mt-2 text-sm text-red-200/80">Issue: {v.issue_notes}</div>
                     ) : null}
 
+                    {v.public_notes ? (
+                      <div className="mt-2 text-sm text-white/70">
+                        Notes: {v.public_notes}
+                      </div>
+                    ) : null}
+
                     {Array.isArray(v.issue_photo_urls) && v.issue_photo_urls.length ? (
                       <div className="mt-3">
                         <Button

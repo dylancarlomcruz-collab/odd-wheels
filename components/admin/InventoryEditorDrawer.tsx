@@ -247,23 +247,80 @@ export function InventoryEditorDrawer({
   }
 
   function addVariant() {
+    const baseList = variants.filter((v) => !v._delete && !v._isNew);
+    const base = [...baseList].reverse().find((v) => v) ?? null;
+    const hasSealed = baseList.some((v) => v.condition === "sealed");
+    const hasUnsealed = baseList.some((v) => v.condition === "unsealed");
+    const nextCondition: VariantDraft["condition"] =
+      hasSealed && hasUnsealed
+        ? "with_issues"
+        : hasSealed
+          ? "unsealed"
+          : hasUnsealed
+            ? "sealed"
+            : "unsealed";
     setVariants((prev) => [
         ...prev,
       {
         id: `new-${crypto.randomUUID()}`,
-        condition: "unsealed",
-        barcode: null,
-        cost: null,
+        condition: nextCondition,
+        barcode: base?.barcode ?? null,
+        cost: base?.cost ?? null,
         price: 0,
-        qty: 1,
-        ship_class: null,
-        issue_notes: null,
-        issue_photo_urls: [],
+        qty: base?.qty ?? 1,
+        ship_class: base?.ship_class ?? null,
+        issue_notes: base?.issue_notes ?? null,
+        public_notes: base?.public_notes ?? null,
+        issue_photo_urls: Array.isArray(base?.issue_photo_urls)
+          ? [...(base?.issue_photo_urls ?? [])]
+          : [],
         created_at: null,
         _isNew: true,
         _delete: false,
       },
     ]);
+  }
+
+  function generateBarcodeCandidate() {
+    const stamp = Date.now().toString();
+    const rand = Math.floor(Math.random() * 1_000_000)
+      .toString()
+      .padStart(6, "0");
+    return (stamp + rand).slice(-12);
+  }
+
+  async function generateUniqueBarcode() {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const candidate = generateBarcodeCandidate();
+      const { data, error } = await supabase
+        .from("product_variants")
+        .select("id")
+        .eq("barcode", candidate)
+        .limit(1);
+
+      if (error) throw error;
+      if (!data || data.length === 0) return candidate;
+    }
+    throw new Error("Unable to generate a unique barcode.");
+  }
+
+  async function recordGeneratedBarcode(barcode: string, condition: string) {
+    const detail = [brand, model, variation].filter(Boolean).join(" ");
+    const conditionLabel = condition
+      ? `Condition: ${condition.toUpperCase()}`
+      : "";
+    const description = [detail, conditionLabel].filter(Boolean).join(" • ");
+
+    const { error } = await supabase.from("barcode_logs").insert({
+      product_id: productId,
+      product_title: title.trim() || null,
+      description: description || null,
+      barcode,
+    });
+
+    if (error) {
+      console.error("Failed to record barcode log:", error);
+    }
   }
 
   async function save() {
@@ -302,6 +359,7 @@ export function InventoryEditorDrawer({
                 price: safeNumber(v.price) ?? 0,
                 qty: Math.max(0, Math.trunc(safeNumber(v.qty) ?? 0)),
                 ship_class: v.ship_class || null,
+                public_notes: v.public_notes || null,
                 issue_notes:
                   v.condition === "with_issues"
                     ? v.issue_notes || null
@@ -327,23 +385,38 @@ export function InventoryEditorDrawer({
       }
 
       if (toInsert.length) {
-        await supabase.from("product_variants").insert(
-          toInsert.map((v) => ({
+        const prepared: Array<any> = [];
+        const generated: Array<{ barcode: string; condition: string }> = [];
+
+        for (const v of toInsert) {
+          let barcode = v.barcode || null;
+          if (!barcode) {
+            barcode = await generateUniqueBarcode();
+            generated.push({ barcode, condition: v.condition });
+          }
+          prepared.push({
             product_id: productId,
             condition: v.condition,
-            barcode: v.barcode || null,
+            barcode,
             cost: safeNumber(v.cost),
             price: safeNumber(v.price) ?? 0,
             qty: Math.max(0, Math.trunc(safeNumber(v.qty) ?? 0)),
             ship_class: v.ship_class || null,
+            public_notes: v.public_notes || null,
             issue_notes:
               v.condition === "with_issues" ? v.issue_notes || null : null,
             issue_photo_urls:
               v.condition === "with_issues"
                 ? (v.issue_photo_urls?.length ? v.issue_photo_urls : null)
                 : null,
-          }))
-        );
+          });
+        }
+
+        await supabase.from("product_variants").insert(prepared);
+
+        for (const entry of generated) {
+          await recordGeneratedBarcode(entry.barcode, entry.condition);
+        }
       }
 
       toast({ intent: "success", title: "Saved", message: "Inventory updated." });
@@ -605,6 +678,14 @@ export function InventoryEditorDrawer({
                             </option>
                           ))}
                         </Select>
+                        <Textarea
+                          label="Notes (visible to customers)"
+                          value={v.public_notes ?? ""}
+                          onChange={(e) =>
+                            updateVariant(v.id, { public_notes: e.target.value || null })
+                          }
+                          className="md:col-span-3"
+                        />
                         {v.condition === "with_issues" ? (
                           <div className="md:col-span-3 space-y-3">
                             <Textarea

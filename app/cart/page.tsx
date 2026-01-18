@@ -72,6 +72,7 @@ function CartContent() {
   const previewPrice = previewLine ? formatPHP(Number(previewLine.variant.price)) : "";
   const previewCondition = previewLine?.variant.condition ?? "";
   const previewIssue = previewLine?.variant.issue_notes ?? null;
+  const previewNotes = previewLine?.variant.public_notes ?? null;
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 space-y-6">
@@ -162,9 +163,9 @@ function CartContent() {
                               {formatPHP(Number(l.variant.price))}
                             </span>
                           </div>
-                          {l.variant.issue_notes ? (
+                          {l.variant.public_notes ? (
                             <div className="text-[11px] text-white/50">
-                              Note: {l.variant.issue_notes}
+                              Notes: {l.variant.public_notes}
                             </div>
                           ) : null}
                           <button
@@ -175,7 +176,9 @@ function CartContent() {
                             View details
                           </button>
                           {l.variant.condition === "with_issues" && l.variant.issue_notes ? (
-                            <div className="text-sm text-red-200/80">Issue: {l.variant.issue_notes}</div>
+                            <div className="text-sm text-red-200/80">
+                              Issue: {l.variant.issue_notes}
+                            </div>
                           ) : null}
                         </div>
                       </div>
@@ -334,6 +337,11 @@ function CartContent() {
                     <span className="text-white/60">Price</span>
                     <span className="text-price">{previewPrice}</span>
                   </div>
+                  {previewNotes ? (
+                    <div className="text-sm text-white/70">
+                      Notes: {previewNotes}
+                    </div>
+                  ) : null}
                   {previewIssue ? (
                     <div className="text-sm text-red-200/80">
                       Issue: {previewIssue}

@@ -8,6 +8,7 @@ export type InventoryVariant = {
   ship_class: string | null;
   issue_notes: string | null;
   issue_photo_urls: string[] | null;
+  public_notes: string | null;
   created_at: string | null;
 };
 

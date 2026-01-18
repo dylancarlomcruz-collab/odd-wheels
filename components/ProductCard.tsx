@@ -10,6 +10,7 @@ type ConditionOption = {
   qty: number;
   issue_notes?: string | null;
   issue_photo_urls?: string[] | null;
+  public_notes?: string | null;
 };
 
 export type ShopProduct = {
@@ -87,6 +88,8 @@ export default function ProductCard({
   const cardImage = product.image_url ?? images[0] ?? null;
   const activeIssueImage = issueImages[issueIndex] ?? "";
   const hasIssuePhotos = issueImages.length > 0;
+  const publicNotes = String(selected?.public_notes ?? "").trim();
+  const issueNotes = String(selected?.issue_notes ?? "").trim();
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -352,11 +355,16 @@ export default function ProductCard({
 
                 <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3">
                   <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
-                    Item notes
+                    Notes
                   </div>
                   <div className="mt-2 text-sm text-white/70">
-                    {selected?.issue_notes ? selected.issue_notes : "No notes for this item."}
+                    {publicNotes ? publicNotes : "No notes for this item."}
                   </div>
+                  {issueNotes ? (
+                    <div className="mt-2 text-sm text-red-200/80">
+                      Issue: {issueNotes}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>

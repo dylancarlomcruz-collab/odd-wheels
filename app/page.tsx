@@ -11,6 +11,7 @@ type VariantRow = {
   condition: string | null;
   issue_notes: string | null;
   issue_photo_urls: string[] | null;
+  public_notes: string | null;
   price: number | null;
   qty: number | null;
 
@@ -59,6 +60,7 @@ function collapseVariants(rows: VariantRow[]): ShopProduct[] {
       qty,
       issue_notes: v.issue_notes ?? null,
       issue_photo_urls: Array.isArray(v.issue_photo_urls) ? v.issue_photo_urls : null,
+      public_notes: v.public_notes ?? null,
     };
 
     const existing = map.get(key);
@@ -116,7 +118,7 @@ export default function Page() {
       const { data, error } = await supabase
         .from("product_variants")
         .select(
-          "id,condition,issue_notes,issue_photo_urls,price,qty, product:products(id,title,brand,model,image_urls,is_active,created_at)"
+          "id,condition,issue_notes,issue_photo_urls,public_notes,price,qty, product:products(id,title,brand,model,image_urls,is_active,created_at)"
         )
         .gt("qty", 0)
         .order("created_at", { ascending: false });

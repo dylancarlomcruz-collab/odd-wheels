@@ -637,7 +637,27 @@ alter table public.settings
 
 -- Issue photo support for variants
 alter table public.product_variants
-  add column if not exists issue_photo_urls text[] null;
+  add column if not exists issue_photo_urls text[] null,
+  add column if not exists public_notes text null;
+
+create table if not exists public.barcode_logs (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  product_id uuid null references public.products(id) on delete set null,
+  product_title text,
+  description text,
+  barcode text not null
+);
+
+alter table public.barcode_logs enable row level security;
+
+drop policy if exists "barcode logs read" on public.barcode_logs;
+create policy "barcode logs read" on public.barcode_logs
+for select using (public.is_staff());
+
+drop policy if exists "barcode logs insert" on public.barcode_logs;
+create policy "barcode logs insert" on public.barcode_logs
+for insert with check (public.is_staff());
 
 update public.settings
   set pickup_schedule_text = coalesce(

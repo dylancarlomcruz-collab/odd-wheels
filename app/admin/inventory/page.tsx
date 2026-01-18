@@ -34,6 +34,7 @@ type Variant = {
   condition: "sealed" | "unsealed" | "with_issues";
   issue_notes: string | null;
   issue_photo_urls: string[] | null;
+  public_notes: string | null;
   cost: number | null;
   price: number;
   qty: number;
@@ -60,6 +61,14 @@ type InventoryValuation = {
   cost_value: number;
   retail_value: number;
   missing_cost_variants: number;
+};
+type BarcodeLog = {
+  id: string;
+  created_at: string;
+  product_id: string | null;
+  product_title: string | null;
+  description: string | null;
+  barcode: string;
 };
 
 function n(v: any, fallback = 0) {
@@ -188,6 +197,7 @@ export default function AdminInventoryPage() {
 
   // New variant fields
   const [condition, setCondition] = React.useState<VariantCondition>("unsealed");
+  const [publicNotes, setPublicNotes] = React.useState("");
   const [issueNotes, setIssueNotes] = React.useState("");
   const [issuePhotos, setIssuePhotos] = React.useState<string[]>([]);
   const [issuePhotosUploading, setIssuePhotosUploading] = React.useState(false);
@@ -200,6 +210,11 @@ export default function AdminInventoryPage() {
   const [variantBarcode, setVariantBarcode] = React.useState("");
 
   const [saving, setSaving] = React.useState(false);
+  const [barcodeLogs, setBarcodeLogs] = React.useState<BarcodeLog[]>([]);
+  const [barcodeLogsLoading, setBarcodeLogsLoading] = React.useState(false);
+  const [barcodeLogsError, setBarcodeLogsError] = React.useState<string | null>(
+    null
+  );
 
   React.useEffect(() => {
     if (!googleQueryTouched && !googleQuery.trim() && title.trim()) {
@@ -209,6 +224,7 @@ export default function AdminInventoryPage() {
 
   React.useEffect(() => {
     void loadValuations();
+    void loadBarcodeLogs();
   }, []);
 
   async function loadValuations() {
@@ -239,6 +255,26 @@ export default function AdminInventoryPage() {
     }
 
     setValuationLoading(false);
+  }
+
+  async function loadBarcodeLogs() {
+    setBarcodeLogsLoading(true);
+    setBarcodeLogsError(null);
+
+    const { data, error } = await supabase
+      .from("barcode_logs")
+      .select("id,created_at,product_id,product_title,description,barcode")
+      .order("created_at", { ascending: false })
+      .limit(25);
+
+    if (error) {
+      setBarcodeLogsError(error.message || "Failed to load barcode log.");
+      setBarcodeLogs([]);
+    } else {
+      setBarcodeLogs((data as BarcodeLog[]) ?? []);
+    }
+
+    setBarcodeLogsLoading(false);
   }
 
   async function runSearch() {
@@ -306,7 +342,7 @@ export default function AdminInventoryPage() {
     const { data, error } = await supabase
       .from("product_variants")
       .select(
-        "id,product_id,condition,issue_notes,issue_photo_urls,cost,price,qty,ship_class,barcode,created_at"
+        "id,product_id,condition,issue_notes,issue_photo_urls,public_notes,cost,price,qty,ship_class,barcode,created_at"
       )
       .eq("product_id", p.id)
       .order("created_at", { ascending: false });
@@ -318,7 +354,10 @@ export default function AdminInventoryPage() {
       setVariants([]);
       return;
     }
-    setVariants((data as any) ?? []);
+    const loaded = (data as any) ?? [];
+    setVariants(loaded);
+    applyVariantDefaultsFromExisting(loaded);
+    focusBarcodeInput();
   }
 
   function clearProduct() {
@@ -345,6 +384,7 @@ export default function AdminInventoryPage() {
 
     // also clear variant draft
     setCondition("unsealed");
+    setPublicNotes("");
     setIssueNotes("");
     setIssuePhotos([]);
     setIssuePhotosUploading(false);
@@ -674,6 +714,30 @@ export default function AdminInventoryPage() {
     void uploadImageFiles(files, pid);
   }
 
+  function applyVariantDefaultsFromExisting(list: Variant[]) {
+    if (!Array.isArray(list) || list.length === 0) return;
+    const base = [...list].reverse().find((v) => v) ?? list[list.length - 1];
+    if (!base) return;
+    setCondition(nextConditionFromExisting(list));
+    setVariantBarcode(base.barcode ?? "");
+    setCost(base.cost != null ? String(base.cost) : "");
+    setPrice("");
+    setQty(base.qty != null ? String(base.qty) : "1");
+    setShipClass((base.ship_class as ShipClass) ?? "MINI_GT");
+    setIssueNotes(base.issue_notes ?? "");
+    setPublicNotes(base.public_notes ?? "");
+    setIssuePhotos(Array.isArray(base.issue_photo_urls) ? base.issue_photo_urls : []);
+  }
+
+  function nextConditionFromExisting(list: Variant[]): VariantCondition {
+    const hasSealed = list.some((v) => v.condition === "sealed");
+    const hasUnsealed = list.some((v) => v.condition === "unsealed");
+    if (hasSealed && hasUnsealed) return "with_issues";
+    if (hasSealed) return "unsealed";
+    if (hasUnsealed) return "sealed";
+    return "unsealed";
+  }
+
   async function uploadIssueFiles(files: File[], folderId: string) {
     if (!files.length) return;
     setIssuePhotosUploading(true);
@@ -988,9 +1052,17 @@ export default function AdminInventoryPage() {
         if (uErr) throw uErr;
       }
 
+      let generatedBarcode: string | null = null;
+      let barcodeValue = variantBarcode.trim() || null;
+      if (!barcodeValue) {
+        barcodeValue = await generateUniqueBarcode();
+        generatedBarcode = barcodeValue;
+      }
+
       const { error: vErr } = await supabase.from("product_variants").insert({
         product_id: productId!,
         condition,
+        public_notes: publicNotes.trim() || null,
         issue_notes: condition === "with_issues" ? issueNotes.trim() : null,
         issue_photo_urls:
           condition === "with_issues" && issuePhotos.length
@@ -1000,15 +1072,20 @@ export default function AdminInventoryPage() {
         price: priceN,
         qty: qtyN,
         ship_class: shipClass,
-        barcode: variantBarcode.trim() || null,
+        barcode: barcodeValue,
       });
 
       if (vErr) throw vErr;
+
+      if (generatedBarcode) {
+        await recordGeneratedBarcode(productId!, generatedBarcode, condition);
+      }
 
       toast({ intent: "success", message: "Saved product + variant." });
 
       // Reset draft fields
       setCondition("unsealed");
+      setPublicNotes("");
       setIssueNotes("");
       setIssuePhotos([]);
       setCost("");
@@ -1038,6 +1115,66 @@ export default function AdminInventoryPage() {
       return;
     }
     if (selectedProduct) await loadProduct(selectedProduct);
+  }
+
+  function generateBarcodeCandidate() {
+    const stamp = Date.now().toString();
+    const rand = Math.floor(Math.random() * 1_000_000)
+      .toString()
+      .padStart(6, "0");
+    return (stamp + rand).slice(-12);
+  }
+
+  async function generateUniqueBarcode() {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const candidate = generateBarcodeCandidate();
+      const { data, error } = await supabase
+        .from("product_variants")
+        .select("id")
+        .eq("barcode", candidate)
+        .limit(1);
+
+      if (error) throw error;
+      if (!data || data.length === 0) return candidate;
+    }
+    throw new Error("Unable to generate a unique barcode.");
+  }
+
+  async function recordGeneratedBarcode(
+    productId: string,
+    barcode: string,
+    variantCondition: string
+  ) {
+    const detail = [brand, model, variation].filter(Boolean).join(" ");
+    const conditionLabel = variantCondition
+      ? `Condition: ${variantCondition.toUpperCase()}`
+      : "";
+    const description = [detail, conditionLabel].filter(Boolean).join(" • ");
+
+    const { data, error } = await supabase
+      .from("barcode_logs")
+      .insert({
+        product_id: productId,
+        product_title: title.trim() || null,
+        description: description || null,
+        barcode,
+      })
+      .select("id,created_at,product_id,product_title,description,barcode")
+      .single();
+
+    if (error) {
+      console.error("Failed to record barcode log:", error);
+      return;
+    }
+
+    if (data) {
+      setBarcodeLogs((prev) => [data as BarcodeLog, ...prev].slice(0, 25));
+    }
+  }
+
+  function formatLogDate(value: string) {
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? value : d.toLocaleString("en-PH");
   }
 
   async function deleteVariant(v: Variant) {
@@ -1811,6 +1948,18 @@ export default function AdminInventoryPage() {
                         </Button>
                       </div>
 
+                      <div className="md:col-span-6">
+                        <Textarea
+                          label="Notes (visible to customers)"
+                          value={v.public_notes ?? ""}
+                          onChange={(e) =>
+                            updateVariant(v, {
+                              public_notes: e.target.value || null,
+                            })
+                          }
+                        />
+                      </div>
+
                       {v.condition === "with_issues" ? (
                         <div className="md:col-span-6 space-y-3">
                           <Textarea
@@ -1989,6 +2138,13 @@ export default function AdminInventoryPage() {
                 </div>
               </div>
 
+              <Textarea
+                label="Notes (visible to customers)"
+                value={publicNotes}
+                onChange={(e) => setPublicNotes(e.target.value)}
+                className="md:col-span-2"
+              />
+
               {condition === "with_issues" ? (
                 <div className="space-y-3 md:col-span-2">
                   <Textarea
@@ -2088,6 +2244,48 @@ export default function AdminInventoryPage() {
             <div className="text-xs text-white/50">
               Cost/Price are empty by default. Qty defaults to 1.
             </div>
+          </div>
+
+          {/* Generated barcode log */}
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="font-semibold">Generated Barcodes</div>
+              <Badge>{barcodeLogs.length}</Badge>
+            </div>
+
+            {barcodeLogsLoading ? (
+              <div className="text-white/60">Loading...</div>
+            ) : barcodeLogsError ? (
+              <div className="text-sm text-red-300">{barcodeLogsError}</div>
+            ) : barcodeLogs.length === 0 ? (
+              <div className="text-sm text-white/50">No generated barcodes yet.</div>
+            ) : (
+              <div className="space-y-3">
+                {barcodeLogs.map((log) => (
+                  <div
+                    key={log.id}
+                    className="rounded-xl border border-white/10 bg-paper/5 p-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="font-medium">
+                        {log.product_title ?? "Item"}
+                      </div>
+                      <div className="text-xs text-white/50">
+                        {formatLogDate(log.created_at)}
+                      </div>
+                    </div>
+                    {log.description ? (
+                      <div className="text-sm text-white/60">
+                        {log.description}
+                      </div>
+                    ) : null}
+                    <div className="text-sm text-white/80">
+                      Barcode: <span className="font-medium">{log.barcode}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </CardBody>
       </Card>

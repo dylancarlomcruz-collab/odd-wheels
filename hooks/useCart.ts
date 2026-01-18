@@ -15,6 +15,7 @@ export type CartLine = {
     id: string;
     condition: string;
     issue_notes: string | null;
+    public_notes: string | null;
     price: number;
     qty: number;
     ship_class: string | null;
@@ -60,7 +61,7 @@ export function useCart() {
     const { data, error } = await supabase
       .from("cart_items")
       .select(
-        "id,user_id,variant_id,qty, variant:product_variants(id,condition,issue_notes,price,qty,ship_class, product:products(id,title,brand,model,image_urls))"
+        "id,user_id,variant_id,qty, variant:product_variants(id,condition,issue_notes,public_notes,price,qty,ship_class, product:products(id,title,brand,model,image_urls))"
       )
       .eq("user_id", user.id)
       .order("created_at", { ascending: false });
