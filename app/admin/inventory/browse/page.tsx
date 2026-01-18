@@ -24,6 +24,7 @@ export default function AdminInventoryBrowsePage() {
           <InventoryBrowseGrid
             onSelect={(p) => setSelected(p)}
             refreshToken={refreshToken}
+            suspendScanCapture={Boolean(selected)}
           />
         </CardBody>
       </Card>

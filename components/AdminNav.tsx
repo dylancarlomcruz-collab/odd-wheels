@@ -14,12 +14,14 @@ import {
   ScanBarcode,
   LayoutGrid,
   QrCode,
+  FileSpreadsheet,
 } from "lucide-react";
 
 const links = [
   { href: "/admin", label: "Dashboard", icon: ShoppingBag },
   { href: "/admin/inventory", label: "Inventory", icon: PackageSearch },
   { href: "/admin/inventory/browse", label: "Inventory Browse", icon: LayoutGrid },
+  { href: "/admin/inventory/sheet", label: "Inventory Sheet", icon: FileSpreadsheet },
   { href: "/admin/orders", label: "Orders / Approvals", icon: ShoppingBag },
   { href: "/admin/sell-trade", label: "Sell / Trade Offers", icon: ShoppingBag },
   { href: "/admin/sales", label: "Sales", icon: BarChart3 },

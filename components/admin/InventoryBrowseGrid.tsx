@@ -42,6 +42,7 @@ const PAGE_SIZE = 24;
 type InventoryBrowseGridProps = {
   onSelect: (product: AdminProduct) => void;
   refreshToken?: number;
+  suspendScanCapture?: boolean;
 };
 
 function derivedTotals(p: AdminProduct) {
@@ -241,6 +242,7 @@ function AdminProductCard({
 export function InventoryBrowseGrid({
   onSelect,
   refreshToken = 0,
+  suspendScanCapture = false,
 }: InventoryBrowseGridProps) {
   const [rows, setRows] = React.useState<AdminProduct[]>([]);
   const [page, setPage] = React.useState(0);
@@ -250,6 +252,7 @@ export function InventoryBrowseGrid({
 
   const [searchInput, setSearchInput] = React.useState("");
   const [searchTerm, setSearchTerm] = React.useState("");
+  const [scanTerm, setScanTerm] = React.useState("");
   const [brandTab, setBrandTab] = React.useState("All");
   const [inStockOnly, setInStockOnly] = React.useState(true);
   const [showArchived, setShowArchived] = React.useState(false);
@@ -258,8 +261,13 @@ export function InventoryBrowseGrid({
     null
   );
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
+  const scanBufferRef = React.useRef("");
+  const scanTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastScanAtRef = React.useRef(0);
+  const scanActiveRef = React.useRef(false);
 
-  const filtersKey = `${searchTerm}|${brandTab}|${inStockOnly}|${showArchived}|${refreshToken}`;
+  const effectiveTerm = scanTerm || searchTerm;
+  const filtersKey = `${effectiveTerm}|${brandTab}|${inStockOnly}|${showArchived}|${refreshToken}`;
 
   const brands = React.useMemo(() => {
     const set = new Set<string>();
@@ -288,7 +296,7 @@ export function InventoryBrowseGrid({
 
       const from = pageIndex * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
-      const rawTerm = searchTerm.trim();
+      const rawTerm = effectiveTerm.trim();
       const safeTerm = rawTerm.replace(/[(),]/g, " ").trim();
       const like = `%${safeTerm}%`;
       const isBarcodeLike = /^[0-9]+$/.test(rawTerm) && rawTerm.length >= 6;
@@ -386,7 +394,7 @@ export function InventoryBrowseGrid({
       setRows((prev) => (replace ? batch : [...prev, ...batch]));
       setPage(pageIndex);
     },
-    [searchTerm, brandTab, inStockOnly, showArchived]
+    [effectiveTerm, brandTab, inStockOnly, showArchived]
   );
 
   const adjustVariantQty = React.useCallback(
@@ -440,9 +448,19 @@ export function InventoryBrowseGrid({
     if (searchTimerRef.current) {
       clearTimeout(searchTimerRef.current);
     }
+    setScanTerm("");
     setSearchInput(value);
     setSearchTerm(value.trim());
   }
+
+  const applyScannedSearch = React.useCallback((value: string) => {
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+    }
+    setScanTerm(value.trim());
+    setSearchTerm("");
+    setSearchInput("");
+  }, []);
 
   React.useEffect(() => {
     focusSearchInput();
@@ -452,6 +470,90 @@ export function InventoryBrowseGrid({
       }
     };
   }, []);
+
+  React.useEffect(() => {
+    if (suspendScanCapture) {
+      scanBufferRef.current = "";
+      scanActiveRef.current = false;
+      if (scanTimerRef.current) {
+        clearTimeout(scanTimerRef.current);
+      }
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      const isEditableTarget =
+        tag === "input" ||
+        tag === "textarea" ||
+        tag === "select" ||
+        Boolean(target?.isContentEditable);
+      const isSearchInput = target === searchInputRef.current;
+
+      const key = event.key;
+      const now = Date.now();
+
+      if (key === "Enter") {
+        const candidate = scanBufferRef.current;
+        if (candidate.length >= 6) {
+          applyScannedSearch(candidate);
+          scanBufferRef.current = "";
+          scanActiveRef.current = false;
+          setSearchInput("");
+          event.preventDefault();
+        }
+        return;
+      }
+
+      if (!/^[0-9]$/.test(key)) return;
+
+      const gap = now - lastScanAtRef.current;
+      if (gap > 400) {
+        scanBufferRef.current = "";
+        scanActiveRef.current = false;
+      }
+
+      lastScanAtRef.current = now;
+      scanBufferRef.current += key;
+
+      const scannerLike = gap <= 80 || scanBufferRef.current.length >= 3;
+      if (scannerLike) {
+        scanActiveRef.current = true;
+      }
+
+      if (!isEditableTarget || scanActiveRef.current) {
+        setSearchInput(scanBufferRef.current);
+        if (!isSearchInput) {
+          focusSearchInput();
+        }
+      }
+
+      if (isEditableTarget && scanActiveRef.current && !isSearchInput) {
+        event.preventDefault();
+      }
+
+      if (scanTimerRef.current) {
+        clearTimeout(scanTimerRef.current);
+      }
+      scanTimerRef.current = setTimeout(() => {
+        scanBufferRef.current = "";
+        scanActiveRef.current = false;
+        setSearchInput("");
+      }, 800);
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      if (scanTimerRef.current) {
+        clearTimeout(scanTimerRef.current);
+      }
+    };
+  }, [applyScannedSearch, suspendScanCapture]);
 
   React.useEffect(() => {
     // Reset whenever filters change so local state matches fetched results.
@@ -474,12 +576,21 @@ export function InventoryBrowseGrid({
               onChange={(e) => {
                 const next = e.target.value;
                 setSearchInput(next);
+                if (scanTerm) setScanTerm("");
                 if (searchTimerRef.current) {
                   clearTimeout(searchTimerRef.current);
                 }
                 searchTimerRef.current = setTimeout(() => {
                   setSearchTerm(next.trim());
                 }, 250);
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                const raw = searchInputRef.current?.value ?? searchInput;
+                const normalized = normalizeBarcode(raw);
+                if (!normalized || normalized.length < 6) return;
+                e.preventDefault();
+                applyScannedSearch(normalized);
               }}
             />
           </div>
@@ -495,6 +606,7 @@ export function InventoryBrowseGrid({
             <Button
               variant="secondary"
               onClick={() => {
+                if (scanTerm) setScanTerm("");
                 setSearchTerm(searchInput.trim());
                 focusSearchInput();
               }}
@@ -506,6 +618,7 @@ export function InventoryBrowseGrid({
               onClick={() => {
                 setSearchInput("");
                 setSearchTerm("");
+                setScanTerm("");
                 focusSearchInput();
               }}
             >
@@ -577,7 +690,7 @@ export function InventoryBrowseGrid({
         onScan={(value) => {
           const normalized = normalizeBarcode(value);
           if (!normalized) return;
-          applySearchValue(normalized);
+          applyScannedSearch(normalized);
           setScannerOpen(false);
           focusSearchInput();
         }}

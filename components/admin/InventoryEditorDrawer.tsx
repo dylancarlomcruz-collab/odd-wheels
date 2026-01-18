@@ -9,6 +9,7 @@ import { Checkbox } from "@/components/ui/Checkbox";
 import { Badge } from "@/components/ui/Badge";
 import { supabase } from "@/lib/supabase/browser";
 import { toast } from "@/components/ui/toast";
+import { shipClassFromBrand } from "@/lib/shipping/shipClass";
 import type { AdminProduct, AdminVariant } from "./InventoryBrowseGrid";
 
 type VariantDraft = AdminVariant & {
@@ -259,6 +260,7 @@ export function InventoryEditorDrawer({
           : hasUnsealed
             ? "sealed"
             : "unsealed";
+    const nextShipClass = shipClassFromBrand(brand);
     setVariants((prev) => [
         ...prev,
       {
@@ -268,7 +270,7 @@ export function InventoryEditorDrawer({
         cost: base?.cost ?? null,
         price: 0,
         qty: base?.qty ?? 1,
-        ship_class: base?.ship_class ?? null,
+        ship_class: nextShipClass ?? null,
         issue_notes: base?.issue_notes ?? null,
         public_notes: base?.public_notes ?? null,
         issue_photo_urls: Array.isArray(base?.issue_photo_urls)

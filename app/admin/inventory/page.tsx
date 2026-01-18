@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 import { normalizeBarcode } from "@/lib/barcode";
+import { shipClassFromBrand } from "@/lib/shipping/shipClass";
 import {
   inferFieldsFromTitle,
   normalizeBrandAlias,
@@ -209,7 +210,9 @@ export default function AdminInventoryPage() {
   const [cost, setCost] = React.useState("");
   const [price, setPrice] = React.useState("");
   const [qty, setQty] = React.useState("1");
-  const [shipClass, setShipClass] = React.useState<ShipClass>("MINI_GT");
+  const [shipClass, setShipClass] = React.useState<ShipClass>(
+    "ACRYLIC_TRUE_SCALE"
+  );
   const [variantBarcode, setVariantBarcode] = React.useState("");
 
   const [saving, setSaving] = React.useState(false);
@@ -224,6 +227,10 @@ export default function AdminInventoryPage() {
       setGoogleQuery(title.trim());
     }
   }, [googleQuery, googleQueryTouched, title]);
+
+  React.useEffect(() => {
+    setShipClass(shipClassFromBrand(brand));
+  }, [brand]);
 
   React.useEffect(() => {
     void loadValuations();
@@ -395,7 +402,7 @@ export default function AdminInventoryPage() {
     setCost("");
     setPrice("");
     setQty("1");
-    setShipClass("MINI_GT");
+    setShipClass(shipClassFromBrand(brand));
     setVariantBarcode("");
   }
 
@@ -726,7 +733,7 @@ export default function AdminInventoryPage() {
     setCost(base.cost != null ? String(base.cost) : "");
     setPrice("");
     setQty(base.qty != null ? String(base.qty) : "1");
-    setShipClass((base.ship_class as ShipClass) ?? "MINI_GT");
+    setShipClass("ACRYLIC_TRUE_SCALE");
     setIssueNotes(base.issue_notes ?? "");
     setPublicNotes(base.public_notes ?? "");
     setIssuePhotos(Array.isArray(base.issue_photo_urls) ? base.issue_photo_urls : []);
@@ -1094,7 +1101,7 @@ export default function AdminInventoryPage() {
       setCost("");
       setPrice("");
       setQty("1");
-      setShipClass("MINI_GT");
+      setShipClass(shipClassFromBrand(brand));
       setVariantBarcode("");
 
       clearProduct();
