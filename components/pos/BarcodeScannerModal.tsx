@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { BrowserMultiFormatReader, IScannerControls } from "@zxing/browser";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -29,6 +30,9 @@ export function BarcodeScannerModal({
     handledRef.current = false;
     setError(null);
     setStarting(true);
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
 
     if (!navigator?.mediaDevices?.getUserMedia) {
       setError("Camera is not supported in this browser.");
@@ -94,14 +98,15 @@ export function BarcodeScannerModal({
       }
       controlsRef.current?.stop();
       controlsRef.current = null;
+      document.body.style.overflow = originalOverflow;
     };
   }, [open, onScan, retryKey]);
 
   if (!open) return null;
 
-  return (
+  const content = (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 p-4"
       onClick={onClose}
     >
       <div className="w-full max-w-xl" onClick={(e) => e.stopPropagation()}>
@@ -148,4 +153,7 @@ export function BarcodeScannerModal({
       </div>
     </div>
   );
+
+  if (typeof document === "undefined") return null;
+  return createPortal(content, document.body);
 }
