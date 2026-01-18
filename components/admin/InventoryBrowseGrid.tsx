@@ -8,6 +8,7 @@ import { Checkbox } from "@/components/ui/Checkbox";
 import { Badge } from "@/components/ui/Badge";
 import { formatPHP } from "@/lib/money";
 import { toast } from "@/components/ui/toast";
+import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 
 export type AdminVariant = {
   id: string;
@@ -252,16 +253,10 @@ export function InventoryBrowseGrid({
   const [inStockOnly, setInStockOnly] = React.useState(true);
   const [showArchived, setShowArchived] = React.useState(false);
   const [scannerOpen, setScannerOpen] = React.useState(false);
-  const [scannerError, setScannerError] = React.useState<string | null>(null);
   const searchTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
-  const videoRef = React.useRef<HTMLVideoElement | null>(null);
-  const streamRef = React.useRef<MediaStream | null>(null);
-  const detectorRef = React.useRef<any>(null);
-  const scanFrameRef = React.useRef<number | null>(null);
-  const scanningRef = React.useRef(false);
 
   const filtersKey = `${searchTerm}|${brandTab}|${inStockOnly}|${showArchived}|${refreshToken}`;
 
@@ -448,114 +443,6 @@ export function InventoryBrowseGrid({
     setSearchTerm(value.trim());
   }
 
-  function stopScanner() {
-    scanningRef.current = false;
-    if (scanFrameRef.current !== null) {
-      cancelAnimationFrame(scanFrameRef.current);
-      scanFrameRef.current = null;
-    }
-    if (streamRef.current) {
-      for (const track of streamRef.current.getTracks()) {
-        track.stop();
-      }
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-  }
-
-  React.useEffect(() => {
-    if (!scannerOpen) {
-      stopScanner();
-      return;
-    }
-
-    let active = true;
-    const startScanner = async () => {
-      if (typeof window === "undefined") return;
-      const DetectorCtor = (window as any).BarcodeDetector;
-      if (!DetectorCtor) {
-        setScannerError("Barcode scan is not supported on this browser.");
-        return;
-      }
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setScannerError("Camera access is unavailable.");
-        return;
-      }
-
-      setScannerError(null);
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
-        });
-
-        if (!active) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-
-        detectorRef.current = new DetectorCtor({
-          formats: [
-            "ean_13",
-            "ean_8",
-            "upc_a",
-            "upc_e",
-            "code_128",
-            "code_39",
-            "itf",
-            "qr_code",
-          ],
-        });
-
-        scanningRef.current = true;
-
-        const scanLoop = async () => {
-          if (!active || !scanningRef.current) return;
-          if (!videoRef.current || !detectorRef.current) {
-            scanFrameRef.current = requestAnimationFrame(scanLoop);
-            return;
-          }
-          try {
-            const barcodes = await detectorRef.current.detect(videoRef.current);
-            if (Array.isArray(barcodes) && barcodes.length) {
-              const raw = String(
-                barcodes[0]?.rawValue ?? barcodes[0]?.value ?? ""
-              ).trim();
-              if (raw) {
-                applySearchValue(raw);
-                setScannerOpen(false);
-                focusSearchInput();
-                return;
-              }
-            }
-          } catch (err) {
-            setScannerError("Scan failed. Try again.");
-          }
-
-          scanFrameRef.current = requestAnimationFrame(scanLoop);
-        };
-
-        scanFrameRef.current = requestAnimationFrame(scanLoop);
-      } catch (err) {
-        setScannerError("Camera permission denied.");
-      }
-    };
-
-    startScanner();
-
-    return () => {
-      active = false;
-      stopScanner();
-    };
-  }, [scannerOpen]);
-
   React.useEffect(() => {
     focusSearchInput();
     return () => {
@@ -595,11 +482,11 @@ export function InventoryBrowseGrid({
               }}
             />
           </div>
-          <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setScannerOpen(true);
+        <div className="flex gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setScannerOpen(true);
               }}
             >
               Scan
@@ -683,43 +570,15 @@ export function InventoryBrowseGrid({
           </Button>
         </div>
       ) : null}
-
-      {scannerOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-bg-900 p-4 shadow-xl">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-sm font-semibold text-white/90">
-                Scan barcode
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setScannerOpen(false);
-                }}
-              >
-                Close
-              </Button>
-            </div>
-            <div className="mt-3 overflow-hidden rounded-xl bg-black">
-              <div className="aspect-video">
-                <video
-                  ref={videoRef}
-                  className="h-full w-full object-cover"
-                  muted
-                  playsInline
-                />
-              </div>
-            </div>
-            <div className="mt-3 text-xs text-white/70">
-              Point your camera at the barcode to auto-search.
-            </div>
-            {scannerError ? (
-              <div className="mt-2 text-xs text-red-200">{scannerError}</div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
+      <BarcodeScannerModal
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onScan={(value) => {
+          applySearchValue(value);
+          setScannerOpen(false);
+          focusSearchInput();
+        }}
+      />
     </div>
   );
 }
