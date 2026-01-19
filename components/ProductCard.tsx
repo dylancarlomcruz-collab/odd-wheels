@@ -352,7 +352,7 @@ export default function ProductCard({
       </div>
 
       {isOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
+        <div className="fixed inset-0 z-50 flex items-start justify-center px-3 py-4 sm:items-center sm:px-4 sm:py-6">
           <button
             type="button"
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
@@ -362,28 +362,32 @@ export default function ProductCard({
           <div
             role="dialog"
             aria-modal="true"
-            className="relative w-full max-w-4xl rounded-2xl border border-white/10 bg-bg-900/95 p-5 shadow-soft"
+            className="relative w-full max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-bg-900/95 shadow-soft"
           >
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs text-white/50">Item preview</div>
-                <div className="text-lg font-semibold">{product.title}</div>
-                <div className="text-sm text-white/60">
-                  {product.brand ?? "-"}
-                  {product.model ? ` - ${product.model}` : ""}
+            <div className="max-h-[85vh] overflow-y-auto sm:max-h-[90vh]">
+              <div className="sticky top-0 z-10 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-white/50">Item preview</div>
+                    <div className="text-lg font-semibold">{product.title}</div>
+                    <div className="text-sm text-white/60">
+                      {product.brand ?? "-"}
+                      {product.model ? ` - ${product.model}` : ""}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsOpen(false)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
+                  >
+                    <X className="h-4 w-4" />
+                    Close
+                  </button>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsOpen(false)}
-                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
-              >
-                <X className="h-4 w-4" />
-                Close
-              </button>
-            </div>
 
-            <div className="mt-4 grid gap-4 md:grid-cols-[1.2fr_1fr]">
+              <div className="p-4 sm:p-5">
+                <div className="grid gap-4 md:grid-cols-[1.2fr_1fr]">
               <div className="relative rounded-xl border border-white/10 bg-bg-950/50 p-3">
                 {activeImage ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -419,7 +423,7 @@ export default function ProductCard({
                 ) : null}
               </div>
 
-              <div className="space-y-3">
+                  <div className="space-y-3">
                 <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3 space-y-2">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-white/60">Selected condition</span>
@@ -476,52 +480,54 @@ export default function ProductCard({
                     </div>
                   ) : null}
                 </div>
+                  </div>
+                </div>
+
+                {relatedItems.length ? (
+                  <div className="mt-5 border-t border-white/10 pt-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
+                      You may also like
+                    </div>
+                    <div className="mt-3 flex gap-3 overflow-x-auto pb-2">
+                      {relatedItems.map((item) => {
+                        const image =
+                          item.image_url ?? item.image_urls?.[0] ?? null;
+                        return (
+                          <Link
+                            key={item.key}
+                            href={`/product/${item.key}`}
+                            className="min-w-[160px] rounded-xl border border-white/10 bg-bg-950/40 p-2 hover:border-white/20 hover:bg-bg-950/60"
+                          >
+                            <div className="h-24 w-full rounded-lg border border-white/10 bg-bg-900/60 overflow-hidden">
+                              {image ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={image}
+                                  alt=""
+                                  className="h-full w-full object-contain bg-neutral-50"
+                                />
+                              ) : null}
+                            </div>
+                            <div className="mt-2 text-xs font-semibold line-clamp-2 text-white/90">
+                              {item.title}
+                            </div>
+                            <div className="text-[11px] text-white/50">
+                              {item.brand ?? "-"}
+                            </div>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
-
-            {relatedItems.length ? (
-              <div className="mt-5 border-t border-white/10 pt-4">
-                <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
-                  You may also like
-                </div>
-                <div className="mt-3 flex gap-3 overflow-x-auto pb-2">
-                  {relatedItems.map((item) => {
-                    const image =
-                      item.image_url ?? item.image_urls?.[0] ?? null;
-                    return (
-                      <Link
-                        key={item.key}
-                        href={`/product/${item.key}`}
-                        className="min-w-[160px] rounded-xl border border-white/10 bg-bg-950/40 p-2 hover:border-white/20 hover:bg-bg-950/60"
-                      >
-                        <div className="h-24 w-full rounded-lg border border-white/10 bg-bg-900/60 overflow-hidden">
-                          {image ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={image}
-                              alt=""
-                              className="h-full w-full object-contain bg-neutral-50"
-                            />
-                          ) : null}
-                        </div>
-                        <div className="mt-2 text-xs font-semibold line-clamp-2 text-white/90">
-                          {item.title}
-                        </div>
-                        <div className="text-[11px] text-white/50">
-                          {item.brand ?? "-"}
-                        </div>
-                      </Link>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : null}
           </div>
         </div>
       ) : null}
 
       {issueOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
+        <div className="fixed inset-0 z-50 flex items-start justify-center px-3 py-4 sm:items-center sm:px-4 sm:py-6">
           <button
             type="button"
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
@@ -531,59 +537,65 @@ export default function ProductCard({
           <div
             role="dialog"
             aria-modal="true"
-            className="relative w-full max-w-3xl rounded-2xl border border-white/10 bg-bg-900/95 p-5 shadow-soft"
+            className="relative w-full max-w-3xl overflow-hidden rounded-2xl border border-white/10 bg-bg-900/95 shadow-soft"
           >
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs text-white/50">Issue photos</div>
-                <div className="text-lg font-semibold">{product.title}</div>
-                <div className="text-sm text-white/60">
-                  {selected?.condition ?? "-"}
+            <div className="max-h-[85vh] overflow-y-auto sm:max-h-[90vh]">
+              <div className="sticky top-0 z-10 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-white/50">Issue photos</div>
+                    <div className="text-lg font-semibold">{product.title}</div>
+                    <div className="text-sm text-white/60">
+                      {selected?.condition ?? "-"}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIssueOpen(false)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
+                  >
+                    <X className="h-4 w-4" />
+                    Close
+                  </button>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setIssueOpen(false)}
-                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
-              >
-                <X className="h-4 w-4" />
-                Close
-              </button>
-            </div>
 
-            <div className="mt-4 relative rounded-xl border border-white/10 bg-bg-950/50 p-3">
-              {activeIssueImage ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={activeIssueImage}
-                  alt="Issue photo"
-                  className="h-72 w-full rounded-lg object-contain"
-                />
-              ) : (
-                <div className="flex h-72 items-center justify-center text-sm text-white/50">
-                  No issue photos available.
+              <div className="p-4 sm:p-5">
+                <div className="relative rounded-xl border border-white/10 bg-bg-950/50 p-3">
+                  {activeIssueImage ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={activeIssueImage}
+                      alt="Issue photo"
+                      className="h-72 w-full rounded-lg object-contain"
+                    />
+                  ) : (
+                    <div className="flex h-72 items-center justify-center text-sm text-white/50">
+                      No issue photos available.
+                    </div>
+                  )}
+                  {issueImages.length > 1 ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => stepIssue(-1)}
+                        className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white/90 hover:bg-black/80"
+                        aria-label="Previous issue photo"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => stepIssue(1)}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white/90 hover:bg-black/80"
+                        aria-label="Next issue photo"
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    </>
+                  ) : null}
                 </div>
-              )}
-              {issueImages.length > 1 ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => stepIssue(-1)}
-                    className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white/90 hover:bg-black/80"
-                    aria-label="Previous issue photo"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => stepIssue(1)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white/90 hover:bg-black/80"
-                    aria-label="Next issue photo"
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </button>
-                </>
-              ) : null}
+              </div>
             </div>
           </div>
         </div>
