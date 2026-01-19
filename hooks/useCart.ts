@@ -120,11 +120,12 @@ React.useEffect(() => {
       // Always clamp based on current inventory qty
       const { data: vRow, error: vErr } = await supabase
         .from("product_variants")
-        .select("qty")
+        .select("qty, product_id")
         .eq("id", variantId)
         .maybeSingle();
       if (vErr) throw vErr;
       const available = Number((vRow as any)?.qty ?? 0);
+      const productId = (vRow as any)?.product_id as string | undefined;
       if (available <= 0) throw new Error("Item sold out");
 
       // Upsert: if exists, increment
@@ -157,6 +158,11 @@ React.useEffect(() => {
           .insert({ user_id: user.id, variant_id: variantId, qty: nextQty });
       }
       await reload();
+      if (productId) {
+        supabase
+          .rpc("increment_product_add_to_cart", { p_product_id: productId })
+          .catch((err) => console.error("Failed to log add-to-cart", err));
+      }
       emitCartUpdated(instanceId.current);
       return { available, desiredQty, nextQty, prevQty, capped };
     },

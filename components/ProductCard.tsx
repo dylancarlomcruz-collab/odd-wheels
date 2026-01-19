@@ -1,7 +1,10 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { recordRecentView } from "@/lib/recentViews";
+import { normalizeSearchTerm } from "@/lib/search";
 
 type ConditionOption = {
   id: string; // this is the PRODUCT ROW ID for that condition
@@ -14,6 +17,12 @@ type ConditionOption = {
   public_notes?: string | null;
 };
 
+type SocialProof = {
+  inCarts?: number | null;
+  soldThisWeek?: number | null;
+  lastViewedMinutes?: number | null;
+};
+
 export type ShopProduct = {
   key: string;
   title: string;
@@ -24,6 +33,12 @@ export type ShopProduct = {
   minPrice: number;
   maxPrice: number;
   options: ConditionOption[];
+  created_at?: string | null;
+  totalQty?: number;
+  minQty?: number;
+  socialProof?: SocialProof;
+  searchScore?: number;
+  popularityScore?: number;
 };
 
 function peso(n: number) {
@@ -41,9 +56,15 @@ function peso(n: number) {
 export default function ProductCard({
   product,
   onAddToCart,
+  onProductClick,
+  socialProof,
+  relatedPool,
 }: {
   product: ShopProduct;
   onAddToCart: (option: ConditionOption) => void | Promise<void>;
+  onProductClick?: (product: ShopProduct) => void | Promise<void>;
+  socialProof?: SocialProof;
+  relatedPool?: ShopProduct[] | null;
 }) {
   const [selectedId, setSelectedId] = React.useState<string>(
     product.options[0]?.id ?? ""
@@ -91,6 +112,64 @@ export default function ProductCard({
   const hasIssuePhotos = issueImages.length > 0;
   const publicNotes = String(selected?.public_notes ?? "").trim();
   const issueNotes = String(selected?.issue_notes ?? "").trim();
+  const lowStock = (selected?.qty ?? 0) > 0 && (selected?.qty ?? 0) <= 2;
+  const onlyOneLeft = (selected?.qty ?? 0) === 1;
+  const proofBits = [
+    socialProof?.inCarts ? `${socialProof.inCarts} in carts` : null,
+    socialProof?.soldThisWeek ? `${socialProof.soldThisWeek} sold this week` : null,
+    socialProof?.lastViewedMinutes !== null && socialProof?.lastViewedMinutes !== undefined
+      ? `Viewed ${socialProof.lastViewedMinutes}m ago`
+      : null,
+  ].filter(Boolean);
+
+  const relatedItems = React.useMemo(() => {
+    if (!isOpen || !relatedPool?.length) return [];
+    const targetText = normalizeSearchTerm(
+      `${product.title} ${product.brand ?? ""} ${product.model ?? ""}`
+    );
+    const targetTokens = new Set(
+      targetText.split(" ").map((token) => token.trim()).filter(Boolean)
+    );
+    const targetBrand = normalizeSearchTerm(product.brand ?? "");
+    const targetModel = normalizeSearchTerm(product.model ?? "");
+    const scored = relatedPool
+      .filter((p) => p.key !== product.key)
+      .map((p) => {
+        let score = 0;
+        const text = normalizeSearchTerm(
+          `${p.title} ${p.brand ?? ""} ${p.model ?? ""}`
+        );
+        if (targetBrand && normalizeSearchTerm(p.brand ?? "") === targetBrand) {
+          score += 3;
+        }
+        if (targetModel && text.includes(targetModel)) {
+          score += 2;
+        }
+        const tokens = text.split(" ").filter(Boolean);
+        const overlap = tokens.reduce(
+          (acc, token) => acc + (targetTokens.has(token) ? 1 : 0),
+          0
+        );
+        score += overlap;
+        return { product: p, score };
+      })
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((item) => item.product);
+
+    const picked = new Set(scored.map((item) => item.key));
+    const fallback = relatedPool.filter(
+      (p) => p.key !== product.key && !picked.has(p.key)
+    );
+    return scored.concat(fallback).slice(0, 6);
+  }, [
+    isOpen,
+    relatedPool,
+    product.key,
+    product.title,
+    product.brand,
+    product.model,
+  ]);
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -129,8 +208,11 @@ export default function ProductCard({
   }, [selectedId]);
 
   function openPreview() {
+    if (isOpen) return;
     setActiveIndex(0);
     setIsOpen(true);
+    recordRecentView(product.key);
+    onProductClick?.(product);
   }
 
   function step(delta: number) {
@@ -189,6 +271,33 @@ export default function ProductCard({
               {selected?.qty ?? 0} left ({selected?.condition ?? "-"})
             </div>
           </div>
+
+          {onlyOneLeft ? (
+            <div className="mt-2">
+              <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700 dark:border-rose-400/40 dark:bg-rose-500/20 dark:text-rose-200">
+                Only 1 left
+              </span>
+            </div>
+          ) : null}
+
+          {lowStock && !onlyOneLeft ? (
+            <div className="mt-2 text-[11px] sm:text-xs text-amber-200/90">
+              Almost sold out.
+            </div>
+          ) : null}
+
+          {proofBits.length ? (
+            <div className="mt-2 flex flex-wrap gap-2 text-[11px] sm:text-xs text-white/60">
+              {proofBits.map((label) => (
+                <span
+                  key={label}
+                  className="rounded-full border border-white/10 bg-bg-900/60 px-2 py-0.5"
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          ) : null}
 
           <div className="mt-2 sm:mt-3 space-y-2">
             <div className="flex flex-wrap gap-2">
@@ -369,6 +478,44 @@ export default function ProductCard({
                 </div>
               </div>
             </div>
+
+            {relatedItems.length ? (
+              <div className="mt-5 border-t border-white/10 pt-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
+                  You may also like
+                </div>
+                <div className="mt-3 flex gap-3 overflow-x-auto pb-2">
+                  {relatedItems.map((item) => {
+                    const image =
+                      item.image_url ?? item.image_urls?.[0] ?? null;
+                    return (
+                      <Link
+                        key={item.key}
+                        href={`/product/${item.key}`}
+                        className="min-w-[160px] rounded-xl border border-white/10 bg-bg-950/40 p-2 hover:border-white/20 hover:bg-bg-950/60"
+                      >
+                        <div className="h-24 w-full rounded-lg border border-white/10 bg-bg-900/60 overflow-hidden">
+                          {image ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={image}
+                              alt=""
+                              className="h-full w-full object-contain bg-neutral-50"
+                            />
+                          ) : null}
+                        </div>
+                        <div className="mt-2 text-xs font-semibold line-clamp-2 text-white/90">
+                          {item.title}
+                        </div>
+                        <div className="text-[11px] text-white/50">
+                          {item.brand ?? "-"}
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

@@ -16,6 +16,9 @@ for insert with check (bucket_id = 'sell-trade-uploads' and auth.role() = 'authe
 alter table public.settings
   add column if not exists header_logo_url text;
 
+alter table public.settings
+  add column if not exists free_shipping_threshold numeric not null default 0;
+
 alter table public.orders
   add column if not exists shipping_status text not null default 'PREPARING TO SHIP';
 
@@ -679,6 +682,35 @@ drop policy if exists "barcode logs read" on public.barcode_logs;
 create policy "barcode logs read" on public.barcode_logs
 for select using (public.is_staff());
 
+create table if not exists public.product_clicks (
+  product_id uuid primary key references public.products(id) on delete cascade,
+  clicks integer not null default 0,
+  last_clicked_at timestamptz not null default now()
+);
+
+alter table public.product_clicks enable row level security;
+
+drop policy if exists "product clicks read" on public.product_clicks;
+create policy "product clicks read" on public.product_clicks
+for select using (true);
+
+create or replace function public.increment_product_click(product_id uuid)
+returns void
+language plpgsql
+security definer
+as $$
+begin
+  insert into public.product_clicks (product_id, clicks, last_clicked_at)
+  values (product_id, 1, now())
+  on conflict (product_id)
+  do update set
+    clicks = public.product_clicks.clicks + 1,
+    last_clicked_at = now();
+end;
+$$;
+
+grant execute on function public.increment_product_click(uuid) to anon, authenticated;
+
 drop policy if exists "barcode logs insert" on public.barcode_logs;
 create policy "barcode logs insert" on public.barcode_logs
 for insert with check (public.is_staff());
@@ -973,3 +1005,249 @@ for insert with check (auth.uid() = user_id);
 drop policy if exists "staff update sell trade requests" on public.sell_trade_requests;
 create policy "staff update sell trade requests" on public.sell_trade_requests
 for update using (public.is_staff()) with check (public.is_staff());
+
+-- Marketing analytics + search utilities
+
+create table if not exists public.product_add_to_cart (
+  product_id uuid primary key references public.products(id) on delete cascade,
+  adds integer not null default 0,
+  last_added_at timestamptz not null default now()
+);
+
+alter table public.product_add_to_cart enable row level security;
+
+drop policy if exists "product add to cart read" on public.product_add_to_cart;
+create policy "product add to cart read" on public.product_add_to_cart
+for select using (true);
+
+create or replace function public.increment_product_add_to_cart(p_product_id uuid)
+returns void
+language plpgsql
+security definer
+as $$
+begin
+  insert into public.product_add_to_cart (product_id, adds, last_added_at)
+  values (p_product_id, 1, now())
+  on conflict (product_id)
+  do update set
+    adds = public.product_add_to_cart.adds + 1,
+    last_added_at = now();
+end;
+$$;
+
+grant execute on function public.increment_product_add_to_cart(uuid) to anon, authenticated;
+
+create table if not exists public.search_logs (
+  id uuid primary key default gen_random_uuid(),
+  term text not null,
+  normalized_term text not null,
+  user_id uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_search_logs_normalized
+  on public.search_logs (normalized_term);
+create index if not exists idx_search_logs_created
+  on public.search_logs (created_at);
+
+alter table public.search_logs enable row level security;
+
+drop policy if exists "insert search logs" on public.search_logs;
+create policy "insert search logs" on public.search_logs
+for insert with check (true);
+
+drop policy if exists "staff read search logs" on public.search_logs;
+create policy "staff read search logs" on public.search_logs
+for select using (public.is_staff());
+
+create or replace function public.log_search_term(p_term text, p_normalized text)
+returns void
+language plpgsql
+security definer
+as $$
+begin
+  insert into public.search_logs (term, normalized_term, user_id)
+  values (p_term, p_normalized, auth.uid());
+end;
+$$;
+
+grant execute on function public.log_search_term(text, text) to anon, authenticated;
+
+create or replace function public.get_trending_searches(p_days int, p_limit int)
+returns table(term text, searches int)
+language sql
+security definer
+as $$
+  select coalesce(max(term), normalized_term) as term,
+         count(*)::int as searches
+  from public.search_logs
+  where created_at >= now() - (p_days || ' days')::interval
+  group by normalized_term
+  order by searches desc
+  limit coalesce(p_limit, 8);
+$$;
+
+grant execute on function public.get_trending_searches(int, int) to anon, authenticated;
+
+create table if not exists public.user_recent_views (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  product_id uuid not null references public.products(id) on delete cascade,
+  last_viewed_at timestamptz not null default now(),
+  primary key (user_id, product_id)
+);
+
+create index if not exists idx_user_recent_views_user
+  on public.user_recent_views (user_id, last_viewed_at desc);
+
+alter table public.user_recent_views enable row level security;
+
+drop policy if exists "user read own recent views" on public.user_recent_views;
+create policy "user read own recent views" on public.user_recent_views
+for select using (auth.uid() = user_id);
+
+drop policy if exists "user insert own recent views" on public.user_recent_views;
+create policy "user insert own recent views" on public.user_recent_views
+for insert with check (auth.uid() = user_id);
+
+drop policy if exists "user update own recent views" on public.user_recent_views;
+create policy "user update own recent views" on public.user_recent_views
+for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create or replace function public.record_recent_view(p_product_id uuid)
+returns void
+language plpgsql
+security definer
+as $$
+begin
+  insert into public.user_recent_views (user_id, product_id, last_viewed_at)
+  values (auth.uid(), p_product_id, now())
+  on conflict (user_id, product_id)
+  do update set last_viewed_at = now();
+end;
+$$;
+
+grant execute on function public.record_recent_view(uuid) to authenticated;
+
+create table if not exists public.product_restock_events (
+  id uuid primary key default gen_random_uuid(),
+  product_id uuid not null references public.products(id) on delete cascade,
+  variant_id uuid not null references public.product_variants(id) on delete cascade,
+  prev_qty int not null,
+  new_qty int not null,
+  restocked_at timestamptz not null default now()
+);
+
+create index if not exists idx_restock_product
+  on public.product_restock_events (product_id);
+create index if not exists idx_restock_time
+  on public.product_restock_events (restocked_at desc);
+
+alter table public.product_restock_events enable row level security;
+
+drop policy if exists "public read restock events" on public.product_restock_events;
+create policy "public read restock events" on public.product_restock_events
+for select using (true);
+
+create or replace function public.fn_log_restock_event()
+returns trigger
+language plpgsql
+as $$
+begin
+  if coalesce(old.qty, 0) <= 0 and coalesce(new.qty, 0) > 0 then
+    insert into public.product_restock_events (product_id, variant_id, prev_qty, new_qty, restocked_at)
+    values (new.product_id, new.id, coalesce(old.qty, 0), new.qty, now());
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_product_variants_restock on public.product_variants;
+create trigger trg_product_variants_restock
+after update of qty on public.product_variants
+for each row execute procedure public.fn_log_restock_event();
+
+create or replace function public.get_cart_counts(p_product_ids uuid[])
+returns table(product_id uuid, cart_count int)
+language sql
+security definer
+as $$
+  select pv.product_id,
+         count(distinct ci.user_id)::int as cart_count
+  from public.cart_items ci
+  join public.product_variants pv on pv.id = ci.variant_id
+  where pv.product_id = any(p_product_ids)
+  group by pv.product_id;
+$$;
+
+grant execute on function public.get_cart_counts(uuid[]) to anon, authenticated;
+
+create or replace function public.get_top_sellers(p_days int, p_limit int)
+returns table(product_id uuid, sold_qty int)
+language sql
+security definer
+as $$
+  select oi.product_id, sum(oi.qty)::int as sold_qty
+  from public.order_items oi
+  join public.orders o on o.id = oi.order_id
+  where o.payment_status = 'PAID'
+    and (p_days is null or p_days <= 0 or o.paid_at >= now() - (p_days || ' days')::interval)
+  group by oi.product_id
+  order by sold_qty desc
+  limit coalesce(p_limit, 12);
+$$;
+
+grant execute on function public.get_top_sellers(int, int) to anon, authenticated;
+
+create or replace function public.get_sales_counts(p_product_ids uuid[], p_days int)
+returns table(product_id uuid, sold_qty int)
+language sql
+security definer
+as $$
+  select oi.product_id, sum(oi.qty)::int as sold_qty
+  from public.order_items oi
+  join public.orders o on o.id = oi.order_id
+  where oi.product_id = any(p_product_ids)
+    and o.payment_status = 'PAID'
+    and (p_days is null or p_days <= 0 or o.paid_at >= now() - (p_days || ' days')::interval)
+  group by oi.product_id;
+$$;
+
+grant execute on function public.get_sales_counts(uuid[], int) to anon, authenticated;
+
+create or replace function public.get_customers_also_viewed(p_product_id uuid, p_limit int)
+returns table(product_id uuid, views int)
+language sql
+security definer
+as $$
+  select urv2.product_id, count(*)::int as views
+  from public.user_recent_views urv
+  join public.user_recent_views urv2
+    on urv.user_id = urv2.user_id
+   and urv2.product_id <> p_product_id
+  where urv.product_id = p_product_id
+  group by urv2.product_id
+  order by views desc
+  limit coalesce(p_limit, 8);
+$$;
+
+grant execute on function public.get_customers_also_viewed(uuid, int) to anon, authenticated;
+
+create or replace function public.get_frequently_bought_together(p_product_id uuid, p_limit int)
+returns table(product_id uuid, times_bought int)
+language sql
+security definer
+as $$
+  select oi2.product_id, count(*)::int as times_bought
+  from public.order_items oi
+  join public.order_items oi2
+    on oi.order_id = oi2.order_id
+   and oi2.product_id <> p_product_id
+  join public.orders o on o.id = oi.order_id
+  where oi.product_id = p_product_id
+    and o.payment_status = 'PAID'
+  group by oi2.product_id
+  order by times_bought desc
+  limit coalesce(p_limit, 8);
+$$;
+
+grant execute on function public.get_frequently_bought_together(uuid, int) to anon, authenticated;

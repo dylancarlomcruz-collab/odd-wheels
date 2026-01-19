@@ -93,6 +93,20 @@ type BarcodeLog = {
   barcode: string;
 };
 
+type ProductClickRow = {
+  product_id: string;
+  clicks: number;
+  last_clicked_at: string | null;
+  product: {
+    id: string;
+    title: string;
+    brand: string | null;
+    model: string | null;
+    variation: string | null;
+    image_urls: string[] | null;
+  } | null;
+};
+
 function n(v: any, fallback = 0) {
   const x = Number(v);
   return Number.isFinite(x) ? x : fallback;
@@ -244,6 +258,9 @@ export default function AdminInventoryPage() {
   const [barcodeLogsError, setBarcodeLogsError] = React.useState<string | null>(
     null
   );
+  const [topClicks, setTopClicks] = React.useState<ProductClickRow[]>([]);
+  const [topClicksLoading, setTopClicksLoading] = React.useState(false);
+  const [topClicksError, setTopClicksError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!googleQueryTouched && !googleQuery.trim() && title.trim()) {
@@ -263,6 +280,7 @@ export default function AdminInventoryPage() {
   React.useEffect(() => {
     void loadValuations();
     void loadBarcodeLogs();
+    void loadTopClicks();
   }, []);
 
   async function loadValuations() {
@@ -313,6 +331,34 @@ export default function AdminInventoryPage() {
     }
 
     setBarcodeLogsLoading(false);
+  }
+
+  async function loadTopClicks() {
+    setTopClicksLoading(true);
+    setTopClicksError(null);
+
+    const { data, error } = await supabase
+      .from("product_clicks")
+      .select(
+        "product_id,clicks,last_clicked_at,product:products(id,title,brand,model,variation,image_urls)"
+      )
+      .order("clicks", { ascending: false })
+      .limit(10);
+
+    if (error) {
+      setTopClicksError(error.message || "Failed to load top clicks.");
+      setTopClicks([]);
+    } else {
+      const normalized = (data as any[] | null)?.map((row) => ({
+        ...row,
+        product: Array.isArray(row.product)
+          ? row.product[0] ?? null
+          : row.product ?? null,
+      }));
+      setTopClicks((normalized as ProductClickRow[]) ?? []);
+    }
+
+    setTopClicksLoading(false);
   }
 
   async function runSearch() {
@@ -1417,6 +1463,80 @@ export default function AdminInventoryPage() {
                 {formatCount(allValuation.missing_cost_variants)}
               </div>
             </div>
+          </div>
+
+          {/* Most clicked items */}
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="font-semibold">Most clicked items</div>
+                <div className="text-xs text-white/60">
+                  Based on shop product clicks.
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                onClick={loadTopClicks}
+                disabled={topClicksLoading}
+              >
+                {topClicksLoading ? "Refreshing..." : "Refresh"}
+              </Button>
+            </div>
+
+            {topClicksError ? (
+              <div className="text-sm text-red-200">{topClicksError}</div>
+            ) : null}
+            {topClicksLoading && topClicks.length === 0 ? (
+              <div className="text-sm text-white/60">Loading click stats...</div>
+            ) : null}
+            {topClicks.length === 0 && !topClicksLoading ? (
+              <div className="text-sm text-white/60">No click data yet.</div>
+            ) : null}
+            {topClicks.length ? (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {topClicks.map((row) => {
+                  const product = row.product;
+                  const image = product?.image_urls?.[0] ?? null;
+                  return (
+                    <div
+                      key={row.product_id}
+                      className="rounded-xl border border-white/10 bg-paper/5 p-3 flex gap-3"
+                    >
+                      <div className="h-14 w-14 flex-shrink-0 rounded-lg bg-black/20 flex items-center justify-center overflow-hidden">
+                        {image ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={image}
+                            alt=""
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="text-[10px] text-white/50">No image</div>
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <div className="text-sm font-semibold line-clamp-1">
+                          {product?.title ?? "Unknown item"}
+                        </div>
+                        <div className="text-xs text-white/60 line-clamp-1">
+                          {product?.brand ?? "-"}
+                          {product?.model ? ` • ${product.model}` : ""}
+                        </div>
+                        <div className="mt-2 text-xs text-white/70">
+                          {row.clicks} clicks
+                          {row.last_clicked_at ? (
+                            <span className="text-white/40">
+                              {" "}
+                              • {formatLogDate(row.last_clicked_at)}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
 
           {/* Search */}

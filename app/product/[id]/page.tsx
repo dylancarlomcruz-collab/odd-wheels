@@ -14,6 +14,8 @@ import { useBuyerProducts } from "@/hooks/useBuyerProducts";
 import { toast } from "@/components/ui/toast";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { formatConditionLabel } from "@/lib/conditions";
+import { supabase } from "@/lib/supabase/browser";
+import { recordRecentView } from "@/lib/recentViews";
 
 export default function ProductDetailPage() {
   const params = useParams<{ id: string }>();
@@ -26,9 +28,124 @@ export default function ProductDetailPage() {
     condition: string;
   } | null>(null);
   const [issueIndex, setIssueIndex] = React.useState(0);
+  const [alsoViewed, setAlsoViewed] = React.useState<any[]>([]);
+  const [boughtTogether, setBoughtTogether] = React.useState<any[]>([]);
 
   // For similar items, fetch recent products (All) then compute similarity.
   const { products: allProducts } = useBuyerProducts({ brand: "all" });
+
+  React.useEffect(() => {
+    if (!product?.id) return;
+    recordRecentView(product.id);
+    supabase
+      .rpc("record_recent_view", { p_product_id: product.id })
+      .then(
+        () => undefined,
+        () => {
+          // ignore if not authenticated
+        }
+      );
+    supabase
+      .rpc("increment_product_click", { product_id: product.id })
+      .then(
+        () => undefined,
+        () => {
+          // ignore
+        }
+      );
+  }, [product?.id]);
+
+  React.useEffect(() => {
+    if (!product?.id) return;
+    let mounted = true;
+    const mapSuggestions = (rows: any[]) =>
+      rows
+        .map((p) => {
+          const variants = (p.product_variants ?? []) as Array<{
+            price: number;
+            qty: number;
+          }>;
+          const prices = variants
+            .filter((v) => (v.qty ?? 0) > 0)
+            .map((v) => Number(v.price));
+          const minPrice = prices.length ? Math.min(...prices) : 0;
+          return {
+            id: p.id,
+            title: p.title,
+            brand: p.brand,
+            model: p.model,
+            image_urls: p.image_urls,
+            min_price: minPrice,
+          };
+        })
+        .filter((row) => row.min_price > 0);
+
+    (async () => {
+      const [alsoRes, togetherRes] = await Promise.all([
+        supabase.rpc("get_customers_also_viewed", {
+          p_product_id: product.id,
+          p_limit: 8,
+        }),
+        supabase.rpc("get_frequently_bought_together", {
+          p_product_id: product.id,
+          p_limit: 8,
+        }),
+      ]);
+
+      if (!mounted) return;
+
+      const alsoIds =
+        (alsoRes.data as any[] | null)
+          ?.map((row) => row?.product_id)
+          .filter(Boolean) ?? [];
+      const togetherIds =
+        (togetherRes.data as any[] | null)
+          ?.map((row) => row?.product_id)
+          .filter(Boolean) ?? [];
+
+      if (alsoIds.length) {
+        const { data } = await supabase
+          .from("products")
+          .select(
+            "id, title, brand, model, image_urls, product_variants(price, qty)"
+          )
+          .in("id", alsoIds);
+        if (mounted) {
+          const mapped = mapSuggestions((data as any[]) ?? []);
+          const orderMap = new Map(alsoIds.map((id, index) => [id, index]));
+          mapped.sort(
+            (a, b) => (orderMap.get(a.id) ?? 0) - (orderMap.get(b.id) ?? 0)
+          );
+          setAlsoViewed(mapped);
+        }
+      } else {
+        setAlsoViewed([]);
+      }
+
+      if (togetherIds.length) {
+        const { data } = await supabase
+          .from("products")
+          .select(
+            "id, title, brand, model, image_urls, product_variants(price, qty)"
+          )
+          .in("id", togetherIds);
+        if (mounted) {
+          const mapped = mapSuggestions((data as any[]) ?? []);
+          const orderMap = new Map(togetherIds.map((id, index) => [id, index]));
+          mapped.sort(
+            (a, b) => (orderMap.get(a.id) ?? 0) - (orderMap.get(b.id) ?? 0)
+          );
+          setBoughtTogether(mapped);
+        }
+      } else {
+        setBoughtTogether([]);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [product?.id]);
 
   React.useEffect(() => {
     if (!issueViewer) return;
@@ -47,6 +164,18 @@ export default function ProductDetailPage() {
       (prev + delta + issueViewer.images.length) % issueViewer.images.length
     );
   }
+
+  const similarItems = React.useMemo(() => {
+    if (!product) return [];
+    const target = {
+      id: product.id,
+      title: product.title,
+      brand: product.brand,
+      model: product.model,
+      min_price: Number(product.variants?.[0]?.price ?? 0),
+    };
+    return recommendSimilar(allProducts as any, target as any, 8);
+  }, [product, allProducts]);
 
   if (loading) {
     return <main className="mx-auto max-w-6xl px-4 py-10 text-white/70">Loading...</main>;
@@ -84,6 +213,67 @@ export default function ProductDetailPage() {
     );
   }
 
+  function renderSuggestionSection(
+    title: string,
+    items: Array<{
+      id: string;
+      title: string;
+      brand?: string | null;
+      model?: string | null;
+      image_urls?: string[] | null;
+      min_price?: number;
+    }>,
+    subtitle?: string
+  ) {
+    if (!items.length) return null;
+    return (
+      <section className="space-y-3">
+        <div>
+          <div className="text-lg font-semibold">{title}</div>
+          {subtitle ? <div className="text-sm text-white/50">{subtitle}</div> : null}
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+          {items.map((item) => {
+            const image =
+              Array.isArray(item.image_urls) && item.image_urls.length
+                ? item.image_urls[0]
+                : null;
+            return (
+              <Link
+                key={item.id}
+                href={`/product/${item.id}`}
+                className="rounded-2xl border border-white/10 bg-bg-900/40 p-3 transition hover:border-white/20 hover:bg-paper/10"
+              >
+                <div className="h-32 w-full rounded-xl border border-white/10 bg-bg-950/40 overflow-hidden">
+                  {image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={image}
+                      alt=""
+                      className="h-full w-full object-contain bg-neutral-50"
+                    />
+                  ) : null}
+                </div>
+                <div className="mt-2 text-sm font-semibold line-clamp-2">
+                  {item.title}
+                </div>
+                <div className="text-xs text-white/60 mt-1">
+                  {item.brand ?? "-"}
+                  {item.model ? ` - ${item.model}` : ""}
+                </div>
+                {item.min_price ? (
+                  <div className="mt-2 text-xs text-price">
+                    {formatPHP(Number(item.min_price))}
+                  </div>
+                ) : null}
+              </Link>
+            );
+          })}
+        </div>
+      </section>
+    );
+  }
+
   const heroImg = product.image_urls?.[0] ?? null;
 
   return (
@@ -104,7 +294,7 @@ export default function ProductDetailPage() {
           <div>
             <h1 className="text-2xl font-semibold">{product.title}</h1>
             <div className="text-sm text-white/60">
-              {(product.brand ?? "—")} {product.model ? `• ${product.model}` : ""} {product.variation ? `• ${product.variation}` : ""}
+              {([product.brand, product.model, product.variation].filter(Boolean).join(" - ") || "-")}
             </div>
           </div>
 
@@ -202,6 +392,22 @@ export default function ProductDetailPage() {
           </div>
         </div>
       </div>
+
+      {renderSuggestionSection(
+        "Customers also viewed",
+        alsoViewed,
+        "Based on co-views from other shoppers."
+      )}
+      {renderSuggestionSection(
+        "Frequently bought together",
+        boughtTogether,
+        "Often purchased alongside this item."
+      )}
+      {renderSuggestionSection(
+        "Similar items",
+        similarItems,
+        "Same brand or model keyword matches."
+      )}
 
       {issueViewer ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">

@@ -9,6 +9,7 @@ export type Settings = {
   shipping_cutoff_text: string | null;
   priority_shipping_available: boolean;
   priority_shipping_note: string | null;
+  free_shipping_threshold: number | null;
   pickup_schedule_text: string | null;
   pickup_unavailable: boolean;
   pickup_schedule: Record<string, string[]> | null;

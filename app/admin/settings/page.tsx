@@ -101,6 +101,7 @@ export default function AdminSettingsPage() {
   const [cutoff, setCutoff] = React.useState("");
   const [priorityAvailable, setPriorityAvailable] = React.useState(false);
   const [priorityNote, setPriorityNote] = React.useState("");
+  const [freeShippingThreshold, setFreeShippingThreshold] = React.useState("");
   const [pickupSchedule, setPickupSchedule] = React.useState<PickupScheduleState>(
     () => buildEmptyPickupScheduleState()
   );
@@ -119,6 +120,11 @@ export default function AdminSettingsPage() {
       setCutoff(data.shipping_cutoff_text ?? "");
       setPriorityAvailable(!!data.priority_shipping_available);
       setPriorityNote(data.priority_shipping_note ?? "");
+      setFreeShippingThreshold(
+        data.free_shipping_threshold !== null && data.free_shipping_threshold !== undefined
+          ? String(data.free_shipping_threshold)
+          : ""
+      );
       setPickupSchedule(
         buildPickupScheduleState(
           (data as any).pickup_schedule ?? null,
@@ -140,11 +146,19 @@ export default function AdminSettingsPage() {
     setSaving(true);
     const pickupPayload = buildPickupSchedulePayload(pickupSchedule);
     const pickupSummary = buildPickupScheduleSummary(pickupPayload);
+    const thresholdRaw = Number(freeShippingThreshold);
+    const threshold =
+      freeShippingThreshold.trim() === ""
+        ? null
+        : Number.isFinite(thresholdRaw)
+        ? thresholdRaw
+        : null;
     const { error } = await supabase.from("settings").update({
       shipping_schedule_text: schedule || null,
       shipping_cutoff_text: cutoff || null,
       priority_shipping_available: priorityAvailable,
       priority_shipping_note: priorityNote || null,
+      free_shipping_threshold: threshold,
       pickup_schedule_text: pickupSummary || null,
       pickup_schedule: pickupPayload,
       pickup_unavailable: pickupUnavailable,
@@ -249,6 +263,13 @@ export default function AdminSettingsPage() {
 
           <Textarea label="Shipping Schedule (shown on homepage & checkout)" value={schedule} onChange={(e) => setSchedule(e.target.value)} />
           <Input label="Shipping Cut-off (optional)" value={cutoff} onChange={(e) => setCutoff(e.target.value)} />
+          <Input
+            label="Free shipping threshold (PHP)"
+            value={freeShippingThreshold}
+            onChange={(e) => setFreeShippingThreshold(e.target.value)}
+            inputMode="decimal"
+            placeholder="e.g. 2000"
+          />
 
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
             <div className="font-semibold">Priority Shipping</div>

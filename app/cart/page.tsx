@@ -11,10 +11,12 @@ import { formatPHP } from "@/lib/money";
 import { useBuyerProducts } from "@/hooks/useBuyerProducts";
 import { recommendSimilar } from "@/lib/recommendations";
 import { formatConditionLabel } from "@/lib/conditions";
+import { useSettings } from "@/hooks/useSettings";
 
 
 function CartContent() {
   const { lines, loading, updateQty, remove } = useCart();
+  const { settings } = useSettings();
   const selectAllRef = React.useRef<HTMLInputElement>(null);
 
   const { products: allProducts } = useBuyerProducts({ brand: "all" });
@@ -37,6 +39,36 @@ function CartContent() {
   const checkoutHref = selectedIds.length
     ? `/checkout?selected=${encodeURIComponent(selectedIds.join(","))}`
     : "/checkout";
+  const freeShippingThreshold = Number(settings?.free_shipping_threshold ?? 0);
+  const freeShippingGap =
+    freeShippingThreshold > 0 ? freeShippingThreshold - selectedSubtotal : 0;
+  const cartProductIds = React.useMemo(
+    () => new Set(lines.map((line) => line.variant.product.id).filter(Boolean)),
+    [lines]
+  );
+  const completeSet = React.useMemo(() => {
+    if (!allProducts.length || cartProductIds.size === 0) return [];
+    const candidates = allProducts.filter((p) => !cartProductIds.has(p.id));
+    const picked: any[] = [];
+    const seen = new Set<string>();
+    for (const line of lines) {
+      const target = {
+        id: line.variant.product.id,
+        title: line.variant.product.title,
+        brand: line.variant.product.brand,
+        model: line.variant.product.model,
+        min_price: Number(line.variant.price),
+      };
+      const recs = recommendSimilar(candidates as any, target as any, 4);
+      for (const rec of recs) {
+        if (seen.has(rec.id)) continue;
+        seen.add(rec.id);
+        picked.push(rec);
+      }
+      if (picked.length >= 6) break;
+    }
+    return picked.slice(0, 6);
+  }, [allProducts, cartProductIds, lines]);
 
   React.useEffect(() => {
     setSelectedIds((prev) => {
@@ -81,6 +113,20 @@ function CartContent() {
         <h1 className="text-2xl font-semibold">Cart</h1>
         <div className="text-sm text-white/60">Review items before checkout.</div>
       </div>
+
+      {freeShippingThreshold > 0 ? (
+        <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4 text-sm text-white/70">
+          {freeShippingGap > 0 ? (
+            <span>
+              Add <span className="text-price">{formatPHP(freeShippingGap)}</span> more to unlock free shipping.
+            </span>
+          ) : (
+            <span className="text-accent-700 dark:text-accent-200">
+              You unlocked free shipping for this cart.
+            </span>
+          )}
+        </div>
+      ) : null}
 
       <Card>
         <CardHeader className="flex items-center justify-between">
@@ -274,6 +320,37 @@ function CartContent() {
           </Link>
         </CardBody>
       </Card>
+
+      {completeSet.length ? (
+        <Card>
+          <CardHeader>
+            <div className="font-semibold">Complete your set</div>
+            <div className="text-sm text-white/60">
+              Suggestions based on your cart items.
+            </div>
+          </CardHeader>
+          <CardBody>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {completeSet.map((item: any) => (
+                <Link
+                  key={item.id}
+                  href={`/product/${item.id}`}
+                  className="rounded-xl border border-white/10 bg-bg-900/30 p-3 transition hover:border-white/20 hover:bg-paper/10"
+                >
+                  <div className="font-medium line-clamp-2">{item.title}</div>
+                  <div className="mt-1 text-xs text-white/60">
+                    {item.brand ?? "-"}
+                    {item.model ? ` - ${item.model}` : ""}
+                  </div>
+                  <div className="mt-2 text-xs text-price">
+                    {formatPHP(Number(item.min_price ?? 0))}
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
     
       {previewLine ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
