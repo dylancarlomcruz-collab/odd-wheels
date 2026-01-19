@@ -12,6 +12,7 @@ import { PHONE_MAX_LENGTH, sanitizePhone, validatePhone11 } from "@/lib/phone";
 
 export default function RegisterPage() {
   const router = useRouter();
+  const emailRedirectTo = "https://www.odd-wheels.com/";
   const [fullName, setFullName] = React.useState("");
   const [username, setUsername] = React.useState("");
   const [contactNumber, setContactNumber] = React.useState("");
@@ -85,6 +86,7 @@ export default function RegisterPage() {
       email: trimmedEmail,
       password,
       options: {
+        emailRedirectTo,
         data: {
           full_name: trimmedName,
           username: trimmedUsername,

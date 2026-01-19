@@ -62,6 +62,7 @@ async function uploadLalamoveMap(file: File, userId: string): Promise<string> {
 
 export default function AccountPage() {
   const { user, signOut } = useAuth();
+  const emailRedirectTo = "https://www.odd-wheels.com/";
 
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
@@ -158,7 +159,10 @@ export default function AccountPage() {
 
       const trimmedEmail = email.trim();
       if (trimmedEmail && trimmedEmail !== (user.email ?? "")) {
-        const { error } = await supabase.auth.updateUser({ email: trimmedEmail });
+        const { error } = await supabase.auth.updateUser(
+          { email: trimmedEmail },
+          { emailRedirectTo }
+        );
         if (error) throw error;
       }
 
