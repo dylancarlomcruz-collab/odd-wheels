@@ -1,8 +1,7 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
-import { ChevronDown, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, X } from "lucide-react";
 import { recordRecentView } from "@/lib/recentViews";
 import { normalizeSearchTerm } from "@/lib/search";
 
@@ -21,6 +20,11 @@ type SocialProof = {
   inCarts?: number | null;
   soldThisWeek?: number | null;
   lastViewedMinutes?: number | null;
+};
+
+type PreviewEntry = {
+  product: ShopProduct;
+  selectedId: string;
 };
 
 export type ShopProduct = {
@@ -73,6 +77,7 @@ export default function ProductCard({
     (product.options?.length ?? 0) <= 1
   );
   const [isOpen, setIsOpen] = React.useState(false);
+  const [previewStack, setPreviewStack] = React.useState<PreviewEntry[]>([]);
   const [activeIndex, setActiveIndex] = React.useState(0);
   const [issueOpen, setIssueOpen] = React.useState(false);
   const [issueIndex, setIssueIndex] = React.useState(0);
@@ -86,8 +91,18 @@ export default function ProductCard({
       product.options.find((o) => o.id === selectedId) ?? product.options[0],
     [product.options, selectedId]
   );
+  const previewEntry = previewStack[previewStack.length - 1];
+  const previewProduct = previewEntry?.product ?? product;
+  const previewSelectedId =
+    previewEntry?.selectedId ?? previewProduct.options[0]?.id ?? "";
+  const previewSelected = React.useMemo(
+    () =>
+      previewProduct.options.find((o) => o.id === previewSelectedId) ??
+      previewProduct.options[0],
+    [previewProduct.options, previewSelectedId]
+  );
 
-  const images = React.useMemo(() => {
+  const cardImages = React.useMemo(() => {
     const raw = (product.image_urls ?? []).filter(Boolean) as string[];
     const list = raw.length ? raw.slice() : [];
     if (product.image_url && !list.includes(product.image_url)) {
@@ -95,6 +110,15 @@ export default function ProductCard({
     }
     return list;
   }, [product.image_url, product.image_urls]);
+
+  const previewImages = React.useMemo(() => {
+    const raw = (previewProduct.image_urls ?? []).filter(Boolean) as string[];
+    const list = raw.length ? raw.slice() : [];
+    if (previewProduct.image_url && !list.includes(previewProduct.image_url)) {
+      list.unshift(previewProduct.image_url);
+    }
+    return list;
+  }, [previewProduct.image_url, previewProduct.image_urls]);
 
   const issueImages = React.useMemo(
     () => (selected?.issue_photo_urls ?? []).filter(Boolean) as string[],
@@ -110,12 +134,12 @@ export default function ProductCard({
     hasPicked || !hasMultiple ? (selected ? peso(selected.price) : priceLabel) : priceLabel;
 
   const isOut = !selected || (selected.qty ?? 0) <= 0;
-  const activeImage = images[activeIndex] ?? "";
-  const cardImage = product.image_url ?? images[0] ?? null;
+  const activeImage = previewImages[activeIndex] ?? "";
+  const cardImage = product.image_url ?? cardImages[0] ?? null;
   const activeIssueImage = issueImages[issueIndex] ?? "";
   const hasIssuePhotos = issueImages.length > 0;
-  const publicNotes = String(selected?.public_notes ?? "").trim();
-  const issueNotes = String(selected?.issue_notes ?? "").trim();
+  const publicNotes = String(previewSelected?.public_notes ?? "").trim();
+  const issueNotes = String(previewSelected?.issue_notes ?? "").trim();
   const lowStock = (selected?.qty ?? 0) > 0 && (selected?.qty ?? 0) <= 2;
   const onlyOneLeft = (selected?.qty ?? 0) === 1;
   const proofBits = [
@@ -129,15 +153,15 @@ export default function ProductCard({
   const relatedItems = React.useMemo(() => {
     if (!isOpen || !relatedPool?.length) return [];
     const targetText = normalizeSearchTerm(
-      `${product.title} ${product.brand ?? ""} ${product.model ?? ""}`
+      `${previewProduct.title} ${previewProduct.brand ?? ""} ${previewProduct.model ?? ""}`
     );
     const targetTokens = new Set(
       targetText.split(" ").map((token) => token.trim()).filter(Boolean)
     );
-    const targetBrand = normalizeSearchTerm(product.brand ?? "");
-    const targetModel = normalizeSearchTerm(product.model ?? "");
+    const targetBrand = normalizeSearchTerm(previewProduct.brand ?? "");
+    const targetModel = normalizeSearchTerm(previewProduct.model ?? "");
     const scored = relatedPool
-      .filter((p) => p.key !== product.key)
+      .filter((p) => p.key !== previewProduct.key)
       .map((p) => {
         let score = 0;
         const text = normalizeSearchTerm(
@@ -163,28 +187,29 @@ export default function ProductCard({
 
     const picked = new Set(scored.map((item) => item.key));
     const fallback = relatedPool.filter(
-      (p) => p.key !== product.key && !picked.has(p.key)
+      (p) => p.key !== previewProduct.key && !picked.has(p.key)
     );
     return scored.concat(fallback).slice(0, 6);
   }, [
     isOpen,
     relatedPool,
-    product.key,
-    product.title,
-    product.brand,
-    product.model,
+    previewProduct.key,
+    previewProduct.title,
+    previewProduct.brand,
+    previewProduct.model,
   ]);
+  const canGoBack = previewStack.length > 1;
 
   React.useEffect(() => {
     if (!isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setIsOpen(false);
+      if (e.key === "Escape") closePreview();
       if (e.key === "ArrowLeft") step(-1);
       if (e.key === "ArrowRight") step(1);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isOpen, images.length]);
+  }, [isOpen, previewImages.length]);
 
   React.useEffect(() => {
     if (!issueOpen) return;
@@ -198,8 +223,8 @@ export default function ProductCard({
   }, [issueOpen, issueImages.length]);
 
   React.useEffect(() => {
-    if (activeIndex >= images.length) setActiveIndex(0);
-  }, [activeIndex, images.length]);
+    if (activeIndex >= previewImages.length) setActiveIndex(0);
+  }, [activeIndex, previewImages.length]);
 
   React.useEffect(() => {
     setSelectedId(product.options[0]?.id ?? "");
@@ -211,17 +236,50 @@ export default function ProductCard({
     setIssueIndex(0);
   }, [selectedId]);
 
+  function closePreview() {
+    setIsOpen(false);
+    setPreviewStack([]);
+    setActiveIndex(0);
+    setIssueOpen(false);
+    setIssueIndex(0);
+  }
+
   function openPreview() {
     if (isOpen) return;
     setActiveIndex(0);
+    setIssueOpen(false);
+    setIssueIndex(0);
+    const nextSelectedId = selectedId || product.options[0]?.id || "";
+    setPreviewStack([{ product, selectedId: nextSelectedId }]);
     setIsOpen(true);
     recordRecentView(product.key);
     onProductClick?.(product);
   }
 
+  function pushPreview(item: ShopProduct) {
+    if (item.key === previewProduct.key) return;
+    setActiveIndex(0);
+    setIssueOpen(false);
+    setIssueIndex(0);
+    setPreviewStack((prev) => [
+      ...prev,
+      { product: item, selectedId: item.options[0]?.id ?? "" },
+    ]);
+    recordRecentView(item.key);
+    onProductClick?.(item);
+  }
+
+  function goBackPreview() {
+    if (!canGoBack) return;
+    setActiveIndex(0);
+    setIssueOpen(false);
+    setIssueIndex(0);
+    setPreviewStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev));
+  }
+
   function step(delta: number) {
-    if (images.length <= 1) return;
-    setActiveIndex((prev) => (prev + delta + images.length) % images.length);
+    if (previewImages.length <= 1) return;
+    setActiveIndex((prev) => (prev + delta + previewImages.length) % previewImages.length);
   }
 
   function openIssuePhotos() {
@@ -388,7 +446,7 @@ export default function ProductCard({
           <button
             type="button"
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={() => setIsOpen(false)}
+            onClick={closePreview}
             aria-label="Close preview"
           />
           <div
@@ -399,19 +457,32 @@ export default function ProductCard({
             <div className="max-h-[85vh] overflow-y-auto sm:max-h-[90vh]">
               <div className="sticky top-0 z-10 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-xs text-white/50">Item preview</div>
-                    <div className="text-base font-semibold leading-snug line-clamp-2 sm:text-lg">
-                      {product.title}
-                    </div>
-                    <div className="text-xs text-white/60 sm:text-sm">
-                      {product.brand ?? "-"}
-                      {product.model ? ` - ${product.model}` : ""}
+                  <div className="flex min-w-0 items-start gap-3">
+                    {canGoBack ? (
+                      <button
+                        type="button"
+                        onClick={goBackPreview}
+                        className="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-bg-950/40 px-2.5 py-2 text-sm text-white/80 hover:bg-bg-950/60"
+                        aria-label="Back to previous item"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        Back
+                      </button>
+                    ) : null}
+                    <div className="min-w-0">
+                      <div className="text-xs text-white/50">Item preview</div>
+                      <div className="text-base font-semibold leading-snug line-clamp-2 sm:text-lg">
+                        {previewProduct.title}
+                      </div>
+                      <div className="text-xs text-white/60 sm:text-sm">
+                        {previewProduct.brand ?? "-"}
+                        {previewProduct.model ? ` - ${previewProduct.model}` : ""}
+                      </div>
                     </div>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setIsOpen(false)}
+                    onClick={closePreview}
                     className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
                   >
                     <X className="h-4 w-4" />
@@ -427,7 +498,7 @@ export default function ProductCard({
                 </div>
                 <div className="grid gap-4 md:grid-cols-[1.2fr_1fr]">
               <div
-                className="group relative rounded-xl border border-white/10 bg-bg-950/50 p-3"
+                className="group relative overflow-hidden rounded-xl border border-white/10 bg-bg-950/50"
                 onTouchStart={(event) => handleTouchStart(event, touchStartX, touchStartY)}
                 onTouchEnd={(event) => handleTouchEnd(event, touchStartX, touchStartY, step)}
               >
@@ -436,14 +507,14 @@ export default function ProductCard({
                   <img
                     src={activeImage}
                     alt=""
-                    className="h-72 w-full rounded-lg object-contain"
+                    className="h-72 w-full object-contain bg-neutral-50"
                   />
                 ) : (
                   <div className="flex h-72 items-center justify-center text-sm text-white/50">
                     No image available.
                   </div>
                 )}
-                {images.length > 1 ? (
+                {previewImages.length > 1 ? (
                   <>
                     <button
                       type="button"
@@ -457,22 +528,9 @@ export default function ProductCard({
                       className="absolute inset-y-0 right-0 w-1/2"
                       aria-label="Next photo"
                     />
-                    <button
-                      type="button"
-                      onClick={() => step(-1)}
-                      className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white/90 opacity-30 transition hover:opacity-100 focus-visible:opacity-100 active:opacity-100"
-                      aria-label="Previous photo"
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => step(1)}
-                      className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white/90 opacity-30 transition hover:opacity-100 focus-visible:opacity-100 active:opacity-100"
-                      aria-label="Next photo"
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </button>
+                    <div className="pointer-events-none absolute bottom-3 right-3 rounded-full bg-black/60 px-2 py-0.5 text-[10px] text-white/80">
+                      {activeIndex + 1}/{previewImages.length}
+                    </div>
                   </>
                 ) : null}
               </div>
@@ -482,18 +540,18 @@ export default function ProductCard({
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-white/60">Selected condition</span>
                     <span className="text-white/90">
-                      {selected?.condition ?? "-"}
+                      {previewSelected?.condition ?? "-"}
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-white/60">Price</span>
                     <span className="text-price">
-                      {selected ? peso(selected.price) : "-"}
+                      {previewSelected ? peso(previewSelected.price) : "-"}
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-white/60">Available</span>
-                    <span className="text-white/80">{selected?.qty ?? 0} left</span>
+                    <span className="text-white/80">{previewSelected?.qty ?? 0} left</span>
                   </div>
                 </div>
 
@@ -502,8 +560,8 @@ export default function ProductCard({
                     Conditions
                   </div>
                   <div className="mt-2 space-y-2 text-sm">
-                    {product.options.map((o) => {
-                      const isSelected = o.id === selected?.id;
+                    {previewProduct.options.map((o) => {
+                      const isSelected = o.id === previewSelected?.id;
                       return (
                         <div
                           key={o.id}
@@ -547,10 +605,12 @@ export default function ProductCard({
                         const image =
                           item.image_url ?? item.image_urls?.[0] ?? null;
                         return (
-                          <Link
+                          <button
                             key={item.key}
-                            href={`/product/${item.key}`}
+                            type="button"
+                            onClick={() => pushPreview(item)}
                             className="min-w-[160px] rounded-xl border border-white/10 bg-bg-950/40 p-2 hover:border-white/20 hover:bg-bg-950/60"
+                            aria-label={`Preview ${item.title}`}
                           >
                             <div className="h-24 w-full rounded-lg border border-white/10 bg-bg-900/60 overflow-hidden">
                               {image ? (
@@ -568,7 +628,7 @@ export default function ProductCard({
                             <div className="text-[11px] text-white/50">
                               {item.brand ?? "-"}
                             </div>
-                          </Link>
+                          </button>
                         );
                       })}
                     </div>
@@ -618,7 +678,7 @@ export default function ProductCard({
 
               <div className="p-4 sm:p-5">
                 <div
-                  className="group relative rounded-xl border border-white/10 bg-bg-950/50 p-3"
+                  className="group relative overflow-hidden rounded-xl border border-white/10 bg-bg-950/50"
                   onTouchStart={(event) =>
                     handleTouchStart(event, issueTouchStartX, issueTouchStartY)
                   }
@@ -631,7 +691,7 @@ export default function ProductCard({
                     <img
                       src={activeIssueImage}
                       alt="Issue photo"
-                      className="h-72 w-full rounded-lg object-contain"
+                      className="h-72 w-full object-contain bg-neutral-50"
                     />
                   ) : (
                     <div className="flex h-72 items-center justify-center text-sm text-white/50">
@@ -652,22 +712,9 @@ export default function ProductCard({
                         className="absolute inset-y-0 right-0 w-1/2"
                         aria-label="Next issue photo"
                       />
-                      <button
-                        type="button"
-                        onClick={() => stepIssue(-1)}
-                        className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white/90 opacity-30 transition hover:opacity-100 focus-visible:opacity-100 active:opacity-100"
-                        aria-label="Previous issue photo"
-                      >
-                        <ChevronLeft className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => stepIssue(1)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white/90 opacity-30 transition hover:opacity-100 focus-visible:opacity-100 active:opacity-100"
-                        aria-label="Next issue photo"
-                      >
-                        <ChevronRight className="h-4 w-4" />
-                      </button>
+                      <div className="pointer-events-none absolute bottom-3 right-3 rounded-full bg-black/60 px-2 py-0.5 text-[10px] text-white/80">
+                        {issueIndex + 1}/{issueImages.length}
+                      </div>
                     </>
                   ) : null}
                 </div>

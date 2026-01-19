@@ -760,7 +760,7 @@ export default function ShopPageClient() {
                 key={p.key}
                 product={p}
                 onAddToCart={(opt) => onAdd(p, opt)}
-                onProductClick={() => recordProductClick(p.key)}
+                onProductClick={(item) => recordProductClick(item.key)}
                 socialProof={buildSocialProof(p)}
                 relatedPool={sortedProducts}
               />

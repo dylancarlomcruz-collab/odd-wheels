@@ -4,22 +4,26 @@ import * as React from "react";
 import Link from "next/link";
 import { RequireAuth } from "@/components/auth/RequireAuth";
 import { useCart, type CartLine } from "@/hooks/useCart";
+import ProductCard, { type ShopProduct } from "@/components/ProductCard";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { formatPHP } from "@/lib/money";
 import { useBuyerProducts } from "@/hooks/useBuyerProducts";
+import { useBuyerShopProducts } from "@/hooks/useBuyerShopProducts";
 import { recommendSimilar } from "@/lib/recommendations";
 import { formatConditionLabel } from "@/lib/conditions";
 import { useSettings } from "@/hooks/useSettings";
+import { toast } from "@/components/ui/toast";
 
 
 function CartContent() {
-  const { lines, loading, updateQty, remove } = useCart();
+  const { lines, loading, updateQty, remove, add } = useCart();
   const { settings } = useSettings();
   const selectAllRef = React.useRef<HTMLInputElement>(null);
 
   const { products: allProducts } = useBuyerProducts({ brand: "all" });
+  const { products: shopProducts } = useBuyerShopProducts({ brand: "all" });
 
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
   const [previewLine, setPreviewLine] = React.useState<CartLine | null>(null);
@@ -70,6 +74,14 @@ function CartContent() {
     return picked.slice(0, 6);
   }, [allProducts, cartProductIds, lines]);
 
+  const completeSetProducts = React.useMemo(() => {
+    if (!completeSet.length || !shopProducts.length) return [];
+    const map = new Map(shopProducts.map((p) => [p.key, p]));
+    return completeSet
+      .map((item) => map.get(item.id))
+      .filter(Boolean) as ShopProduct[];
+  }, [completeSet, shopProducts]);
+
   React.useEffect(() => {
     setSelectedIds((prev) => {
       if (!lines.length) return [];
@@ -97,6 +109,37 @@ function CartContent() {
   function openPreview(line: CartLine) {
     setPreviewLine(line);
     setActiveImage(line.variant.product.image_urls?.[0] ?? "");
+  }
+
+  async function onAddSuggestion(
+    product: ShopProduct,
+    option: ShopProduct["options"][number]
+  ) {
+    try {
+      const result = await add(option.id, 1);
+      const baseToast = {
+        title: product.title,
+        image_url: product.image_url,
+        variant: option.condition,
+        price: option.price,
+        action: { label: "View cart", href: "/cart" },
+      };
+      toast(
+        result.capped
+          ? {
+              ...baseToast,
+              message: "Maximum qty available added to cart.",
+              qty: result.nextQty,
+            }
+          : { ...baseToast, qty: 1 }
+      );
+    } catch (e: any) {
+      toast({
+        title: "Failed to add to cart",
+        message: e?.message ?? "Failed to add to cart",
+        intent: "error",
+      });
+    }
   }
 
   const previewImages = (previewLine?.variant.product.image_urls ?? []).filter(
@@ -321,7 +364,7 @@ function CartContent() {
         </CardBody>
       </Card>
 
-      {completeSet.length ? (
+      {completeSetProducts.length ? (
         <Card>
           <CardHeader>
             <div className="font-semibold">Complete your set</div>
@@ -331,21 +374,13 @@ function CartContent() {
           </CardHeader>
           <CardBody>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {completeSet.map((item: any) => (
-                <Link
-                  key={item.id}
-                  href={`/product/${item.id}`}
-                  className="rounded-xl border border-white/10 bg-bg-900/30 p-3 transition hover:border-white/20 hover:bg-paper/10"
-                >
-                  <div className="font-medium line-clamp-2">{item.title}</div>
-                  <div className="mt-1 text-xs text-white/60">
-                    {item.brand ?? "-"}
-                    {item.model ? ` - ${item.model}` : ""}
-                  </div>
-                  <div className="mt-2 text-xs text-price">
-                    {formatPHP(Number(item.min_price ?? 0))}
-                  </div>
-                </Link>
+              {completeSetProducts.map((item) => (
+                <ProductCard
+                  key={item.key}
+                  product={item}
+                  onAddToCart={(opt) => onAddSuggestion(item, opt)}
+                  relatedPool={shopProducts}
+                />
               ))}
             </div>
           </CardBody>
