@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import { formatConditionLabel } from "@/lib/conditions";
 
 type CartInsightRow = {
   key: string;
@@ -268,7 +269,7 @@ export default function AdminCartInsightsPage() {
                 <div className="text-sm text-white/60">No cart items found.</div>
               ) : (
                 visibleRows.map((row) => {
-                  const condition = row.condition ? row.condition.toUpperCase() : "";
+                  const condition = formatConditionLabel(row.condition, { upper: true });
                   const stockLow = row.stock > 0 && row.stock <= row.qty;
                   return (
                     <div

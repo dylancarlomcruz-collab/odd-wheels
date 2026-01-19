@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/Badge";
 import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 import { toast } from "@/components/ui/toast";
 import { normalizeBarcode } from "@/lib/barcode";
+import { formatConditionLabel } from "@/lib/conditions";
 
 type Product = {
   id: string;
@@ -25,7 +26,14 @@ type Product = {
 type Variant = {
   id: string;
   product_id: string;
-  condition: "sealed" | "unsealed" | "with_issues";
+  condition:
+    | "sealed"
+    | "unsealed"
+    | "with_issues"
+    | "diorama"
+    | "blistered"
+    | "sealed_blister"
+    | "unsealed_blister";
   price: number;
   qty: number;
   barcode: string | null;
@@ -67,7 +75,7 @@ function firstImg(urls: any): string | null {
 }
 
 function formatCondition(value: string | null) {
-  return String(value ?? "sealed").toUpperCase();
+  return formatConditionLabel(value, { upper: true });
 }
 
 function variantLabel(v: Variant) {

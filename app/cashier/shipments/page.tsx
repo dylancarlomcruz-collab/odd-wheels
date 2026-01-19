@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import { formatConditionLabel } from "@/lib/conditions";
 
 const SHIPPING_TABS = [
   { key: "PREPARING TO SHIP", label: "Preparing to ship" },
@@ -494,9 +495,10 @@ export default function CashierShipmentsPage() {
                             {items.map((it: any, idx: number) => {
                               const thumb = getItemThumb(it);
                               const title = getItemTitle(it);
-                              const condition = String(
-                                it?.condition ?? it?.product_variant?.condition ?? ""
-                              ).toUpperCase();
+                              const condition = formatConditionLabel(
+                                it?.condition ?? it?.product_variant?.condition,
+                                { upper: true }
+                              );
                               const notes = String(
                                 it?.issue_notes ?? it?.product_variant?.issue_notes ?? ""
                               ).trim();

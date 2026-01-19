@@ -496,6 +496,13 @@ function CheckoutContent() {
       ),
     [selectedLines]
   );
+  const hasLalamoveOnly = shipCounts.LALAMOVE > 0;
+
+  React.useEffect(() => {
+    if (hasLalamoveOnly && shippingMethod !== "LALAMOVE") {
+      setShippingMethod("LALAMOVE");
+    }
+  }, [hasLalamoveOnly, shippingMethod]);
 
   const lbcFitsNsakto = React.useMemo(
     () => fitsCapacity(shipCounts, LBC_CAPACITY.N_SAKTO),
@@ -866,9 +873,15 @@ function CheckoutContent() {
                 }
               >
                 <option value="LALAMOVE">Lalamove</option>
-                <option value="JNT">J&amp;T</option>
-                <option value="LBC">LBC Pickup</option>
-                <option value="PICKUP">Store Pickup</option>
+                <option value="JNT" disabled={hasLalamoveOnly}>
+                  J&amp;T
+                </option>
+                <option value="LBC" disabled={hasLalamoveOnly}>
+                  LBC Pickup
+                </option>
+                <option value="PICKUP" disabled={hasLalamoveOnly}>
+                  Store Pickup
+                </option>
               </Select>
 
               <Select
@@ -880,6 +893,11 @@ function CheckoutContent() {
                 <option value="BPI">BPI</option>
               </Select>
             </div>
+            {hasLalamoveOnly ? (
+              <div className="text-xs text-amber-200">
+                Diorama items require Lalamove delivery.
+              </div>
+            ) : null}
 
             {shippingMethod === "JNT" || shippingMethod === "LBC" ? (
               <Select

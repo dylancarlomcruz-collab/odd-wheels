@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/Input";
 import { formatPHP } from "@/lib/money";
 import { useBuyerProducts } from "@/hooks/useBuyerProducts";
 import { recommendSimilar } from "@/lib/recommendations";
+import { formatConditionLabel } from "@/lib/conditions";
 
 
 function CartContent() {
@@ -149,7 +150,7 @@ function CartContent() {
                               ((e.currentTarget.style.display = "none"))
                             }
                           />
-                        </button>
+                          </button>
                         <div>
                           <button
                             type="button"
@@ -159,7 +160,7 @@ function CartContent() {
                             {l.variant.product.title}
                           </button>
                           <div className="text-sm text-white/60">
-                            {l.variant.condition.toUpperCase()} - <span className="text-price">
+                            {formatConditionLabel(l.variant.condition, { upper: true })} - <span className="text-price">
                               {formatPHP(Number(l.variant.price))}
                             </span>
                           </div>
@@ -330,7 +331,7 @@ function CartContent() {
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-white/60">Condition</span>
                     <span className="text-white/90">
-                      {previewCondition.toUpperCase()}
+                      {formatConditionLabel(previewCondition, { upper: true })}
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-sm">

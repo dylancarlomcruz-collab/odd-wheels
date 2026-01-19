@@ -14,11 +14,17 @@ import { normalizeBarcode } from "@/lib/barcode";
 import { shipClassFromBrand } from "@/lib/shipping/shipClass";
 import {
   inferFieldsFromTitle,
+  normalizeKaidoMiniGtTitle,
   normalizeBrandAlias,
   normalizeTitleBrandAliases,
 } from "@/lib/titleInference";
 import { formatPHP } from "@/lib/money";
 import { toast } from "@/components/ui/toast";
+import {
+  formatConditionLabel,
+  isDioramaCondition,
+  isBlisterCondition,
+} from "@/lib/conditions";
 
 type Product = {
   id: string;
@@ -34,7 +40,14 @@ type Product = {
 type Variant = {
   id: string;
   product_id: string;
-  condition: "sealed" | "unsealed" | "with_issues";
+  condition:
+    | "sealed"
+    | "unsealed"
+    | "with_issues"
+    | "diorama"
+    | "blistered"
+    | "sealed_blister"
+    | "unsealed_blister";
   issue_notes: string | null;
   issue_photo_urls: string[] | null;
   public_notes: string | null;
@@ -47,7 +60,13 @@ type Variant = {
 };
 
 type VariantCondition = Variant["condition"];
-type ShipClass = "MINI_GT" | "KAIDO" | "POPRACE" | "ACRYLIC_TRUE_SCALE";
+type ShipClass =
+  | "MINI_GT"
+  | "KAIDO"
+  | "POPRACE"
+  | "ACRYLIC_TRUE_SCALE"
+  | "BLISTER"
+  | "LALAMOVE";
 type GoogleLookupData = {
   title: string | null;
   brand: string | null;
@@ -133,6 +152,10 @@ function resolveNormalizedTitle(current: string, incoming: string | null | undef
     return normalizedIncoming;
   }
   return current;
+}
+
+function brandFromNormalizedTitle(titleValue: string) {
+  return /\bKaido\s+House\b/i.test(titleValue) ? "Kaido House" : null;
 }
 
 export default function AdminInventoryPage() {
@@ -229,8 +252,13 @@ export default function AdminInventoryPage() {
   }, [googleQuery, googleQueryTouched, title]);
 
   React.useEffect(() => {
+    if (isDioramaCondition(condition)) {
+      setShipClass("LALAMOVE");
+      return;
+    }
+    if (isBlisterCondition(condition)) return;
     setShipClass(shipClassFromBrand(brand));
-  }, [brand]);
+  }, [brand, condition]);
 
   React.useEffect(() => {
     void loadValuations();
@@ -427,26 +455,48 @@ export default function AdminInventoryPage() {
       const d = j.data;
 
       // Fill product identity, but do not overwrite manual edits
-      const normalizedTitle = normalizeTitleBrandAliases(
-        String(d.title ?? title ?? "")
+      const rawTitle = String(d.title ?? title ?? "");
+      const normalizedTitle = normalizeTitleBrandAliases(rawTitle);
+      const kaidoNormalized = normalizeKaidoMiniGtTitle(
+        normalizedTitle,
+        d.color_style ?? null
       );
 
-      if (d.title || title) {
-        setTitle((prev) => resolveNormalizedTitle(prev, normalizedTitle));
-      }
-      if (d.brand) {
-        setBrand((prev) => resolveNormalizedBrand(prev, d.brand));
-      }
-      if (d.model && !model) setModel(d.model);
-      if (d.color_style && !variation) setVariation(d.color_style);
+      if (kaidoNormalized) {
+        if (kaidoNormalized.title) {
+          setTitle((prev) =>
+            resolveNormalizedTitle(prev, kaidoNormalized.title)
+          );
+        }
+        if (kaidoNormalized.brand) {
+          setBrand((prev) =>
+            resolveNormalizedBrand(prev, kaidoNormalized.brand)
+          );
+        }
+        if (kaidoNormalized.model && !model) setModel(kaidoNormalized.model);
+        if (kaidoNormalized.variation && !variation)
+          setVariation(kaidoNormalized.variation);
+      } else {
+        if (d.title || title) {
+          setTitle((prev) => resolveNormalizedTitle(prev, normalizedTitle));
+        }
+        const titleBrand = brandFromNormalizedTitle(normalizedTitle);
+        if (titleBrand) {
+          setBrand(titleBrand);
+        } else if (d.brand) {
+          setBrand((prev) => resolveNormalizedBrand(prev, d.brand));
+        }
+        if (d.model && !model) setModel(d.model);
+        if (d.color_style && !variation) setVariation(d.color_style);
 
-      const inferred = inferFieldsFromTitle(normalizedTitle);
-      if (inferred.brand) {
-        setBrand((prev) => resolveNormalizedBrand(prev, inferred.brand));
+        const inferred = inferFieldsFromTitle(normalizedTitle);
+        if (inferred.brand && !titleBrand) {
+          setBrand((prev) => resolveNormalizedBrand(prev, inferred.brand));
+        }
+        if (!d.model && !model && inferred.model) setModel(inferred.model);
+        if (!d.color_style && !variation && inferred.color_style)
+          setVariation(inferred.color_style);
       }
-      if (!d.model && !model && inferred.model) setModel(inferred.model);
-      if (!d.color_style && !variation && inferred.color_style)
-        setVariation(inferred.color_style);
 
       // Fill images (select first 3 by default)
       const imgs = (d.images ?? []).filter(Boolean);
@@ -511,7 +561,10 @@ export default function AdminInventoryPage() {
     if (normalizedTitle) {
       setTitle((prev) => resolveNormalizedTitle(prev, normalizedTitle));
     }
-    if (result.brand) {
+    const titleBrand = brandFromNormalizedTitle(normalizedTitle);
+    if (titleBrand) {
+      setBrand(titleBrand);
+    } else if (result.brand) {
       setBrand((prev) => resolveNormalizedBrand(prev, result.brand));
     }
     if (result.model) setModel((prev) => (prev ? prev : result.model!));
@@ -728,23 +781,43 @@ export default function AdminInventoryPage() {
     if (!Array.isArray(list) || list.length === 0) return;
     const base = [...list].reverse().find((v) => v) ?? list[list.length - 1];
     if (!base) return;
-    setCondition(nextConditionFromExisting(list));
+    const nextCondition = nextConditionFromExisting(list);
+    setCondition(nextCondition);
     setVariantBarcode(base.barcode ?? "");
     setCost(base.cost != null ? String(base.cost) : "");
     setPrice("");
     setQty(base.qty != null ? String(base.qty) : "1");
-    setShipClass("ACRYLIC_TRUE_SCALE");
+    setShipClass(
+      isDioramaCondition(nextCondition)
+        ? "LALAMOVE"
+        : isBlisterCondition(nextCondition)
+          ? "BLISTER"
+          : shipClassFromBrand(brand)
+    );
     setIssueNotes(base.issue_notes ?? "");
     setPublicNotes(base.public_notes ?? "");
     setIssuePhotos(Array.isArray(base.issue_photo_urls) ? base.issue_photo_urls : []);
   }
 
   function nextConditionFromExisting(list: Variant[]): VariantCondition {
+    const hasDiorama = list.some((v) => v.condition === "diorama");
     const hasSealed = list.some((v) => v.condition === "sealed");
     const hasUnsealed = list.some((v) => v.condition === "unsealed");
+    const hasSealedBlister = list.some(
+      (v) => v.condition === "sealed_blister"
+    );
+    const hasUnsealedBlister = list.some(
+      (v) => v.condition === "unsealed_blister"
+    );
+    const hasBlistered = list.some((v) => v.condition === "blistered");
+    if (hasDiorama) return "diorama";
     if (hasSealed && hasUnsealed) return "with_issues";
     if (hasSealed) return "unsealed";
     if (hasUnsealed) return "sealed";
+    if (hasSealedBlister && hasUnsealedBlister) return "with_issues";
+    if (hasSealedBlister) return "unsealed_blister";
+    if (hasUnsealedBlister) return "sealed_blister";
+    if (hasBlistered) return "blistered";
     return "unsealed";
   }
 
@@ -997,7 +1070,7 @@ export default function AdminInventoryPage() {
     }
   }
 
-  async function saveNewVariant() {
+  async function saveNewVariant(options?: { keepProduct?: boolean }) {
     setSaving(true);
 
     try {
@@ -1018,6 +1091,8 @@ export default function AdminInventoryPage() {
         throw new Error("Issue description is required for 'With Issues'.");
       }
 
+      const keepProduct = Boolean(options?.keepProduct);
+
       // Create product if none selected
       let productId = selectedProduct?.id;
 
@@ -1032,7 +1107,9 @@ export default function AdminInventoryPage() {
             image_urls: [],
             is_active: true,
           })
-          .select("*")
+          .select(
+            "id,title,brand,model,variation,image_urls,is_active,created_at"
+          )
           .single();
 
         if (pErr) throw pErr;
@@ -1081,7 +1158,7 @@ export default function AdminInventoryPage() {
         cost: costN,
         price: priceN,
         qty: qtyN,
-        ship_class: shipClass,
+        ship_class: isDioramaCondition(condition) ? "LALAMOVE" : shipClass,
         barcode: barcodeValue,
       });
 
@@ -1092,6 +1169,21 @@ export default function AdminInventoryPage() {
       }
 
       toast({ intent: "success", message: "Saved product + variant." });
+
+      if (keepProduct && productId) {
+        const { data: nextProduct, error: nextErr } = await supabase
+          .from("products")
+          .select(
+            "id,title,brand,model,variation,image_urls,is_active,created_at"
+          )
+          .eq("id", productId)
+          .single();
+
+        if (nextErr) throw nextErr;
+        if (nextProduct) await loadProduct(nextProduct as any);
+        focusBarcodeInput();
+        return;
+      }
 
       // Reset draft fields
       setCondition("unsealed");
@@ -1157,7 +1249,7 @@ export default function AdminInventoryPage() {
   ) {
     const detail = [brand, model, variation].filter(Boolean).join(" ");
     const conditionLabel = variantCondition
-      ? `Condition: ${variantCondition.toUpperCase()}`
+      ? `Condition: ${formatConditionLabel(variantCondition, { upper: true })}`
       : "";
     const description = [detail, conditionLabel].filter(Boolean).join(" • ");
 
@@ -1880,7 +1972,7 @@ export default function AdminInventoryPage() {
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="font-medium">
-                        {v.condition.toUpperCase()}{" "}
+                        {formatConditionLabel(v.condition, { upper: true })}{" "}
                         {v.issue_notes ? (
                           <span className="text-white/50">
                             • {v.issue_notes}
@@ -1968,6 +2060,8 @@ export default function AdminInventoryPage() {
                         <option value="ACRYLIC_TRUE_SCALE">
                           ACRYLIC_TRUE_SCALE
                         </option>
+                        <option value="BLISTER">BLISTER</option>
+                        <option value="LALAMOVE">LALAMOVE</option>
                       </Select>
 
                       <div className="flex items-end">
@@ -2094,12 +2188,24 @@ export default function AdminInventoryPage() {
               <Select
                 label="Condition"
                 value={condition}
-                onChange={(e) =>
-                  setCondition(e.target.value as VariantCondition)
-                }
+                onChange={(e) => {
+                  const next = e.target.value as VariantCondition;
+                  setCondition(next);
+                  if (isDioramaCondition(next)) {
+                    setShipClass("LALAMOVE");
+                  } else if (isBlisterCondition(next)) {
+                    setShipClass("BLISTER");
+                  } else if (shipClass === "BLISTER" || shipClass === "LALAMOVE") {
+                    setShipClass(shipClassFromBrand(brand));
+                  }
+                }}
               >
                 <option value="sealed">Sealed</option>
+                <option value="sealed_blister">Sealed blister</option>
                 <option value="unsealed">Unsealed</option>
+                <option value="unsealed_blister">Unsealed blister</option>
+                <option value="blistered">Blistered</option>
+                <option value="diorama">Diorama</option>
                 <option value="with_issues">With Issues</option>
               </Select>
 
@@ -2112,6 +2218,8 @@ export default function AdminInventoryPage() {
                 <option value="KAIDO">Kaido</option>
                 <option value="POPRACE">Pop Race</option>
                 <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
+                <option value="BLISTER">Blister</option>
+                <option value="LALAMOVE">Lalamove</option>
               </Select>
 
               <Input
@@ -2269,9 +2377,18 @@ export default function AdminInventoryPage() {
               )}
             </div>
 
-            <Button onClick={saveNewVariant} disabled={saving}>
-              {saving ? "Saving..." : "Save Variant"}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => saveNewVariant()} disabled={saving}>
+                {saving ? "Saving..." : "Save Variant"}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => saveNewVariant({ keepProduct: true })}
+                disabled={saving}
+              >
+                {saving ? "Saving..." : "Save + Add Another"}
+              </Button>
+            </div>
 
             <div className="text-xs text-white/50">
               Cost/Price are empty by default. Qty defaults to 1.

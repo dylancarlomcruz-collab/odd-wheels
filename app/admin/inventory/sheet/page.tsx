@@ -11,6 +11,7 @@ import {
   normalizeBrandAlias,
   normalizeTitleBrandAliases,
 } from "@/lib/titleInference";
+import { formatConditionLabel } from "@/lib/conditions";
 
 type SheetRow = {
   id: string;
@@ -167,7 +168,7 @@ function modelSortKey(value: string) {
 }
 
 function formatCondition(value: string | null) {
-  return String(value ?? "-").toUpperCase();
+  return formatConditionLabel(value, { upper: true });
 }
 
 function escapeCsv(value: string | number) {

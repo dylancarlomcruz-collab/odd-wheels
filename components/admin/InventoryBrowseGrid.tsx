@@ -10,10 +10,18 @@ import { formatPHP } from "@/lib/money";
 import { toast } from "@/components/ui/toast";
 import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 import { normalizeBarcode } from "@/lib/barcode";
+import { conditionSortOrder, formatConditionLabel } from "@/lib/conditions";
 
 export type AdminVariant = {
   id: string;
-  condition: "sealed" | "unsealed" | "with_issues";
+  condition:
+    | "sealed"
+    | "unsealed"
+    | "with_issues"
+    | "diorama"
+    | "blistered"
+    | "sealed_blister"
+    | "unsealed_blister";
   barcode: string | null;
   cost: number | null;
   price: number | null;
@@ -66,13 +74,11 @@ function derivedTotals(p: AdminProduct) {
 }
 
 function sortVariants(variants: AdminVariant[]) {
-  const order = (c: AdminVariant["condition"]) =>
-    c === "sealed" ? 0 : c === "unsealed" ? 1 : 2;
   return variants
     .slice()
     .sort(
       (a, b) =>
-        order(a.condition) - order(b.condition) ||
+        conditionSortOrder(a.condition) - conditionSortOrder(b.condition) ||
         Number(a.price ?? 0) - Number(b.price ?? 0)
     );
 }
@@ -197,7 +203,7 @@ function AdminProductCard({
                         : "border-white/10 bg-paper/5 text-white/70 hover:bg-paper/10",
                     ].join(" ")}
                   >
-                    {v.condition.toUpperCase()}
+                    {formatConditionLabel(v.condition, { upper: true })}
                   </button>
                 );
               })}

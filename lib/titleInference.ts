@@ -4,6 +4,13 @@ export type InferredFields = {
   color_style?: string;
 };
 
+export type NormalizedLookupFields = {
+  title?: string;
+  brand?: string;
+  model?: string;
+  variation?: string;
+};
+
 const BRAND_ALIASES: Array<{ canonical: string; aliases: string[] }> = [
   { canonical: "Mini GT", aliases: ["mini gt", "minigt"] },
   { canonical: "Kaido House", aliases: ["kaido house", "kaido"] },
@@ -31,6 +38,9 @@ export function inferFieldsFromTitle(titleRaw: string): InferredFields {
 
   // Brand
   let brand: string | undefined;
+  if (lower.includes("kaido house") && lower.includes("mini gt")) {
+    brand = "Kaido House";
+  }
   for (const b of BRAND_ALIASES) {
     if (b.aliases.some((a) => lower.includes(a))) {
       brand = b.canonical;
@@ -90,6 +100,111 @@ export function inferFieldsFromTitle(titleRaw: string): InferredFields {
   };
 }
 
+export function normalizeKaidoMiniGtTitle(
+  titleRaw: string,
+  fallbackColor?: string | null
+): NormalizedLookupFields | null {
+  const raw = String(titleRaw ?? "").trim();
+  if (!raw) return null;
+
+  const lower = raw.toLowerCase();
+  if (!lower.includes("kaido house") || !lower.includes("mini gt")) return null;
+
+  const normalized = normalizeTitleBrandAliases(raw);
+
+  const bracket =
+    normalized.match(/\(([^)]+)\)/) || normalized.match(/\[([^\]]+)\]/);
+  let bracketColor = (bracket?.[1] || bracket?.[2] || "").trim();
+  if (
+    bracketColor &&
+    /(edition|limited|scale|1[:/]\d+|\b20\d{2}\b)/i.test(bracketColor)
+  ) {
+    bracketColor = "";
+  }
+
+  let color = bracketColor;
+  if (!color && fallbackColor) {
+    color = String(fallbackColor).trim();
+  }
+  if (!color) {
+    const inferred = inferFieldsFromTitle(normalized);
+    color = inferred.color_style ?? "";
+  }
+  if (color && /(edition|limited|scale|1[:/]\d+|\b20\d{2}\b)/i.test(color)) {
+    color = "";
+  }
+
+  const versionMatch =
+    normalized.match(/\bV\d+\b/i) || normalized.match(/\bVer\.?\s*\d+\b/i);
+  const version = versionMatch
+    ? versionMatch[0].replace(/ver\.?\s*/i, "V").toUpperCase()
+    : "";
+
+  let cleaned = normalized
+    .replace(/(?:\bkaido\s+house\b\s*){2,}/gi, "Kaido House ")
+    .replace(/\bkaido\s+house\b/gi, " ")
+    .replace(/\bmini\s*gt\b/gi, " ")
+    .replace(/\b(?:x|a-)\b/gi, " ")
+    .replace(/\bKHMG\d+\b/gi, " ")
+    .replace(/\bhouse\s+racing\b/gi, " ")
+    .replace(/\bhouse\s+special\b/gi, " ")
+    .replace(/\bhouse\b/gi, " ")
+    .replace(/\bno\.?\s*\d+\b/gi, " ")
+    .replace(/\b1\s*64\b/gi, " ")
+    .replace(/\b1\s*[:/]\s*\d+\b/gi, " ")
+    .replace(/\bscale\b/gi, " ")
+    .replace(/\b(?:limited|edition|diecast|model|collection|special|car)\b/gi, " ")
+    .replace(/\b20\d{2}\b/g, " ")
+    .replace(/\bV\d+\b/gi, " ")
+    .replace(/\bVer\.?\s*\d+\b/gi, " ")
+    .replace(/[-"'|]/g, " ")
+    .replace(/\[[^\]]+\]/g, " ")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  function splitModelAndDetail(text: string) {
+    const words = text.split(/\s+/).filter(Boolean);
+    if (!words.length) return { model: "", detail: "" };
+    const detailIndex = words.findIndex((word) => {
+      const clean = word.replace(/[^a-z0-9]/gi, "").toLowerCase();
+      return COLOR_WORDS.includes(clean);
+    });
+    if (detailIndex > 0) {
+      return {
+        model: words.slice(0, detailIndex).join(" "),
+        detail: words.slice(detailIndex).join(" "),
+      };
+    }
+    return { model: text.trim(), detail: "" };
+  }
+
+  const split = splitModelAndDetail(cleaned);
+  const model = split.model.trim();
+  if (!model) return null;
+  const detail = split.detail || color;
+  const useInlineDetail = Boolean(
+    detail && /(with|design|graphic|hood|livery|stripe|decal)/i.test(detail)
+  );
+  const titleParts = ["Kaido House", model];
+  if (useInlineDetail && detail) {
+    titleParts.push(detail);
+  } else if (version) {
+    titleParts.push(version);
+  }
+  const title =
+    detail && !useInlineDetail
+      ? `${titleParts.join(" ")} (${detail})`
+      : titleParts.join(" ");
+
+  return {
+    title,
+    brand: "Kaido House",
+    model,
+    variation: detail || (version ? version : undefined),
+  };
+}
+
 export function normalizeBrandAlias(raw: string | null | undefined): string | null {
   const value = String(raw ?? "").trim();
   if (!value) return null;
@@ -113,6 +228,14 @@ export function normalizeTitleBrandAliases(titleRaw: string): string {
       const pattern = new RegExp(`\\b${aliasPattern(alias)}\\b`, "ig");
       out = out.replace(pattern, b.canonical);
     }
+  }
+
+  if (/kaido house/i.test(out)) {
+    out = out
+      .replace(/(\bKaido\s+House\b)(?:\s+House\b)+/gi, "$1")
+      .replace(/(?:\bKaido\s+House\b\s*){2,}/gi, "Kaido House ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
   }
 
   return out;

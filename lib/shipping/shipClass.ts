@@ -8,6 +8,7 @@ export function shipClassFromBrand(rawBrand: string | null | undefined): ShipCla
   if (lower.includes("mini gt")) return "MINI_GT";
   if (lower.includes("kaido")) return "KAIDO";
   if (lower.includes("pop race") || lower.includes("poprace")) return "POPRACE";
+  if (lower.includes("diorama")) return "LALAMOVE";
 
   return "ACRYLIC_TRUE_SCALE";
 }

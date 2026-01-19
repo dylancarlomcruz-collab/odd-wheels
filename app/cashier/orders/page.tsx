@@ -6,6 +6,7 @@ import { useAllOrders } from "@/hooks/useAllOrders";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { formatConditionLabel } from "@/lib/conditions";
 
 function parseJsonMaybe(v: any) {
   if (!v) return null;
@@ -213,7 +214,10 @@ export default function CashierOrdersPage() {
                           {items.map((it: any, idx: number) => {
                             const thumb = getItemThumb(it);
                             const title = getItemTitle(it);
-                            const condition = String(it?.condition ?? it?.product_variant?.condition ?? "").toUpperCase();
+                            const condition = formatConditionLabel(
+                              it?.condition ?? it?.product_variant?.condition,
+                              { upper: true }
+                            );
                             const notes = String(it?.issue_notes ?? it?.product_variant?.issue_notes ?? "").trim();
                             const price = getItemPrice(it);
                             const qty = Number(it?.qty ?? 1);

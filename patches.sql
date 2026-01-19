@@ -641,11 +641,28 @@ alter table public.product_variants
   add column if not exists public_notes text null;
 
 alter table public.product_variants
+  drop constraint if exists product_variants_condition_check;
+
+alter table public.product_variants
+  add constraint product_variants_condition_check
+  check (
+    condition in (
+      'sealed',
+      'unsealed',
+      'with_issues',
+      'diorama',
+      'blistered',
+      'sealed_blister',
+      'unsealed_blister'
+    )
+  );
+
+alter table public.product_variants
   drop constraint if exists product_variants_ship_class_check;
 
 alter table public.product_variants
   add constraint product_variants_ship_class_check
-  check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE'));
+  check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','BLISTER','LALAMOVE'));
 
 create table if not exists public.barcode_logs (
   id uuid primary key default gen_random_uuid(),

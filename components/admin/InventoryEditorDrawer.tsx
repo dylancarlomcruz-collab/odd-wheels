@@ -10,6 +10,12 @@ import { Badge } from "@/components/ui/Badge";
 import { supabase } from "@/lib/supabase/browser";
 import { toast } from "@/components/ui/toast";
 import { shipClassFromBrand } from "@/lib/shipping/shipClass";
+import {
+  conditionSortOrder,
+  formatConditionLabel,
+  isDioramaCondition,
+  isBlisterCondition,
+} from "@/lib/conditions";
 import type { AdminProduct, AdminVariant } from "./InventoryBrowseGrid";
 
 type VariantDraft = AdminVariant & {
@@ -25,11 +31,22 @@ type InventoryEditorDrawerProps = {
 
 const CONDITION_OPTIONS: Array<VariantDraft["condition"]> = [
   "sealed",
+  "diorama",
+  "sealed_blister",
+  "unsealed_blister",
+  "blistered",
   "unsealed",
   "with_issues",
 ];
 
-const SHIP_OPTIONS = ["MINI_GT", "KAIDO", "POPRACE", "ACRYLIC_TRUE_SCALE"];
+const SHIP_OPTIONS = [
+  "MINI_GT",
+  "KAIDO",
+  "POPRACE",
+  "ACRYLIC_TRUE_SCALE",
+  "BLISTER",
+  "LALAMOVE",
+];
 
 function safeNumber(v: any): number | null {
   if (v === "" || v === null || typeof v === "undefined") return null;
@@ -250,17 +267,39 @@ export function InventoryEditorDrawer({
   function addVariant() {
     const baseList = variants.filter((v) => !v._delete && !v._isNew);
     const base = [...baseList].reverse().find((v) => v) ?? null;
+    const hasDiorama = baseList.some((v) => v.condition === "diorama");
     const hasSealed = baseList.some((v) => v.condition === "sealed");
     const hasUnsealed = baseList.some((v) => v.condition === "unsealed");
+    const hasSealedBlister = baseList.some(
+      (v) => v.condition === "sealed_blister"
+    );
+    const hasUnsealedBlister = baseList.some(
+      (v) => v.condition === "unsealed_blister"
+    );
+    const hasBlistered = baseList.some((v) => v.condition === "blistered");
     const nextCondition: VariantDraft["condition"] =
-      hasSealed && hasUnsealed
-        ? "with_issues"
-        : hasSealed
-          ? "unsealed"
-          : hasUnsealed
-            ? "sealed"
-            : "unsealed";
-    const nextShipClass = shipClassFromBrand(brand);
+      hasDiorama
+        ? "diorama"
+        : hasSealed && hasUnsealed
+          ? "with_issues"
+          : hasSealed
+            ? "unsealed"
+            : hasUnsealed
+              ? "sealed"
+              : hasSealedBlister && hasUnsealedBlister
+                ? "with_issues"
+                : hasSealedBlister
+                  ? "unsealed_blister"
+                  : hasUnsealedBlister
+                    ? "sealed_blister"
+                    : hasBlistered
+                      ? "blistered"
+                      : "unsealed";
+    const nextShipClass = isDioramaCondition(nextCondition)
+      ? "LALAMOVE"
+      : isBlisterCondition(nextCondition)
+        ? "BLISTER"
+        : shipClassFromBrand(brand);
     setVariants((prev) => [
         ...prev,
       {
@@ -309,7 +348,7 @@ export function InventoryEditorDrawer({
   async function recordGeneratedBarcode(barcode: string, condition: string) {
     const detail = [brand, model, variation].filter(Boolean).join(" ");
     const conditionLabel = condition
-      ? `Condition: ${condition.toUpperCase()}`
+      ? `Condition: ${formatConditionLabel(condition, { upper: true })}`
       : "";
     const description = [detail, conditionLabel].filter(Boolean).join(" • ");
 
@@ -360,7 +399,9 @@ export function InventoryEditorDrawer({
                 cost: safeNumber(v.cost),
                 price: safeNumber(v.price) ?? 0,
                 qty: Math.max(0, Math.trunc(safeNumber(v.qty) ?? 0)),
-                ship_class: v.ship_class || null,
+                ship_class: isDioramaCondition(v.condition)
+                  ? "LALAMOVE"
+                  : v.ship_class || null,
                 public_notes: v.public_notes || null,
                 issue_notes:
                   v.condition === "with_issues"
@@ -403,7 +444,9 @@ export function InventoryEditorDrawer({
             cost: safeNumber(v.cost),
             price: safeNumber(v.price) ?? 0,
             qty: Math.max(0, Math.trunc(safeNumber(v.qty) ?? 0)),
-            ship_class: v.ship_class || null,
+            ship_class: isDioramaCondition(v.condition)
+              ? "LALAMOVE"
+              : v.ship_class || null,
             public_notes: v.public_notes || null,
             issue_notes:
               v.condition === "with_issues" ? v.issue_notes || null : null,
@@ -594,16 +637,36 @@ export function InventoryEditorDrawer({
                           <Select
                             value={v.condition}
                             onChange={(e) =>
-                              updateVariant(v.id, {
-                                condition: e.target.value as VariantDraft["condition"],
-                              })
-                            }
+                              {
+                                const nextCondition = e.target
+                                  .value as VariantDraft["condition"];
+                                const nextShipClass =
+                                  isDioramaCondition(nextCondition)
+                                    ? "LALAMOVE"
+                                    : isBlisterCondition(nextCondition)
+                                      ? "BLISTER"
+                                      : v.ship_class === "BLISTER" ||
+                                          v.ship_class === "LALAMOVE"
+                                        ? shipClassFromBrand(brand)
+                                        : v.ship_class;
+                                updateVariant(v.id, {
+                                  condition: nextCondition,
+                                  ship_class: nextShipClass ?? null,
+                                });
+                              }}
                           >
-                            {CONDITION_OPTIONS.map((opt) => (
-                              <option key={opt} value={opt}>
-                                {opt.toUpperCase()}
-                              </option>
-                            ))}
+                            {CONDITION_OPTIONS
+                              .slice()
+                              .sort(
+                                (a, b) =>
+                                  conditionSortOrder(a) -
+                                  conditionSortOrder(b)
+                              )
+                              .map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {formatConditionLabel(opt)}
+                                </option>
+                              ))}
                           </Select>
                         </div>
                         <Button variant="ghost" onClick={() => updateVariant(v.id, { _delete: true })}>

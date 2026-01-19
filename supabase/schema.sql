@@ -153,12 +153,12 @@ create table if not exists public.products (
 create table if not exists public.product_variants (
   id uuid primary key default gen_random_uuid(),
   product_id uuid not null references public.products(id) on delete cascade,
-  condition text not null check (condition in ('sealed','unsealed','with_issues')),
+  condition text not null check (condition in ('sealed','unsealed','with_issues','diorama','blistered','sealed_blister','unsealed_blister')),
   issue_notes text,
   cost numeric,
   price numeric not null,
   qty int not null default 0 check (qty >= 0),
-  ship_class text default 'MINI_GT' check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE')),
+  ship_class text default 'MINI_GT' check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','BLISTER','LALAMOVE')),
   created_at timestamptz not null default now()
 );
 

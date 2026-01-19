@@ -13,6 +13,7 @@ import { recommendSimilar } from "@/lib/recommendations";
 import { useBuyerProducts } from "@/hooks/useBuyerProducts";
 import { toast } from "@/components/ui/toast";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { formatConditionLabel } from "@/lib/conditions";
 
 export default function ProductDetailPage() {
   const params = useParams<{ id: string }>();
@@ -116,7 +117,7 @@ export default function ProductDetailPage() {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <Badge className="border-accent-500/30 text-accent-700 dark:text-accent-200">
-                          {v.condition.toUpperCase()}
+                          {formatConditionLabel(v.condition, { upper: true })}
                         </Badge>
                         <div className="text-white/70 text-sm">Stock: {v.qty}</div>
                       </div>
@@ -141,7 +142,7 @@ export default function ProductDetailPage() {
                             setIssueIndex(0);
                             setIssueViewer({
                               images: v.issue_photo_urls ?? [],
-                              condition: v.condition.toUpperCase(),
+                              condition: formatConditionLabel(v.condition, { upper: true }),
                             });
                           }}
                         >
@@ -163,7 +164,7 @@ export default function ProductDetailPage() {
                               const baseToast = {
                                 title: product.title,
                                 image_url: heroImg,
-                                variant: v.condition.toUpperCase(),
+                                variant: formatConditionLabel(v.condition, { upper: true }),
                                 price: Number(v.price ?? 0),
                                 action: { label: "View cart", href: "/cart" },
                               };

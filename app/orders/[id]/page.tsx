@@ -8,6 +8,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { formatPHP } from "@/lib/money";
+import { formatConditionLabel } from "@/lib/conditions";
 import { supabase } from "@/lib/supabase/browser";
 import Link from "next/link";
 import {
@@ -940,7 +941,7 @@ function OrderDetailContent() {
                         ) : null}
                         </div>
                         <div className="text-xs text-white/60">
-                          {String(it.condition ?? "").toUpperCase()} x {qty}
+                          {formatConditionLabel(it.condition, { upper: true })} x {qty}
                         </div>
                         {String(it.condition) === "with_issues" &&
                         it.issue_notes ? (

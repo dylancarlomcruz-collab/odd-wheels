@@ -8,7 +8,6 @@ import type { AdminProduct } from "@/components/admin/InventoryBrowseGrid";
 
 export default function AdminInventoryBrowsePage() {
   const [selected, setSelected] = React.useState<AdminProduct | null>(null);
-  const [refreshToken, setRefreshToken] = React.useState(0);
 
   return (
     <div className="space-y-6">
@@ -23,7 +22,6 @@ export default function AdminInventoryBrowsePage() {
         <CardBody>
           <InventoryBrowseGrid
             onSelect={(p) => setSelected(p)}
-            refreshToken={refreshToken}
             suspendScanCapture={Boolean(selected)}
           />
         </CardBody>
@@ -32,7 +30,7 @@ export default function AdminInventoryBrowsePage() {
       <InventoryEditorDrawer
         product={selected}
         onClose={() => setSelected(null)}
-        onSaved={() => setRefreshToken((v) => v + 1)}
+        onSaved={() => {}}
       />
     </div>
   );

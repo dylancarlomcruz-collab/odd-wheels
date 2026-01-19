@@ -3,7 +3,14 @@ import { JNT_CAPACITY, JNT_RATES, LBC_CAPACITY, LBC_RATES, type JntPouch, type L
 export type ShipCounts = Record<ShipClass, number>;
 
 export function emptyShipCounts(): ShipCounts {
-  return { MINI_GT: 0, KAIDO: 0, POPRACE: 0, ACRYLIC_TRUE_SCALE: 0 };
+  return {
+    MINI_GT: 0,
+    KAIDO: 0,
+    POPRACE: 0,
+    ACRYLIC_TRUE_SCALE: 0,
+    BLISTER: 0,
+    LALAMOVE: 0,
+  };
 }
 
 export function fitsCapacity(counts: ShipCounts, capacity: Record<ShipClass, number>): boolean {

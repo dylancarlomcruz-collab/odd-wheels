@@ -10,29 +10,33 @@ export async function GET(req: Request) {
 
   const apiKey = process.env.RAPIDAPI_KEY;
   const endpoint = process.env.RAPIDAPI_BARCODE_ENDPOINT;
+  const apiHost = process.env.RAPIDAPI_HOST;
 
   // If not configured, return a helpful stub response.
-  if (!apiKey || !endpoint) {
+  if (!apiKey || !endpoint || !apiHost) {
     return NextResponse.json({
       ok: false,
-      error: "Barcode API not configured. Add RAPIDAPI_KEY and RAPIDAPI_BARCODE_ENDPOINT to .env.local",
+      error:
+        "Barcode API not configured. Add RAPIDAPI_KEY, RAPIDAPI_HOST, and RAPIDAPI_BARCODE_ENDPOINT to .env.local",
       barcode,
       hint: {
-        expected: "RAPIDAPI_BARCODE_ENDPOINT should be a full URL. Example: https://example-rapidapi.com/lookup?code={BARCODE}"
+        expected:
+          "RAPIDAPI_BARCODE_ENDPOINT should be a full URL. Example: https://barcodes-lookup.p.rapidapi.com/"
       }
     }, { status: 200 });
   }
 
   // Replace token in endpoint if present.
-  const url = endpoint.includes("{BARCODE}")
+  const baseUrl = endpoint.includes("{BARCODE}")
     ? endpoint.replace("{BARCODE}", encodeURIComponent(barcode))
-    : `${endpoint}${endpoint.includes("?") ? "&" : "?"}barcode=${encodeURIComponent(barcode)}`;
+    : `${endpoint}${endpoint.includes("?") ? "&" : "?"}query=${encodeURIComponent(barcode)}`;
+  const url = baseUrl;
 
   try {
     const r = await fetch(url, {
       headers: {
         "X-RapidAPI-Key": apiKey,
-        "X-RapidAPI-Host": new URL(url).host
+        "X-RapidAPI-Host": apiHost,
       },
       // Avoid caching stale metadata
       cache: "no-store",
@@ -40,7 +44,16 @@ export async function GET(req: Request) {
 
     if (!r.ok) {
       const text = await r.text();
-      return NextResponse.json({ ok: false, error: `Barcode API error: ${r.status}`, details: text }, { status: 200 });
+      const message =
+        r.status === 404 ? "No barcode match." : `Barcode API error: ${r.status}`;
+      return NextResponse.json(
+        {
+          ok: false,
+          error: message,
+          details: text,
+        },
+        { status: 200 }
+      );
     }
 
     const data = await r.json();
@@ -58,16 +71,38 @@ export async function GET(req: Request) {
 }
 
 function normalizeBarcodeResponse(raw: any) {
-  // Best-effort normalization. Customize after choosing your RapidAPI endpoint.
-  const title = raw?.title ?? raw?.product?.title ?? raw?.product_name ?? "";
-  const brand = raw?.brand ?? raw?.product?.brand ?? raw?.manufacturer ?? "";
-  const model = raw?.model ?? raw?.product?.model ?? "";
-  const colorStyle = raw?.color ?? raw?.style ?? raw?.product?.color ?? raw?.product?.style ?? "";
+  // Best-effort normalization. Customize after choosing your barcode API endpoint.
+  const product =
+    raw?.products?.[0] ??
+    raw?.product ??
+    raw?.items?.[0] ??
+    raw?.data?.[0] ??
+    raw;
+  const title =
+    product?.title ??
+    product?.product_name ??
+    raw?.title ??
+    raw?.product_name ??
+    "";
+  const brand =
+    product?.brand ??
+    product?.manufacturer ??
+    raw?.brand ??
+    raw?.manufacturer ??
+    "";
+  const model = product?.model ?? raw?.model ?? "";
+  const colorStyle =
+    product?.color ??
+    product?.style ??
+    raw?.color ??
+    raw?.style ??
+    "";
   const images: string[] =
+    product?.images ??
     raw?.images ??
-    raw?.product?.images ??
+    product?.image_urls ??
     raw?.image_urls ??
-    (raw?.image ? [raw.image] : []);
+    (product?.image ? [product.image] : raw?.image ? [raw.image] : []);
 
   return {
     title,

@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { BrandTabs } from "@/components/BrandTabs";
 import { formatPHP } from "@/lib/money";
+import { conditionSortOrder, formatConditionLabel } from "@/lib/conditions";
 
 export type TradePick = {
   product_id: string;
@@ -19,7 +20,14 @@ export type TradePick = {
 
 type TradeVariant = {
   id: string;
-  condition: "sealed" | "unsealed" | "with_issues";
+  condition:
+    | "sealed"
+    | "unsealed"
+    | "with_issues"
+    | "diorama"
+    | "blistered"
+    | "sealed_blister"
+    | "unsealed_blister";
   barcode: string | null;
   price: number | null;
   qty: number | null;
@@ -61,13 +69,11 @@ function derivedTotals(p: TradeProduct) {
 }
 
 function sortVariants(variants: TradeVariant[]) {
-  const order = (c: TradeVariant["condition"]) =>
-    c === "sealed" ? 0 : c === "unsealed" ? 1 : 2;
   return variants
     .slice()
     .sort(
       (a, b) =>
-        order(a.condition) - order(b.condition) ||
+        conditionSortOrder(a.condition) - conditionSortOrder(b.condition) ||
         Number(a.price ?? 0) - Number(b.price ?? 0)
     );
 }
@@ -83,9 +89,7 @@ function buildVariantQtyMap(rows: TradeProduct[]) {
 }
 
 function conditionLabel(value: TradeVariant["condition"]) {
-  if (value === "sealed") return "Sealed";
-  if (value === "unsealed") return "Unsealed";
-  return "With issues";
+  return formatConditionLabel(value);
 }
 
 function TradeProductCard({
@@ -109,9 +113,14 @@ function TradeProductCard({
   }, [product.product_variants]);
   const displayVariants = React.useMemo<TradeVariant[]>(() => {
     const sealed = variants.find((v) => v.condition === "sealed");
+    const sealedBlister = variants.find((v) => v.condition === "sealed_blister");
+    const unsealedBlister = variants.find(
+      (v) => v.condition === "unsealed_blister"
+    );
+    const blistered = variants.find((v) => v.condition === "blistered");
     const unsealed = variants.find((v) => v.condition === "unsealed");
-    if (sealed || unsealed) {
-      return [sealed, unsealed].filter(
+    if (sealed || unsealed || sealedBlister || unsealedBlister || blistered) {
+      return [sealed, sealedBlister, unsealed, unsealedBlister, blistered].filter(
         (v): v is TradeVariant => Boolean(v)
       );
     }
@@ -278,7 +287,7 @@ function PicksPanel({
                 <div className="min-w-0 flex-1">
                   <div className="font-medium truncate">{p.snapshot_title}</div>
                   <div className="text-xs text-white/60">
-                    {p.snapshot_condition.toUpperCase()} - {formatPHP(p.snapshot_price)}
+                    {formatConditionLabel(p.snapshot_condition, { upper: true })} - {formatPHP(p.snapshot_price)}
                   </div>
                   {over ? (
                     <div className="text-xs text-yellow-200">Only {available} left</div>
