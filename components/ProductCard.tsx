@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { recordRecentView } from "@/lib/recentViews";
 import { normalizeSearchTerm } from "@/lib/search";
 
@@ -76,6 +76,10 @@ export default function ProductCard({
   const [activeIndex, setActiveIndex] = React.useState(0);
   const [issueOpen, setIssueOpen] = React.useState(false);
   const [issueIndex, setIssueIndex] = React.useState(0);
+  const touchStartX = React.useRef<number | null>(null);
+  const touchStartY = React.useRef<number | null>(null);
+  const issueTouchStartX = React.useRef<number | null>(null);
+  const issueTouchStartY = React.useRef<number | null>(null);
 
   const selected = React.useMemo(
     () =>
@@ -231,6 +235,34 @@ export default function ProductCard({
     setIssueIndex((prev) => (prev + delta + issueImages.length) % issueImages.length);
   }
 
+  function handleTouchStart(
+    event: React.TouchEvent,
+    startX: React.MutableRefObject<number | null>,
+    startY: React.MutableRefObject<number | null>
+  ) {
+    const touch = event.touches[0];
+    startX.current = touch?.clientX ?? null;
+    startY.current = touch?.clientY ?? null;
+  }
+
+  function handleTouchEnd(
+    event: React.TouchEvent,
+    startX: React.MutableRefObject<number | null>,
+    startY: React.MutableRefObject<number | null>,
+    onSwipe: (delta: number) => void
+  ) {
+    if (startX.current === null || startY.current === null) return;
+    const touch = event.changedTouches[0];
+    const endX = touch?.clientX ?? 0;
+    const endY = touch?.clientY ?? 0;
+    const deltaX = endX - startX.current;
+    const deltaY = endY - startY.current;
+    startX.current = null;
+    startY.current = null;
+    if (Math.abs(deltaX) < 45 || Math.abs(deltaX) < Math.abs(deltaY)) return;
+    onSwipe(deltaX > 0 ? -1 : 1);
+  }
+
   return (
     <>
       <div className="rounded-xl sm:rounded-2xl overflow-hidden bg-bg-900/70 dark:bg-paper/5 border border-white/20 dark:border-white/10 shadow-sm">
@@ -367,10 +399,12 @@ export default function ProductCard({
             <div className="max-h-[85vh] overflow-y-auto sm:max-h-[90vh]">
               <div className="sticky top-0 z-10 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <div className="text-xs text-white/50">Item preview</div>
-                    <div className="text-lg font-semibold">{product.title}</div>
-                    <div className="text-sm text-white/60">
+                    <div className="text-base font-semibold leading-snug line-clamp-2 sm:text-lg">
+                      {product.title}
+                    </div>
+                    <div className="text-xs text-white/60 sm:text-sm">
                       {product.brand ?? "-"}
                       {product.model ? ` - ${product.model}` : ""}
                     </div>
@@ -387,8 +421,16 @@ export default function ProductCard({
               </div>
 
               <div className="p-4 sm:p-5">
+                <div className="mb-3 flex items-center gap-2 text-[11px] text-white/50 sm:hidden">
+                  <ChevronDown className="h-4 w-4 text-white/40" />
+                  <span>Scroll down for details and suggestions</span>
+                </div>
                 <div className="grid gap-4 md:grid-cols-[1.2fr_1fr]">
-              <div className="relative rounded-xl border border-white/10 bg-bg-950/50 p-3">
+              <div
+                className="group relative rounded-xl border border-white/10 bg-bg-950/50 p-3"
+                onTouchStart={(event) => handleTouchStart(event, touchStartX, touchStartY)}
+                onTouchEnd={(event) => handleTouchEnd(event, touchStartX, touchStartY, step)}
+              >
                 {activeImage ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
@@ -406,7 +448,7 @@ export default function ProductCard({
                     <button
                       type="button"
                       onClick={() => step(-1)}
-                      className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white/90 hover:bg-black/80"
+                      className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white/90 opacity-30 transition hover:opacity-100 focus-visible:opacity-100 active:opacity-100"
                       aria-label="Previous photo"
                     >
                       <ChevronLeft className="h-4 w-4" />
@@ -414,7 +456,7 @@ export default function ProductCard({
                     <button
                       type="button"
                       onClick={() => step(1)}
-                      className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white/90 hover:bg-black/80"
+                      className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white/90 opacity-30 transition hover:opacity-100 focus-visible:opacity-100 active:opacity-100"
                       aria-label="Next photo"
                     >
                       <ChevronRight className="h-4 w-4" />
@@ -542,10 +584,12 @@ export default function ProductCard({
             <div className="max-h-[85vh] overflow-y-auto sm:max-h-[90vh]">
               <div className="sticky top-0 z-10 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <div className="text-xs text-white/50">Issue photos</div>
-                    <div className="text-lg font-semibold">{product.title}</div>
-                    <div className="text-sm text-white/60">
+                    <div className="text-base font-semibold leading-snug line-clamp-2 sm:text-lg">
+                      {product.title}
+                    </div>
+                    <div className="text-xs text-white/60 sm:text-sm">
                       {selected?.condition ?? "-"}
                     </div>
                   </div>
@@ -561,7 +605,15 @@ export default function ProductCard({
               </div>
 
               <div className="p-4 sm:p-5">
-                <div className="relative rounded-xl border border-white/10 bg-bg-950/50 p-3">
+                <div
+                  className="group relative rounded-xl border border-white/10 bg-bg-950/50 p-3"
+                  onTouchStart={(event) =>
+                    handleTouchStart(event, issueTouchStartX, issueTouchStartY)
+                  }
+                  onTouchEnd={(event) =>
+                    handleTouchEnd(event, issueTouchStartX, issueTouchStartY, stepIssue)
+                  }
+                >
                   {activeIssueImage ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
@@ -579,18 +631,18 @@ export default function ProductCard({
                       <button
                         type="button"
                         onClick={() => stepIssue(-1)}
-                        className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white/90 hover:bg-black/80"
-                        aria-label="Previous issue photo"
-                      >
-                        <ChevronLeft className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => stepIssue(1)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white/90 hover:bg-black/80"
-                        aria-label="Next issue photo"
-                      >
-                        <ChevronRight className="h-4 w-4" />
+                      className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white/90 opacity-30 transition hover:opacity-100 focus-visible:opacity-100 active:opacity-100"
+                      aria-label="Previous issue photo"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => stepIssue(1)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white/90 opacity-30 transition hover:opacity-100 focus-visible:opacity-100 active:opacity-100"
+                      aria-label="Next issue photo"
+                    >
+                      <ChevronRight className="h-4 w-4" />
                       </button>
                     </>
                   ) : null}
