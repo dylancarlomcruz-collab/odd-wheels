@@ -17,6 +17,7 @@ const LIMITED_SECTION_COUNTS: Record<string, number> = {
   "for-you": 4,
   because: 4,
 };
+const RECENT_REFRESH_MS = 1000 * 60 * 30;
 const CANONICAL_BRAND_LABELS: Record<string, string> = {
   minigt: "Mini GT",
   kaidohouse: "Kaido House",
@@ -84,6 +85,7 @@ export default function ShopPageClient() {
   const [showBackToTop, setShowBackToTop] = React.useState(false);
   const resultsRef = React.useRef<HTMLDivElement | null>(null);
   const lastScrolledQuery = React.useRef<string>("");
+  const lastRecentRefresh = React.useRef<number>(0);
 
   React.useEffect(() => {
     let mounted = true;
@@ -121,6 +123,7 @@ export default function ShopPageClient() {
   React.useEffect(() => {
     setRecentEntries(readRecentViewEntries());
     setLastSearch(getLastSearchTerm());
+    lastRecentRefresh.current = Date.now();
   }, []);
 
   React.useEffect(() => {
@@ -517,6 +520,9 @@ export default function ShopPageClient() {
           // ignore if not authenticated
         }
       );
+    const now = Date.now();
+    if (now - lastRecentRefresh.current < RECENT_REFRESH_MS) return;
+    lastRecentRefresh.current = now;
     setRecentEntries(readRecentViewEntries());
   }
 
