@@ -44,6 +44,15 @@ function formatName(row: SheetRow) {
   return normalizeTitleBrandAliases(title).trim() || "Untitled";
 }
 
+function normalizeSheetRows(data: any[]): SheetRow[] {
+  return (data ?? []).map((row) => ({
+    ...row,
+    product: Array.isArray(row.product)
+      ? row.product[0] ?? null
+      : row.product ?? null,
+  }));
+}
+
 const DROP_TOKENS = new Set([
   "SCALE",
   "DIECAST",
@@ -221,7 +230,7 @@ export default function InventorySheetPage() {
       return;
     }
 
-    const batch = (data as SheetRow[]) ?? [];
+    const batch = normalizeSheetRows((data as any[]) ?? []);
     setRows((prev) => (replace ? batch : [...prev, ...batch]));
     setPage(nextPage);
     setHasMore(batch.length === PAGE_SIZE);
@@ -265,7 +274,7 @@ export default function InventorySheetPage() {
         .range(from, to);
 
       if (qErr) throw new Error(qErr.message || "Failed to export inventory.");
-      const batch = (data as SheetRow[]) ?? [];
+      const batch = normalizeSheetRows((data as any[]) ?? []);
       all = [...all, ...batch];
       if (batch.length < EXPORT_PAGE_SIZE) break;
       pageIndex += 1;
