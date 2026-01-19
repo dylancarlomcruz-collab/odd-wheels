@@ -161,7 +161,10 @@ React.useEffect(() => {
       if (productId) {
         supabase
           .rpc("increment_product_add_to_cart", { p_product_id: productId })
-          .catch((err) => console.error("Failed to log add-to-cart", err));
+          .then(
+            () => undefined,
+            (err) => console.error("Failed to log add-to-cart", err)
+          );
       }
       emitCartUpdated(instanceId.current);
       return { available, desiredQty, nextQty, prevQty, capped };
