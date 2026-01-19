@@ -448,6 +448,18 @@ export default function ProductCard({
                     <button
                       type="button"
                       onClick={() => step(-1)}
+                      className="absolute inset-y-0 left-0 w-1/2"
+                      aria-label="Previous photo"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => step(1)}
+                      className="absolute inset-y-0 right-0 w-1/2"
+                      aria-label="Next photo"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => step(-1)}
                       className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white/90 opacity-30 transition hover:opacity-100 focus-visible:opacity-100 active:opacity-100"
                       aria-label="Previous photo"
                     >
@@ -631,18 +643,30 @@ export default function ProductCard({
                       <button
                         type="button"
                         onClick={() => stepIssue(-1)}
-                      className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white/90 opacity-30 transition hover:opacity-100 focus-visible:opacity-100 active:opacity-100"
-                      aria-label="Previous issue photo"
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => stepIssue(1)}
-                      className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white/90 opacity-30 transition hover:opacity-100 focus-visible:opacity-100 active:opacity-100"
-                      aria-label="Next issue photo"
-                    >
-                      <ChevronRight className="h-4 w-4" />
+                        className="absolute inset-y-0 left-0 w-1/2"
+                        aria-label="Previous issue photo"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => stepIssue(1)}
+                        className="absolute inset-y-0 right-0 w-1/2"
+                        aria-label="Next issue photo"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => stepIssue(-1)}
+                        className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white/90 opacity-30 transition hover:opacity-100 focus-visible:opacity-100 active:opacity-100"
+                        aria-label="Previous issue photo"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => stepIssue(1)}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white/90 opacity-30 transition hover:opacity-100 focus-visible:opacity-100 active:opacity-100"
+                        aria-label="Next issue photo"
+                      >
+                        <ChevronRight className="h-4 w-4" />
                       </button>
                     </>
                   ) : null}
