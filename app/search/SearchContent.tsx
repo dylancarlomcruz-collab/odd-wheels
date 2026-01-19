@@ -363,6 +363,7 @@ export default function SearchContent() {
                     key={p.key}
                     product={p}
                     onAddToCart={(opt) => onAdd(p, opt)}
+                    onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
                     onProductClick={(item) => recordClick(item.key)}
                   />
                 ))}
@@ -379,6 +380,7 @@ export default function SearchContent() {
                     key={p.key}
                     product={p}
                     onAddToCart={(opt) => onAdd(p, opt)}
+                    onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
                     onProductClick={(item) => recordClick(item.key)}
                   />
                 ))}
@@ -395,6 +397,7 @@ export default function SearchContent() {
                     key={p.key}
                     product={p}
                     onAddToCart={(opt) => onAdd(p, opt)}
+                    onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
                     onProductClick={(item) => recordClick(item.key)}
                   />
                 ))}
@@ -413,6 +416,7 @@ export default function SearchContent() {
               key={p.key}
               product={p}
               onAddToCart={(opt) => onAdd(p, opt)}
+              onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
               onProductClick={(item) => recordClick(item.key)}
             />
           ))}

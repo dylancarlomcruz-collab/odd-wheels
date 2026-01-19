@@ -379,6 +379,7 @@ function CartContent() {
                   key={item.key}
                   product={item}
                   onAddToCart={(opt) => onAddSuggestion(item, opt)}
+                  onRelatedAddToCart={(related, opt) => onAddSuggestion(related, opt)}
                   relatedPool={shopProducts}
                 />
               ))}

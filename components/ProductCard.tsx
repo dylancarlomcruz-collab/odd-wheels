@@ -60,12 +60,14 @@ function peso(n: number) {
 export default function ProductCard({
   product,
   onAddToCart,
+  onRelatedAddToCart,
   onProductClick,
   socialProof,
   relatedPool,
 }: {
   product: ShopProduct;
   onAddToCart: (option: ConditionOption) => void | Promise<void>;
+  onRelatedAddToCart?: (product: ShopProduct, option: ConditionOption) => void | Promise<void>;
   onProductClick?: (product: ShopProduct) => void | Promise<void>;
   socialProof?: SocialProof;
   relatedPool?: ShopProduct[] | null;
@@ -604,11 +606,22 @@ export default function ProductCard({
                       {relatedItems.map((item) => {
                         const image =
                           item.image_url ?? item.image_urls?.[0] ?? null;
+                        const defaultOption = item.options[0];
+                        const canAdd = Boolean(
+                          onRelatedAddToCart && defaultOption && defaultOption.qty > 0
+                        );
                         return (
-                          <button
+                          <div
                             key={item.key}
-                            type="button"
                             onClick={() => pushPreview(item)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                pushPreview(item);
+                              }
+                            }}
+                            role="button"
+                            tabIndex={0}
                             className="min-w-[160px] rounded-xl border border-white/10 bg-bg-950/40 p-2 hover:border-white/20 hover:bg-bg-950/60"
                             aria-label={`Preview ${item.title}`}
                           >
@@ -628,7 +641,26 @@ export default function ProductCard({
                             <div className="text-[11px] text-white/50">
                               {item.brand ?? "-"}
                             </div>
-                          </button>
+                            <div className="mt-2 flex items-center justify-between text-[11px]">
+                              <span className="text-price">
+                                {defaultOption ? peso(defaultOption.price) : "-"}
+                              </span>
+                              {canAdd ? (
+                                <button
+                                  type="button"
+                                  className="rounded-full border border-white/10 bg-black/50 px-2 py-0.5 text-[10px] text-white/80 hover:bg-black/70"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    if (defaultOption) {
+                                      onRelatedAddToCart?.(item, defaultOption);
+                                    }
+                                  }}
+                                >
+                                  Add to cart
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
                         );
                       })}
                     </div>
