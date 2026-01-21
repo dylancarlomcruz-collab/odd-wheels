@@ -105,6 +105,22 @@ function buildCopyPayload(o: any) {
   return [name, phone, addr].filter(Boolean).join("\n");
 }
 
+function cleanAddress(raw: any) {
+  if (!raw) return "";
+  const parsed = parseJsonMaybe(raw);
+  if (parsed && typeof parsed === "object") {
+    const candidate =
+      parsed.full_address ||
+      parsed.address ||
+      parsed.dropoff_address ||
+      parsed.location ||
+      parsed.branch ||
+      "";
+    return String(candidate ?? "").trim();
+  }
+  return String(raw).trim();
+}
+
 function getItemThumb(it: any): string | null {
   const urls = it?.product_variant?.product?.image_urls;
   if (Array.isArray(urls) && urls.length) return String(urls[0]);
@@ -177,8 +193,9 @@ function buildShippingSummary(o: any, details: Record<string, any>) {
     o.customer_name;
   const receiverPhone =
     details.receiver_phone || details.phone || o.customer_phone || o.contact;
-  const address =
-    details.full_address || details.dropoff_address || o.address || details.address;
+  const address = cleanAddress(
+    details.full_address || details.dropoff_address || o.address || details.address
+  );
   const branch =
     [details.branch_name || details.branch, details.branch_city]
       .filter(Boolean)
@@ -196,6 +213,15 @@ function buildShippingSummary(o: any, details: Record<string, any>) {
     { label: "Package", value: pack },
     { label: "Notes", value: notes },
   ].filter((row) => row.value);
+}
+
+function getCustomerName(o: any, details: Record<string, any>) {
+  return (
+    details.receiver_name ||
+    [details.first_name, details.last_name].filter(Boolean).join(" ") ||
+    o.customer_name ||
+    "Guest"
+  );
 }
 
 function pickShippingDays(notices: { title: string; body: string }[]) {
@@ -227,12 +253,22 @@ export default function CashierShipmentsPage() {
   >({});
   const [busyById, setBusyById] = React.useState<Record<string, boolean>>({});
   const [errorById, setErrorById] = React.useState<Record<string, string>>({});
+  const [activeCourier, setActiveCourier] = React.useState<string>("ALL");
+  const [scanOrderId, setScanOrderId] = React.useState<string | null>(null);
+  const [scanCourier, setScanCourier] = React.useState<string>("");
+  const [scanError, setScanError] = React.useState<string | null>(null);
+  const [scanSupported, setScanSupported] = React.useState(false);
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
 
   const shippingDays = React.useMemo(
     () => pickShippingDays(notices),
     [notices]
   );
   const shippingDaysLabel = shippingDays || "the posted shipping days";
+
+  React.useEffect(() => {
+    setScanSupported(typeof window !== "undefined" && "BarcodeDetector" in window);
+  }, []);
 
   React.useEffect(() => {
     if (!orders.length) return;
@@ -249,6 +285,68 @@ export default function CashierShipmentsPage() {
       return next;
     });
   }, [orders]);
+
+  React.useEffect(() => {
+    if (!scanOrderId || !scanSupported) return;
+    let stream: MediaStream | null = null;
+    let raf = 0;
+    let cancelled = false;
+    const orderId = scanOrderId;
+
+    const start = async () => {
+      try {
+        const BarcodeDetectorClass = (window as any).BarcodeDetector;
+        if (!BarcodeDetectorClass) {
+          setScanError("Camera scanning is not supported in this browser.");
+          return;
+        }
+        const detector = new BarcodeDetectorClass({
+          formats: ["code_128", "code_39", "ean_13", "ean_8", "upc_a", "upc_e", "qr_code"],
+        });
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+        });
+        if (!videoRef.current) return;
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+
+        const tick = async () => {
+          if (cancelled || !videoRef.current) return;
+          try {
+            const barcodes = await detector.detect(videoRef.current);
+            if (barcodes?.length) {
+              const raw = String(barcodes[0].rawValue ?? "").trim();
+              if (raw) {
+                onDraftChange(orderId, "tracking", raw);
+                await runRpc(orderId, "fn_mark_shipped", {
+                  p_order_id: orderId,
+                  p_courier: scanCourier,
+                  p_tracking_number: raw,
+                });
+                setScanOrderId(null);
+                setScanCourier("");
+                return;
+              }
+            }
+          } catch (err) {
+            setScanError("Unable to scan. Try again.");
+          }
+          raf = requestAnimationFrame(tick);
+        };
+        raf = requestAnimationFrame(tick);
+      } catch (err: any) {
+        setScanError(err?.message ?? "Camera access failed.");
+      }
+    };
+
+    start();
+
+    return () => {
+      cancelled = true;
+      if (raf) cancelAnimationFrame(raf);
+      if (stream) stream.getTracks().forEach((track) => track.stop());
+    };
+  }, [scanOrderId, scanSupported]);
 
   const paidOrders = React.useMemo(
     () =>
@@ -290,6 +388,44 @@ export default function CashierShipmentsPage() {
     [paidOrders, activeTab]
   );
 
+  const preparingOrders = React.useMemo(
+    () =>
+      paidOrders.filter(
+        (o) => normalizeShippingStatus(o.shipping_status) === "PREPARING TO SHIP"
+      ),
+    [paidOrders]
+  );
+
+  const courierGroups = React.useMemo(() => {
+    const grouped: Record<string, any[]> = {};
+    for (const o of preparingOrders) {
+      const draft = drafts[o.id] ?? { courier: "", tracking: "" };
+      const key = String(draft.courier || o.shipping_method || "Other").trim() || "Other";
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(o);
+    }
+    return grouped;
+  }, [preparingOrders, drafts]);
+
+  const courierTabs = React.useMemo(
+    () => ["ALL", ...Object.keys(courierGroups).sort()],
+    [courierGroups]
+  );
+
+  const bulkOrders =
+    activeTab === "PREPARING TO SHIP"
+      ? activeCourier === "ALL"
+        ? preparingOrders
+        : courierGroups[activeCourier] ?? []
+      : [];
+
+  React.useEffect(() => {
+    if (activeTab !== "PREPARING TO SHIP") return;
+    if (activeCourier !== "ALL" && !courierGroups[activeCourier]) {
+      setActiveCourier("ALL");
+    }
+  }, [activeTab, activeCourier, courierGroups]);
+
   async function runRpc(
     orderId: string,
     fn: string,
@@ -299,6 +435,31 @@ export default function CashierShipmentsPage() {
     setErrorById((cur) => ({ ...cur, [orderId]: "" }));
     try {
       const { error } = await supabase.rpc(fn, params);
+      if (error) throw error;
+      await reload();
+    } catch (err: any) {
+      setErrorById((cur) => ({
+        ...cur,
+        [orderId]: err?.message ?? "Action failed.",
+      }));
+    } finally {
+      setBusyById((cur) => ({ ...cur, [orderId]: false }));
+    }
+  }
+
+  async function undoShipped(orderId: string) {
+    setBusyById((cur) => ({ ...cur, [orderId]: true }));
+    setErrorById((cur) => ({ ...cur, [orderId]: "" }));
+    try {
+      const { error } = await supabase
+        .from("orders")
+        .update({
+          shipping_status: "PREPARING TO SHIP",
+          tracking_number: null,
+          courier: null,
+          shipped_at: null,
+        })
+        .eq("id", orderId);
       if (error) throw error;
       await reload();
     } catch (err: any) {
@@ -340,7 +501,7 @@ export default function CashierShipmentsPage() {
           <Badge>{paidOrders.length}</Badge>
         </CardHeader>
 
-        <CardBody className="space-y-6">
+        <CardBody className="space-y-4">
           <div className="flex flex-wrap gap-2">
             {SHIPPING_TABS.map((tab) => {
               const active = activeTab === tab.key;
@@ -356,6 +517,110 @@ export default function CashierShipmentsPage() {
               );
             })}
           </div>
+
+          {activeTab === "PREPARING TO SHIP" ? (
+            <div className="rounded-2xl border border-white/10 bg-bg-900/20 p-3 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold">Bulk tracking entry</div>
+                  <div className="text-xs text-white/60">
+                    Type or scan a waybill number. Focus the field and scan with a barcode scanner, or use camera scan.
+                  </div>
+                </div>
+                <Badge>{bulkOrders.length}</Badge>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {courierTabs.map((tab) => {
+                  const active = activeCourier === tab;
+                  return (
+                    <Button
+                      key={tab}
+                      size="sm"
+                      variant={active ? "primary" : "ghost"}
+                      onClick={() => setActiveCourier(tab)}
+                    >
+                      {tab === "ALL" ? "All couriers" : tab}
+                      {tab === "ALL"
+                        ? ` (${preparingOrders.length})`
+                        : ` (${courierGroups[tab]?.length ?? 0})`}
+                    </Button>
+                  );
+                })}
+              </div>
+              {bulkOrders.length === 0 ? (
+                <div className="text-sm text-white/60">No orders ready for tracking.</div>
+              ) : (
+                <div className="space-y-2">
+                  {bulkOrders.map((o: any) => {
+                    const details = parseJsonMaybe(o.shipping_details) ?? {};
+                    const customerName = getCustomerName(o, details);
+                    const draft = drafts[o.id] ?? { courier: "", tracking: "" };
+                    const courierLabel = String(draft.courier || o.shipping_method || "").trim();
+                    const canMarkShipped = draft.tracking.trim().length > 0;
+                    const busy = Boolean(busyById[o.id]);
+
+                    return (
+                      <div key={o.id} className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium truncate">{customerName}</div>
+                            <div className="text-xs text-white/50">
+                              #{String(o.id).slice(0, 8)}
+                              {courierLabel ? ` - ${courierLabel}` : ""}
+                            </div>
+                          </div>
+                          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+                            <Input
+                              value={draft.tracking}
+                              placeholder="Waybill / tracking"
+                              onChange={(e) => onDraftChange(o.id, "tracking", e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && canMarkShipped && !busy) {
+                                  runRpc(o.id, "fn_mark_shipped", {
+                                    p_order_id: o.id,
+                                    p_courier: draft.courier || o.shipping_method,
+                                    p_tracking_number: draft.tracking.trim(),
+                                  });
+                                }
+                              }}
+                              className="h-8 w-full px-3 text-xs sm:w-56"
+                            />
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => {
+                                  setScanError(null);
+                                  setScanCourier(draft.courier || o.shipping_method || "");
+                                  setScanOrderId(o.id);
+                                }}
+                                disabled={busy}
+                              >
+                              Scan
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={() =>
+                                runRpc(o.id, "fn_mark_shipped", {
+                                  p_order_id: o.id,
+                                  p_courier: draft.courier || o.shipping_method,
+                                  p_tracking_number: draft.tracking.trim(),
+                                })
+                              }
+                              disabled={busy || !canMarkShipped}
+                            >
+                              Mark shipped
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : null}
 
           {loading ? (
             <div className="text-white/60">Loading...</div>
@@ -378,40 +643,58 @@ export default function CashierShipmentsPage() {
                 const busy = Boolean(busyById[o.id]);
                 const error = errorById[o.id];
                 const shippingSummary = buildShippingSummary(o, details);
+                const createdAt = new Date(o.created_at).toLocaleString("en-PH");
+                const customerName = getCustomerName(o, details);
+                const customerPhone =
+                  details.receiver_phone ||
+                  details.phone ||
+                  o.customer_phone ||
+                  o.contact ||
+                  "";
+                const customerAddress = cleanAddress(
+                  details.full_address || details.dropoff_address || o.address || details.address
+                );
+                const orderTotal = peso(Number(o.total ?? 0));
 
                 return (
-                  <div key={o.id} className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div key={o.id} className="rounded-2xl border border-white/10 bg-bg-900/30 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
-                        <div className="font-semibold">#{String(o.id).slice(0, 8)}</div>
-                        <div className="text-sm text-white/60">
-                          {new Date(o.created_at).toLocaleString("en-PH")}
-                        </div>
+                        <div className="text-base font-semibold">#{String(o.id).slice(0, 8)}</div>
+                        <div className="text-xs text-white/60">{createdAt}</div>
                       </div>
+                      <div className="text-right">
+                        <div className="text-xs text-white/50">Total</div>
+                        <div className="text-base font-semibold">{orderTotal}</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs">
                       <Badge className={shippingStatusBadge(shippingStatus)}>
                         {shippingStatus}
                       </Badge>
+                      <Badge>Channel: {o.channel}</Badge>
+                      <Badge>Status: {o.status}</Badge>
+                      <Badge>Payment: {o.payment_status}</Badge>
+                      <Badge>Shipping: {o.shipping_method}</Badge>
+                      {isCop ? (
+                        <Badge className="border-yellow-500/40 text-yellow-200">COP</Badge>
+                      ) : null}
                     </div>
 
-                    <div className="mt-2 text-sm text-white/70">
-                      Channel: <span className="text-white/90">{o.channel}</span> | Order status:{" "}
-                      <span className="text-white/90">{o.status}</span> | Payment:{" "}
-                      <span className="text-white/90">{o.payment_status}</span> | Shipping:{" "}
-                      <span className="text-white/90">{o.shipping_method}</span>
-                      {isCop ? <span className="ml-2 text-yellow-200">| COP (Pay at branch)</span> : null}
-                    </div>
-
-                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <div className="mt-4 grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
                       <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
-                        <div className="text-xs text-white/60">Customer</div>
-                        <div className="font-medium">{o.customer_name ?? "-"}</div>
-                        <div className="text-sm text-white/70">
-                          {(o.contact ?? o.customer_phone) ? <div>{o.contact ?? o.customer_phone}</div> : null}
-                          {o.address ? <div className="mt-1">{o.address}</div> : null}
-                        </div>
+                        <div className="text-[11px] uppercase tracking-wide text-white/50">Customer</div>
+                        <div className="mt-1 font-medium">{customerName}</div>
+                        {customerPhone ? (
+                          <div className="text-sm text-white/70">{customerPhone}</div>
+                        ) : null}
+                        {customerAddress ? (
+                          <div className="mt-1 text-xs text-white/60">{customerAddress}</div>
+                        ) : null}
                       </div>
                       <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
-                        <div className="text-xs text-white/60">Totals</div>
+                        <div className="text-[11px] uppercase tracking-wide text-white/50">Totals</div>
                         <div className="mt-1 text-sm text-white/80">
                           Subtotal: <span className="text-white">{peso(Number(o.subtotal ?? 0))}</span>
                         </div>
@@ -431,40 +714,33 @@ export default function CashierShipmentsPage() {
                     </div>
 
                     {shippingStatus === "PREPARING TO SHIP" ? (
-                      <div className="mt-4 rounded-xl border border-accent-500/30 bg-accent-500/10 p-3 text-sm text-white/80">
-                        Please be patient with the orders. It will be shipped on or before{" "}
-                        {shippingDaysLabel}. If you have any questions or want to add +₱50 rush fee,
-                        please notify the admin.
+                      <div className="mt-3 rounded-xl border border-accent-500/30 bg-accent-500/10 p-3 text-xs text-white/80">
+                        Ships on or before {shippingDaysLabel}. Add +P50 rush fee if requested.
                       </div>
                     ) : null}
 
                     {shippingStatus === "SHIPPED" ? (
-                      <div className="mt-4 rounded-xl border border-sky-500/30 bg-sky-500/10 p-3 text-sm text-white/80">
-                        Your orders are on the way. Please track your orders in the{" "}
-                        {o.shipping_method} app.
-                        <div className="mt-2 text-sm text-white/70">
-                          Courier:{" "}
-                          <span className="text-white/90">
-                            {o.courier ?? o.shipping_method ?? "-"}
-                          </span>{" "}
-                          | Tracking:{" "}
-                          <span className="text-white/90">{o.tracking_number ?? "-"}</span>
+                      <div className="mt-3 rounded-xl border border-sky-500/30 bg-sky-500/10 p-3 text-xs text-white/80">
+                        Shipment is on the way. Track in the {o.shipping_method} app.
+                        <div className="mt-2 text-xs text-white/70">
+                          Courier: <span className="text-white/90">{o.courier ?? o.shipping_method ?? "-"}</span> | Tracking: <span className="text-white/90">{o.tracking_number ?? "-"}</span>
                         </div>
                       </div>
                     ) : null}
 
                     {shippingStatus === "COMPLETED" ? (
-                      <div className="mt-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-white/80">
+                      <div className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-white/80">
                         Completed{ o.completed_at ? ` on ${new Date(o.completed_at).toLocaleString("en-PH")}` : "."}
                       </div>
                     ) : null}
 
                     {shippingStatus === "PREPARING TO SHIP" ? (
-                      <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <div className="mt-3 grid gap-2 md:grid-cols-[1fr_1.2fr]">
                         <Select
                           label="Courier"
                           value={draft.courier}
                           onChange={(e) => onDraftChange(o.id, "courier", e.target.value)}
+                          className="h-9 text-sm"
                         >
                           {buildCourierOptions(o.shipping_method).map((opt) => (
                             <option key={opt} value={opt}>
@@ -477,6 +753,7 @@ export default function CashierShipmentsPage() {
                           value={draft.tracking}
                           placeholder="Enter tracking number"
                           onChange={(e) => onDraftChange(o.id, "tracking", e.target.value)}
+                          className="h-9 text-sm"
                         />
                       </div>
                     ) : null}
@@ -507,11 +784,11 @@ export default function CashierShipmentsPage() {
                               const line = Number(it?.line_total ?? price * qty);
 
                               return (
-                                <div
-                                  key={`${o.id}-${idx}`}
-                                  className="rounded-xl border border-white/10 bg-bg-900/30 p-3 flex gap-3"
-                                >
-                                  <div className="h-14 w-14 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
+                              <div
+                                key={`${o.id}-${idx}`}
+                                className="rounded-xl border border-white/10 bg-bg-900/30 p-2 flex gap-3"
+                              >
+                                <div className="h-12 w-12 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
                                     {thumb ? (
                                       // eslint-disable-next-line @next/next/no-img-element
                                       <img
@@ -568,25 +845,18 @@ export default function CashierShipmentsPage() {
                             </div>
                           )}
                         </div>
-                        <details className="mt-3 rounded-lg border border-white/10 bg-bg-900/40 p-3">
-                          <summary className="cursor-pointer text-xs font-semibold text-white/70">
-                            Raw shipping JSON
-                          </summary>
-                          <pre className="mt-2 text-xs text-white/70 whitespace-pre-wrap">
-                            {JSON.stringify(details, null, 2)}
-                          </pre>
-                        </details>
                       </details>
                     </div>
 
                     <div className="mt-4 flex flex-wrap items-center gap-2">
-                      <Button variant="secondary" onClick={() => onCopy(o)}>
+                      <Button size="sm" variant="secondary" onClick={() => onCopy(o)}>
                         {copiedId === o.id ? "Copied!" : "Copy details"}
                       </Button>
 
                       {shippingStatus === "PREPARING TO SHIP" ? (
                         <>
                           <Button
+                            size="sm"
                             variant="ghost"
                             onClick={() =>
                               runRpc(o.id, "fn_add_rush_fee", {
@@ -599,6 +869,7 @@ export default function CashierShipmentsPage() {
                             {rushFee > 0 ? "Rush fee added" : "Add Rush Fee (+₱50)"}
                           </Button>
                           <Button
+                            size="sm"
                             onClick={() =>
                               runRpc(o.id, "fn_mark_shipped", {
                                 p_order_id: o.id,
@@ -612,6 +883,7 @@ export default function CashierShipmentsPage() {
                           </Button>
                           {needsPreparing ? (
                             <Button
+                              size="sm"
                               variant="ghost"
                               onClick={() =>
                                 runRpc(o.id, "fn_set_shipping_preparing", {
@@ -627,16 +899,27 @@ export default function CashierShipmentsPage() {
                       ) : null}
 
                       {shippingStatus === "SHIPPED" ? (
-                        <Button
-                          onClick={() =>
-                            runRpc(o.id, "fn_mark_completed_staff", {
-                              p_order_id: o.id,
-                            })
-                          }
-                          disabled={busy}
-                        >
-                          Mark as completed
-                        </Button>
+                        <>
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              runRpc(o.id, "fn_mark_completed_staff", {
+                                p_order_id: o.id,
+                              })
+                            }
+                            disabled={busy}
+                          >
+                            Mark as completed
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => undoShipped(o.id)}
+                            disabled={busy}
+                          >
+                            Undo shipped
+                          </Button>
+                        </>
                       ) : null}
                     </div>
 
@@ -648,6 +931,44 @@ export default function CashierShipmentsPage() {
           )}
         </CardBody>
       </Card>
+      {scanOrderId ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-bg-900/95 p-4">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold text-white/90">
+                Scan tracking number
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setScanOrderId(null);
+                  setScanCourier("");
+                }}
+              >
+                Close
+              </Button>
+            </div>
+            {scanSupported ? (
+              <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black">
+                <video ref={videoRef} className="h-64 w-full object-cover" />
+              </div>
+            ) : (
+              <div className="mt-3 text-sm text-white/70">
+                Camera scanning is not supported in this browser. Please type or
+                use a barcode scanner.
+              </div>
+            )}
+            {scanError ? (
+              <div className="mt-2 text-sm text-red-200">{scanError}</div>
+            ) : null}
+            <div className="mt-2 text-xs text-white/50">
+              Point the camera at the waybill barcode. The code will fill in automatically.
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

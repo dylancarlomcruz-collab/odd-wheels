@@ -4,14 +4,14 @@
 
 :root {
   color-scheme: light;
-  --fg: 15 23 42;
-  --paper: 17 24 39;
-  --bg-950: 236 238 243;
-  --bg-900: 228 231 238;
-  --bg-800: 219 223 232;
-  --bg-700: 209 214 224;
-  --glow-1: 217 106 43;
-  --glow-2: 255 154 82;
+  --fg: 20 30 42;
+  --paper: 66 84 108;
+  --bg-950: 246 250 255;
+  --bg-900: 232 241 255;
+  --bg-800: 219 233 251;
+  --bg-700: 206 221 244;
+  --glow-1: 90 170 210;
+  --glow-2: 255 190 140;
 }
 
 html.dark {
@@ -38,9 +38,63 @@ body {
 }
 
 html:not(.dark) body {
-  background: radial-gradient(1200px 600px at 20% 0%, rgba(var(--glow-1), 0.1), transparent 55%),
-              radial-gradient(1000px 500px at 80% 10%, rgba(var(--glow-2), 0.06), transparent 60%),
-              linear-gradient(180deg, rgb(var(--bg-950)), rgb(var(--bg-950)));
+  background: radial-gradient(1200px 600px at 15% 0%, rgba(var(--glow-1), 0.2), transparent 55%),
+              radial-gradient(1000px 500px at 85% 10%, rgba(var(--glow-2), 0.16), transparent 60%),
+              linear-gradient(180deg, rgb(var(--bg-950)), rgb(var(--bg-900)));
+}
+
+html:not(.dark) .card {
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.98), rgba(226, 236, 250, 0.98));
+  border-color: rgba(72, 100, 135, 0.28);
+  box-shadow: 0 10px 18px rgba(48, 74, 112, 0.12);
+  backdrop-filter: none;
+}
+
+html:not(.dark) .card-header {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(224, 235, 249, 0.96));
+  border-bottom-color: rgba(72, 100, 135, 0.22);
+}
+
+html:not(.dark) .card-footer {
+  border-top-color: rgba(72, 100, 135, 0.22);
+}
+
+html:not(.dark) .panel {
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.92), rgba(226, 236, 250, 0.92));
+  border-color: rgba(72, 100, 135, 0.24);
+  backdrop-filter: none;
+}
+
+html:not(.dark) input,
+html:not(.dark) select,
+html:not(.dark) textarea {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(225, 236, 252, 0.98));
+  border-color: rgba(72, 100, 135, 0.35);
+  color: rgb(var(--fg));
+}
+
+html:not(.dark) .card::before {
+  opacity: 0.35;
+}
+
+html:not(.dark) .text-white\/50 {
+  color: rgba(var(--fg), 0.72);
+}
+
+html:not(.dark) .text-white\/60 {
+  color: rgba(var(--fg), 0.8);
+}
+
+html:not(.dark) .text-white\/70 {
+  color: rgba(var(--fg), 0.88);
+}
+
+html:not(.dark) .text-red-200 {
+  color: rgb(185 28 28);
+}
+
+html:not(.dark) .text-amber-200 {
+  color: rgb(180 83 9);
 }
 
 a { color: inherit; text-decoration: none; }

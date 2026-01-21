@@ -7,6 +7,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { formatConditionLabel } from "@/lib/conditions";
+import { toast } from "@/components/ui/toast";
 
 function parseJsonMaybe(v: any) {
   if (!v) return null;
@@ -116,6 +117,11 @@ export default function CashierOrdersPage() {
     });
     if (error) alert(error.message);
     await reload();
+    toast({
+      message: "Order approved. Any sold-out pending orders were auto-cancelled.",
+      intent: "success",
+      duration: 2400,
+    });
   }
 
   async function approvePayment(orderId: string, ok: boolean) {

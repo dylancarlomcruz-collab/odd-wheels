@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, ChevronLeft, X } from "lucide-react";
 import { recordRecentView } from "@/lib/recentViews";
 import { normalizeSearchTerm } from "@/lib/search";
@@ -87,6 +88,7 @@ export default function ProductCard({
   const touchStartY = React.useRef<number | null>(null);
   const issueTouchStartX = React.useRef<number | null>(null);
   const issueTouchStartY = React.useRef<number | null>(null);
+  const previewScrollRef = React.useRef<HTMLDivElement | null>(null);
 
   const selected = React.useMemo(
     () =>
@@ -229,6 +231,11 @@ export default function ProductCard({
   }, [activeIndex, previewImages.length]);
 
   React.useEffect(() => {
+    if (!isOpen) return;
+    previewScrollRef.current?.scrollTo({ top: 0 });
+  }, [isOpen, previewProduct.key]);
+
+  React.useEffect(() => {
     setSelectedId(product.options[0]?.id ?? "");
     setHasPicked((product.options?.length ?? 0) <= 1);
   }, [product.options]);
@@ -293,6 +300,11 @@ export default function ProductCard({
   function stepIssue(delta: number) {
     if (issueImages.length <= 1) return;
     setIssueIndex((prev) => (prev + delta + issueImages.length) % issueImages.length);
+  }
+
+  function renderPortal(content: React.ReactNode) {
+    if (typeof document === "undefined") return null;
+    return createPortal(content, document.body);
   }
 
   function handleTouchStart(
@@ -443,7 +455,7 @@ export default function ProductCard({
         </div>
       </div>
 
-      {isOpen ? (
+      {isOpen ? renderPortal(
         <div className="fixed inset-0 z-50 flex items-start justify-center px-3 py-4 sm:items-center sm:px-4 sm:py-6">
           <button
             type="button"
@@ -456,7 +468,10 @@ export default function ProductCard({
             aria-modal="true"
             className="relative w-full max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-bg-900/95 shadow-soft"
           >
-            <div className="max-h-[85vh] overflow-y-auto sm:max-h-[90vh]">
+            <div
+              ref={previewScrollRef}
+              className="max-h-[85vh] overflow-y-auto sm:max-h-[90vh]"
+            >
               <div className="sticky top-0 z-10 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex min-w-0 items-start gap-3">
@@ -672,7 +687,7 @@ export default function ProductCard({
         </div>
       ) : null}
 
-      {issueOpen ? (
+      {issueOpen ? renderPortal(
         <div className="fixed inset-0 z-50 flex items-start justify-center px-3 py-4 sm:items-center sm:px-4 sm:py-6">
           <button
             type="button"

@@ -2,13 +2,27 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { CheckCheck, Clock3, Package, Truck, Wallet } from "lucide-react";
+import { useRouter } from "next/navigation";
+import {
+  ArrowLeft,
+  CheckCheck,
+  Clock3,
+  Package,
+  Star,
+  Truck,
+  Wallet,
+  X,
+} from "lucide-react";
 import { RequireAuth } from "@/components/auth/RequireAuth";
-import { Order, useOrders } from "@/hooks/useOrders";
+import { Order, OrderItemPreview, useOrders } from "@/hooks/useOrders";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { Checkbox } from "@/components/ui/Checkbox";
+import { Textarea } from "@/components/ui/Textarea";
+import { toast } from "@/components/ui/toast";
 import { formatPHP } from "@/lib/money";
+import { formatConditionLabel } from "@/lib/conditions";
 import { supabase } from "@/lib/supabase/browser";
 import {
   badgeToneClass,
@@ -23,6 +37,106 @@ type StageKey =
   | "TO_SHIP"
   | "SHIPPED"
   | "COMPLETED";
+
+type FeedbackPrompt = {
+  orderId?: string | null;
+  createdAt?: string | null;
+};
+
+const FEEDBACK_PROMPT_KEY = "ow_feedback_prompt";
+const FEEDBACK_NEVER_SHOW_KEY = "ow_feedback_never_show";
+const FEEDBACK_LAST_KEY = "ow_feedback_last";
+const FEEDBACK_NEVER_SHOW_TTL_MS = 1000 * 60 * 60 * 24 * 21;
+
+const LEAD_TIME_RULES: Array<{
+  labels: string[];
+  minDays: number;
+  maxDays: number;
+}> = [
+  { labels: ["NCR", "METRO MANILA", "METRO_MANILA"], minDays: 1, maxDays: 1 },
+  { labels: ["SOUTH LUZON", "SOUTHERN LUZON"], minDays: 1, maxDays: 2 },
+  { labels: ["NORTH LUZON"], minDays: 1, maxDays: 2 },
+  { labels: ["VISAYAS"], minDays: 2, maxDays: 5 },
+  { labels: ["MINDANAO"], minDays: 3, maxDays: 6 },
+  { labels: ["PUERTO PRINCESA"], minDays: 2, maxDays: 3 },
+  { labels: ["BATANES"], minDays: 3, maxDays: 5 },
+  { labels: ["CORON"], minDays: 3, maxDays: 4 },
+  { labels: ["MINDORO", "MASBATE", "CATANDUANES", "MARINDUQUE"], minDays: 2, maxDays: 4 },
+];
+
+const JT_LEAD_TIME_RULES: Array<{
+  labels: string[];
+  minDays: number;
+  maxDays: number;
+}> = [
+  { labels: ["NCR", "METRO MANILA", "METRO_MANILA"], minDays: 1, maxDays: 2 },
+  { labels: ["LUZON", "NORTH LUZON", "SOUTH LUZON"], minDays: 1, maxDays: 2 },
+  { labels: ["VISAYAS"], minDays: 3, maxDays: 4 },
+  { labels: ["MINDANAO"], minDays: 3, maxDays: 4 },
+  {
+    labels: [
+      "ISLAND",
+      "BATANES",
+      "CORON",
+      "MINDORO",
+      "MASBATE",
+      "CATANDUANES",
+      "MARINDUQUE",
+      "PUERTO PRINCESA",
+      "PALAWAN",
+    ],
+    minDays: 5,
+    maxDays: 6,
+  },
+];
+
+function normalizeRegion(raw: string | null | undefined) {
+  return String(raw ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/_/g, " ");
+}
+
+function isJtCourier(raw: string | null | undefined) {
+  const value = String(raw ?? "").toUpperCase();
+  return value.includes("J&T") || value.includes("JNT");
+}
+
+function getLeadTime(
+  region: string | null | undefined,
+  courier: string | null | undefined
+) {
+  const normalized = normalizeRegion(region);
+  if (!normalized) return null;
+  const rules = isJtCourier(courier) ? JT_LEAD_TIME_RULES : LEAD_TIME_RULES;
+  for (const rule of rules) {
+    if (rule.labels.includes(normalized)) {
+      return rule;
+    }
+  }
+  return null;
+}
+
+function addDays(base: Date, days: number) {
+  const next = new Date(base);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function formatArrivalDate(value: Date) {
+  return value.toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function formatLeadTimeRange(minDays: number, maxDays: number) {
+  if (minDays === maxDays) {
+    return minDays === 1 ? "1 day" : `${minDays} days`;
+  }
+  return `${minDays}-${maxDays} days`;
+}
 
 const STAGE_ORDER: StageKey[] = [
   "PENDING_APPROVAL",
@@ -129,7 +243,57 @@ function stageFromOrder(o: Order): StageKey | null {
   return "TO_SHIP";
 }
 
-function OrderCard({ o, stage }: { o: Order; stage?: StageKey | null }) {
+function getItemThumb(it: OrderItemPreview): string | null {
+  const urls = it?.product_variant?.product?.image_urls;
+  if (Array.isArray(urls) && urls.length) return String(urls[0]);
+  const fallbackUrls = it?.product?.image_urls;
+  if (Array.isArray(fallbackUrls) && fallbackUrls.length) return String(fallbackUrls[0]);
+  return null;
+}
+
+function getItemTitle(it: OrderItemPreview): string {
+  const name = String(it?.item_name ?? "").trim();
+  if (name) return name;
+  const snapshot = String(it?.name_snapshot ?? "").trim();
+  if (snapshot) return snapshot;
+  return (
+    it?.product_title ||
+    it?.product_variant?.product?.title ||
+    it?.product?.title ||
+    it?.item_id ||
+    "Item"
+  );
+}
+
+function getItemCondition(it: OrderItemPreview): string {
+  const raw = it?.condition ?? it?.product_variant?.condition;
+  const label = formatConditionLabel(raw, { upper: true });
+  return label === "-" ? "" : label;
+}
+
+function getItemQty(it: OrderItemPreview): number {
+  const qty = Number(it?.qty ?? 1);
+  return Number.isFinite(qty) && qty > 0 ? qty : 1;
+}
+
+function getItemPrice(it: OrderItemPreview, qty: number): number {
+  const line = Number(it?.line_total ?? 0);
+  if (Number.isFinite(line) && line > 0) return line;
+  const unit = Number(it?.price_each ?? it?.unit_price ?? it?.price ?? 0);
+  if (Number.isFinite(unit) && unit > 0) return unit * qty;
+  return 0;
+}
+
+function OrderCard({
+  o,
+  stage,
+  items = [],
+}: {
+  o: Order;
+  stage?: StageKey | null;
+  items?: OrderItemPreview[];
+}) {
+  const router = useRouter();
   const stageKey = stage ?? stageFromOrder(o);
   const stageMeta = stageKey ? STAGE_META[stageKey] : null;
   const status = String(o.status ?? "").toUpperCase();
@@ -148,19 +312,39 @@ function OrderCard({ o, stage }: { o: Order; stage?: StageKey | null }) {
       "PAYMENT_SUBMITTED",
       "PAYMENT_REVIEW",
     ].includes(status);
-  const shippingStatus = normalizeShippingStatus(o.shipping_status);
-  const canShowShipping =
-    paymentStatus === "PAID" && !isCancelled && Boolean(shippingStatus);
-  const shippingLabel = shippingStatus ? formatStatusLabel(shippingStatus) : "";
   const createdAt = o.created_at
     ? new Date(o.created_at).toLocaleString("en-PH")
     : "";
-  const paymentMethod = o.payment_method ? ` (${o.payment_method})` : "";
   const badges = getBadges(o);
   const lineTotal = Number(o.total ?? 0);
   const showLineTotal = Number.isFinite(lineTotal) && lineTotal > 0;
   const [canceling, setCanceling] = React.useState(false);
   const [cancelMsg, setCancelMsg] = React.useState<string | null>(null);
+  const [showAllItems, setShowAllItems] = React.useState(false);
+  const [copyMsg, setCopyMsg] = React.useState<string | null>(null);
+  const previewCount = 2;
+  const visibleItems = showAllItems ? items : items.slice(0, previewCount);
+  const hiddenCount = Math.max(0, items.length - previewCount);
+  const hiddenLabel = hiddenCount === 1 ? "item" : "items";
+  const canPayNow =
+    !isCancelled && stageKey === "TO_PAY" && paymentStatus !== "PAID";
+  const tracking =
+    stageKey === "SHIPPED" && o.tracking_number
+      ? String(o.tracking_number).trim()
+      : "";
+  const courierLabel = o.courier ? String(o.courier).trim() : "";
+  const leadTime =
+    stageKey === "SHIPPED"
+      ? getLeadTime(o.shipping_region, o.courier ?? o.shipping_method)
+      : null;
+  const shippedAt = o.shipped_at ? new Date(o.shipped_at) : null;
+  const etaLabel =
+    stageKey === "SHIPPED" && shippedAt && leadTime
+      ? formatArrivalDate(addDays(shippedAt, leadTime.maxDays))
+      : "";
+  const leadTimeLabel = leadTime
+    ? formatLeadTimeRange(leadTime.minDays, leadTime.maxDays)
+    : "";
 
   async function onCancel(e: React.MouseEvent<HTMLButtonElement>) {
     e.preventDefault();
@@ -183,6 +367,32 @@ function OrderCard({ o, stage }: { o: Order; stage?: StageKey | null }) {
     }
   }
 
+  async function onCopyTracking(e: React.MouseEvent<HTMLButtonElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!tracking) return;
+    try {
+      await navigator.clipboard.writeText(tracking);
+      setCopyMsg("Copied!");
+      window.setTimeout(() => setCopyMsg(null), 1200);
+    } catch {
+      setCopyMsg("Copy failed");
+      window.setTimeout(() => setCopyMsg(null), 1200);
+    }
+  }
+
+  function onOpenTracking(e: React.MouseEvent<HTMLButtonElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    window.open("https://www.lbcexpress.com/track/", "_blank", "noreferrer");
+  }
+
+  function onPayNow(e: React.MouseEvent<HTMLButtonElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    router.push(`/orders/${o.id}`);
+  }
+
   return (
     <Link
       key={o.id}
@@ -191,13 +401,13 @@ function OrderCard({ o, stage }: { o: Order; stage?: StageKey | null }) {
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-[180px]">
-          <div className="font-semibold">Order #{o.id.slice(0, 8)}</div>
+          <div className="text-base font-semibold">Order #{o.id.slice(0, 8)}</div>
           {createdAt ? (
             <div className="text-xs text-white/50">Placed {createdAt}</div>
           ) : null}
         </div>
         {showLineTotal ? (
-          <div className="text-price">{formatPHP(lineTotal)}</div>
+          <div className="text-price text-base">{formatPHP(lineTotal)}</div>
         ) : null}
       </div>
 
@@ -217,23 +427,124 @@ function OrderCard({ o, stage }: { o: Order; stage?: StageKey | null }) {
         )}
       </div>
 
-      <div className="mt-2 text-xs text-white/60">
-        Order status: {statusLabel} | Payment: {formatStatusLabel(paymentStatus)}
-        {paymentMethod}
-        {canShowShipping ? ` | Shipping: ${shippingLabel}` : ""}
-      </div>
-      {canCancel ? (
-        <div className="mt-3 flex items-center gap-2">
+      {items.length ? (
+        <div className="mt-3">
+          <div className="w-full rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
+            <div className="text-sm font-semibold text-white/80">Items</div>
+            <div className="mt-3 space-y-2">
+              {visibleItems.map((it, index) => {
+                const thumb = getItemThumb(it);
+                const title = getItemTitle(it);
+                const condition = getItemCondition(it);
+                const qty = getItemQty(it);
+                const price = getItemPrice(it, qty);
+                const subtitle = condition ? `${condition} x${qty}` : `x${qty}`;
+                const soldOut =
+                  String((it as any)?.cancel_reason ?? "") === "SOLD_OUT" ||
+                  Boolean((it as any)?.is_cancelled);
+                return (
+                  <div
+                    key={`${o.id}-item-${index}`}
+                    className={`flex items-center gap-3 rounded-xl border border-white/10 p-2 ${
+                      soldOut ? "bg-red-500/5" : "bg-paper/5"
+                    }`}
+                  >
+                    <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-bg-900/40">
+                      {thumb ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={thumb} alt={title} className="h-full w-full object-cover" />
+                      ) : (
+                        <span className="px-1 text-[10px] text-white/50">No photo</span>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium">{title}</div>
+                      <div className="text-xs text-white/60">{subtitle}</div>
+                    </div>
+                      {soldOut ? (
+                        <div className="text-sm font-semibold text-price">Sold out</div>
+                    ) : price > 0 ? (
+                      <div className="text-sm text-price">{formatPHP(price)}</div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+            {items.length > previewCount ? (
+              <div className="mt-3 flex justify-center">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setShowAllItems((cur) => !cur);
+                  }}
+                  className="rounded-full border border-white/10 bg-bg-900/40 px-3 py-1 text-[11px] text-white/70 hover:border-white/30 hover:text-white"
+                >
+                  {showAllItems
+                    ? "Show fewer items"
+                    : `Show ${hiddenCount} more ${hiddenLabel}`}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {tracking ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-white/60">
+          <div>
+            Tracking{courierLabel ? ` (${courierLabel})` : ""}:{" "}
+            <span className="text-white/90">{tracking}</span>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenTracking}
+            className="rounded-full border border-white/10 bg-bg-900/40 px-2 py-0.5 text-[10px] text-white/70 hover:border-white/30 hover:text-white"
+          >
+            Track package
+          </button>
           <Button
             type="button"
             size="sm"
             variant="ghost"
-            onClick={onCancel}
-            disabled={canceling}
-            className="h-6 px-2 text-[10px] bg-red-700/60 text-white border border-red-700/60 hover:bg-red-600/80 hover:border-red-600/80"
+            onClick={onCopyTracking}
+            className="h-6 px-2 text-[10px]"
           >
-            {canceling ? "Cancelling..." : "Cancel"}
+            Copy
           </Button>
+          {copyMsg ? <span className="text-[10px] text-white/50">{copyMsg}</span> : null}
+        </div>
+      ) : null}
+      {etaLabel ? (
+        <div className="mt-2 text-xs text-white/60">
+          Expect your items to arrive by:{" "}
+          <span className="text-white/90">{etaLabel}</span>
+          {leadTimeLabel ? (
+            <span className="text-white/50">{` (${leadTimeLabel})`}</span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {canPayNow || canCancel ? (
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          {canPayNow ? (
+            <Button type="button" size="sm" variant="primary" onClick={onPayNow}>
+              Pay now
+            </Button>
+          ) : null}
+          {canCancel ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={onCancel}
+              disabled={canceling}
+              className="border-red-700/60 text-red-100 hover:bg-red-600/20 hover:border-red-600/80"
+            >
+              {canceling ? "Cancelling..." : "Cancel"}
+            </Button>
+          ) : null}
           {cancelMsg ? (
             <span className="text-[11px] text-red-200/80">{cancelMsg}</span>
           ) : null}
@@ -246,7 +557,10 @@ function OrderCard({ o, stage }: { o: Order; stage?: StageKey | null }) {
       ) : null}
       {o.status === "CANCELLED" && o.cancelled_reason === "SOLD_OUT" ? (
         <div className="mt-2 text-xs text-red-800 dark:text-red-100">
-          Items are sold out, please order again.
+          Sorry about this. The item was approved for an earlier order before we could
+          process yours, so it became unavailable. Any remaining in-stock items were
+          automatically returned to your cart. We’re improving our system to help
+          prevent this in the future. Thank you for your understanding.
         </div>
       ) : null}
     </Link>
@@ -254,8 +568,16 @@ function OrderCard({ o, stage }: { o: Order; stage?: StageKey | null }) {
 }
 
 function OrdersContent() {
-  const { orders, loading } = useOrders();
+  const { orders, itemsByOrderId, loading } = useOrders();
   const [activeTab, setActiveTab] = React.useState<StageKey>("PENDING_APPROVAL");
+  const router = useRouter();
+  const [showFeedback, setShowFeedback] = React.useState(false);
+  const [feedbackPrompt, setFeedbackPrompt] = React.useState<FeedbackPrompt | null>(null);
+  const [rating, setRating] = React.useState(0);
+  const [feedbackExperience, setFeedbackExperience] = React.useState("");
+  const [feedbackChange, setFeedbackChange] = React.useState("");
+  const [feedbackError, setFeedbackError] = React.useState<string | null>(null);
+  const [feedbackNeverShow, setFeedbackNeverShow] = React.useState(false);
 
   const activeOrders = React.useMemo(
     () => (orders ?? []).filter((o) => o.status !== "VOIDED" && o.status !== "CANCELLED"),
@@ -289,11 +611,125 @@ function OrdersContent() {
     setActiveTab((cur) => (cur === firstWithOrders ? cur : firstWithOrders));
   }, [loading, stageBuckets]);
 
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const neverRaw = window.localStorage.getItem(FEEDBACK_NEVER_SHOW_KEY);
+      if (neverRaw) {
+        let until: number | null = null;
+        try {
+          const parsed = JSON.parse(neverRaw);
+          if (parsed && typeof parsed.until === "number") {
+            until = parsed.until;
+          }
+        } catch {
+          // Ignore parse errors for legacy values.
+        }
+
+        if (!until) {
+          const fallbackUntil = Date.now() + FEEDBACK_NEVER_SHOW_TTL_MS;
+          window.localStorage.setItem(
+            FEEDBACK_NEVER_SHOW_KEY,
+            JSON.stringify({ until: fallbackUntil })
+          );
+          return;
+        }
+
+        if (Date.now() < until) return;
+        window.localStorage.removeItem(FEEDBACK_NEVER_SHOW_KEY);
+      }
+      const raw = window.localStorage.getItem(FEEDBACK_PROMPT_KEY);
+      if (!raw) return;
+      let parsed: FeedbackPrompt = {};
+      try {
+        parsed = JSON.parse(raw) ?? {};
+      } catch {
+        parsed = { orderId: raw };
+      }
+      setFeedbackPrompt(parsed);
+      setShowFeedback(true);
+    } catch {
+      // Ignore localStorage issues.
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (showFeedback) {
+      setFeedbackNeverShow(false);
+    }
+  }, [showFeedback]);
+
+  const promptOrderId = feedbackPrompt?.orderId
+    ? String(feedbackPrompt.orderId).slice(0, 8)
+    : "";
+
   const activeList = stageBuckets[activeTab] ?? [];
+
+  function clearFeedbackPrompt() {
+    try {
+      window.localStorage.removeItem(FEEDBACK_PROMPT_KEY);
+    } catch {
+      // Ignore localStorage issues.
+    }
+  }
+
+  function closeFeedback() {
+    if (feedbackNeverShow) {
+      try {
+        window.localStorage.setItem(
+          FEEDBACK_NEVER_SHOW_KEY,
+          JSON.stringify({ until: Date.now() + FEEDBACK_NEVER_SHOW_TTL_MS })
+        );
+      } catch {
+        // Ignore localStorage issues.
+      }
+    }
+    clearFeedbackPrompt();
+    setFeedbackError(null);
+    setShowFeedback(false);
+  }
+
+  function onSubmitFeedback() {
+    const experience = feedbackExperience.trim();
+    const change = feedbackChange.trim();
+    if (!rating && !experience && !change) {
+      setFeedbackError("Add a rating or a quick note before sending.");
+      return;
+    }
+
+    setFeedbackError(null);
+    const payload = {
+      orderId: feedbackPrompt?.orderId ?? null,
+      rating: rating || null,
+      experience: experience || null,
+      change: change || null,
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      window.localStorage.setItem(FEEDBACK_LAST_KEY, JSON.stringify(payload));
+    } catch {
+      // Ignore localStorage issues.
+    }
+
+    toast({ message: "Thanks for the feedback!", intent: "success", duration: 2200 });
+    setRating(0);
+    setFeedbackExperience("");
+    setFeedbackChange("");
+    closeFeedback();
+  }
 
   return (
     <main className="mx-auto max-w-5xl space-y-6 px-4 py-8">
       <div>
+        <button
+          type="button"
+          onClick={() => router.back()}
+          className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-bg-900/40 px-3 py-1.5 text-xs text-white/70 transition hover:border-white/30 hover:text-white"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Back
+        </button>
         <h1 className="text-2xl font-semibold">My Orders</h1>
         <div className="text-sm text-white/60">Track your orders and shipping updates.</div>
       </div>
@@ -356,7 +792,12 @@ function OrdersContent() {
           ) : (
             <div className="space-y-3">
               {activeList.map((o) => (
-                <OrderCard key={o.id} o={o} stage={activeTab} />
+                <OrderCard
+                  key={o.id}
+                  o={o}
+                  stage={activeTab}
+                  items={itemsByOrderId[o.id] ?? []}
+                />
               ))}
             </div>
           )}
@@ -377,12 +818,123 @@ function OrdersContent() {
             ) : (
               <div className="space-y-3">
                 {cancelled.map((o) => (
-                  <OrderCard key={o.id} o={o} stage={null} />
+                  <OrderCard key={o.id} o={o} stage={null} items={itemsByOrderId[o.id] ?? []} />
                 ))}
               </div>
             )}
           </CardBody>
         </Card>
+      ) : null}
+
+      {showFeedback ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-md"
+            onClick={closeFeedback}
+          />
+          <div
+            className="relative w-full max-w-xl rounded-2xl border border-white/10 bg-gradient-to-br from-bg-900/95 via-bg-900/95 to-bg-800/90 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="pointer-events-none absolute inset-x-8 -top-1 h-1 rounded-full bg-gradient-to-r from-accent-500/80 via-amber-400/80 to-sky-400/80" />
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <div className="text-base font-semibold">Quick feedback</div>
+                  <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/60">
+                    1 min
+                  </span>
+                </div>
+                <div className="text-xs text-white/60">
+                  Thanks for your order{promptOrderId ? ` #${promptOrderId}` : ""}. How
+                  was checkout?
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closeFeedback}
+                className="rounded-full border border-white/10 bg-bg-900/40 p-1 text-white/70 transition hover:border-white/30 hover:text-white"
+                aria-label="Close feedback"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-white/10 bg-bg-900/40 p-3">
+              <div className="text-xs text-white/70">Rate your experience</div>
+              <div className="mt-2 flex items-center gap-2">
+                {[1, 2, 3, 4, 5].map((value) => {
+                  const active = rating >= value;
+                  return (
+                    <button
+                      key={`rating-${value}`}
+                      type="button"
+                      onClick={() => {
+                        setRating(value);
+                        setFeedbackError(null);
+                      }}
+                      aria-label={`Rate ${value} star${value === 1 ? "" : "s"}`}
+                      className="rounded-full border border-white/10 bg-bg-900/50 p-2 text-white/60 transition hover:border-white/30 hover:text-white"
+                    >
+                      <Star
+                        className={active ? "h-5 w-5 text-amber-300" : "h-5 w-5"}
+                        fill={active ? "currentColor" : "none"}
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <Textarea
+                label="How was your experience and what should we improve?"
+                rows={4}
+                value={[feedbackExperience, feedbackChange].filter(Boolean).join("\n")}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setFeedbackExperience(next);
+                  setFeedbackChange("");
+                  setFeedbackError(null);
+                }}
+                className="min-h-[140px] text-sm bg-bg-800/40 border-white/10"
+              />
+            </div>
+
+            {feedbackError ? (
+              <div className="mt-2 text-xs text-red-200">{feedbackError}</div>
+            ) : null}
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <Checkbox
+                checked={feedbackNeverShow}
+                onChange={setFeedbackNeverShow}
+                label="Don't ask again"
+                className="text-[11px] text-white/60 [&>span]:text-[11px] [&>span]:text-white/60 [&>input]:h-3 [&>input]:w-3"
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="primary"
+                  onClick={onSubmitFeedback}
+                  className="h-9 px-4 text-xs shadow-glow"
+                >
+                  Send feedback
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={closeFeedback}
+                  className="h-9 px-4 text-xs"
+                >
+                  Later
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
       ) : null}
     </main>
   );

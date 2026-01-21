@@ -634,7 +634,7 @@ export default function CashierPOSPage() {
                                   : "text-red-300 text-xs"
                               }
                             >
-                              {p.is_active ? "ACTIVE" : "ARCHIVED"}
+                              {p.is_active ? "ACTIVE" : "SOLD OUT"}
                             </span>
                           </div>
                           <div className="text-xs text-white/60">

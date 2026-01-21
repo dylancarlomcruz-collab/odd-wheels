@@ -93,6 +93,7 @@ function AdminProductCard({
   onAdjustQty: (productId: string, variantId: string, delta: number) => Promise<void>;
 }) {
   const { totalQty, minPrice, maxPrice, variantCount } = derivedTotals(product);
+  const isSoldOut = totalQty <= 0 || !product.is_active;
   const priceLabel =
     minPrice === maxPrice
       ? formatPHP(minPrice)
@@ -157,12 +158,12 @@ function AdminProductCard({
         <div className="flex items-start gap-2">
           <Badge
             className={
-              product.is_active
-                ? "bg-green-500/20 border-green-400/50 text-green-100"
-                : "bg-red-500/10 border-red-400/40 text-red-100"
+              isSoldOut
+                ? "bg-red-500/10 border-red-400/40 text-red-100"
+                : "bg-green-500/20 border-green-400/50 text-green-100"
             }
           >
-            {product.is_active ? "ACTIVE" : "ARCHIVED"}
+            {isSoldOut ? "SOLD OUT" : "ACTIVE"}
           </Badge>
           <Badge className="ml-auto bg-white/5 border-white/10 text-white/70">
             {variantCount} variants
@@ -261,7 +262,7 @@ export function InventoryBrowseGrid({
   const [scanTerm, setScanTerm] = React.useState("");
   const [brandTab, setBrandTab] = React.useState("All");
   const [inStockOnly, setInStockOnly] = React.useState(true);
-  const [showArchived, setShowArchived] = React.useState(false);
+  const [showSoldOut, setShowSoldOut] = React.useState(false);
   const [scannerOpen, setScannerOpen] = React.useState(false);
   const searchTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
     null
@@ -273,7 +274,7 @@ export function InventoryBrowseGrid({
   const scanActiveRef = React.useRef(false);
 
   const effectiveTerm = scanTerm || searchTerm;
-  const filtersKey = `${effectiveTerm}|${brandTab}|${inStockOnly}|${showArchived}|${refreshToken}`;
+  const filtersKey = `${effectiveTerm}|${brandTab}|${inStockOnly}|${showSoldOut}|${refreshToken}`;
 
   const brands = React.useMemo(() => {
     const set = new Set<string>();
@@ -285,15 +286,16 @@ export function InventoryBrowseGrid({
 
   const filteredRows = React.useMemo(() => {
     return rows.filter((p) => {
-      if (!showArchived && !p.is_active) return false;
+      const { totalQty } = derivedTotals(p);
+      const isSoldOut = totalQty <= 0 || !p.is_active;
       if (brandTab !== "All" && p.brand !== brandTab) return false;
-      if (inStockOnly) {
-        const { totalQty } = derivedTotals(p);
-        if (totalQty <= 0) return false;
+      if (showSoldOut && !isSoldOut) return false;
+      if (inStockOnly && !showSoldOut && isSoldOut) {
+        return false;
       }
       return true;
     });
-  }, [rows, brandTab, inStockOnly, showArchived]);
+  }, [rows, brandTab, inStockOnly, showSoldOut]);
 
   const loadPage = React.useCallback(
     async (pageIndex: number, replace = false) => {
@@ -306,6 +308,8 @@ export function InventoryBrowseGrid({
       const safeTerm = rawTerm.replace(/[(),]/g, " ").trim();
       const like = `%${safeTerm}%`;
       const isBarcodeLike = /^[0-9]+$/.test(rawTerm) && rawTerm.length >= 6;
+      const allowArchived = showSoldOut;
+      const applyStockFilter = inStockOnly && !showSoldOut;
       let batch: AdminProduct[] = [];
 
       if (rawTerm && safeTerm && isBarcodeLike) {
@@ -338,19 +342,22 @@ export function InventoryBrowseGrid({
           .select(
             "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)"
           )
-          .in("id", productIds)
-          .order("created_at", { ascending: false });
+          .in("id", productIds);
+
+        if (showSoldOut) {
+          pQuery = pQuery.order("is_active", { ascending: true });
+        }
+        pQuery = pQuery.order("created_at", { ascending: false });
 
         if (brandTab !== "All") {
           pQuery = pQuery.eq("brand", brandTab);
         }
-        if (inStockOnly) {
+        if (applyStockFilter) {
           pQuery = pQuery.gt("product_variants.qty", 0);
         }
-        if (!showArchived) {
+        if (!allowArchived) {
           pQuery = pQuery.eq("is_active", true);
         }
-
         const { data, error: pErr } = await pQuery;
         setLoading(false);
 
@@ -366,9 +373,12 @@ export function InventoryBrowseGrid({
           .from("products")
           .select(
             "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)"
-          )
-          .order("created_at", { ascending: false })
-          .range(from, to);
+          );
+
+        if (showSoldOut) {
+          query = query.order("is_active", { ascending: true });
+        }
+        query = query.order("created_at", { ascending: false }).range(from, to);
 
         if (rawTerm && safeTerm) {
           query = query.or(
@@ -378,13 +388,12 @@ export function InventoryBrowseGrid({
         if (brandTab !== "All") {
           query = query.eq("brand", brandTab);
         }
-        if (inStockOnly) {
+        if (applyStockFilter) {
           query = query.gt("product_variants.qty", 0);
         }
-        if (!showArchived) {
+        if (!allowArchived) {
           query = query.eq("is_active", true);
         }
-
         const { data, error: qErr } = await query;
         setLoading(false);
 
@@ -400,7 +409,7 @@ export function InventoryBrowseGrid({
       setRows((prev) => (replace ? batch : [...prev, ...batch]));
       setPage(pageIndex);
     },
-    [effectiveTerm, brandTab, inStockOnly, showArchived]
+    [effectiveTerm, brandTab, inStockOnly, showSoldOut]
   );
 
   const adjustVariantQty = React.useCallback(
@@ -427,12 +436,40 @@ export function InventoryBrowseGrid({
         return;
       }
 
+      const nextVariants = (product?.product_variants ?? []).map((v) =>
+        v.id === variantId ? { ...v, qty: next } : v
+      );
+      const nextTotalQty = nextVariants.reduce(
+        (sum, v) => sum + (Number.isFinite(Number(v.qty)) ? Number(v.qty) : 0),
+        0
+      );
+      const nextActive = nextTotalQty > 0;
+      let resolvedActive = product?.is_active ?? true;
+
+      if (product && product.is_active !== nextActive) {
+        const { error: pErr } = await supabase
+          .from("products")
+          .update({ is_active: nextActive })
+          .eq("id", productId);
+
+        if (pErr) {
+          toast({
+            intent: "error",
+            title: "Status update failed",
+            message: pErr.message,
+          });
+        } else {
+          resolvedActive = nextActive;
+        }
+      }
+
       // Sync local rows so filters and totals update without refetch.
       setRows((prev) =>
         prev.map((p) =>
           p.id === productId
             ? {
                 ...p,
+                is_active: p.id === productId ? resolvedActive : p.is_active,
                 product_variants: (p.product_variants ?? []).map((v) =>
                   v.id === variantId ? { ...v, qty: next } : v
                 ),
@@ -443,6 +480,7 @@ export function InventoryBrowseGrid({
     },
     [rows]
   );
+
 
   function focusSearchInput() {
     requestAnimationFrame(() => {
@@ -636,13 +674,19 @@ export function InventoryBrowseGrid({
         <div className="flex flex-wrap items-center gap-3">
           <Checkbox
             checked={inStockOnly}
-            onChange={setInStockOnly}
+            onChange={(next) => {
+              setInStockOnly(next);
+              if (next) setShowSoldOut(false);
+            }}
             label="In-stock only"
           />
           <Checkbox
-            checked={showArchived}
-            onChange={setShowArchived}
-            label="Include archived"
+            checked={showSoldOut}
+            onChange={(next) => {
+              setShowSoldOut(next);
+              if (next) setInStockOnly(false);
+            }}
+            label="Show sold out"
           />
         </div>
 

@@ -1,4 +1,9 @@
 import { NextResponse } from "next/server";
+import {
+  inferFieldsFromTitle,
+  normalizeBrandAlias,
+  normalizeLookupTitle,
+} from "@/lib/titleInference";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -104,9 +109,13 @@ function normalizeBarcodeResponse(raw: any) {
     raw?.image_urls ??
     (product?.image ? [product.image] : raw?.image ? [raw.image] : []);
 
+  const inferred = inferFieldsFromTitle(title);
+  const normalizedBrand = normalizeBrandAlias(brand) ?? inferred.brand ?? brand;
+  const normalizedTitle = normalizeLookupTitle(title, normalizedBrand ?? inferred.brand ?? null);
+
   return {
-    title,
-    brand,
+    title: normalizedTitle || title,
+    brand: normalizedBrand || brand,
     model,
     color_style: colorStyle,
     images: images.filter(Boolean),

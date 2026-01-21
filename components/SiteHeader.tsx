@@ -13,6 +13,18 @@ import {
   X,
   ClipboardList,
   Search,
+  PackageSearch,
+  LayoutGrid,
+  FileSpreadsheet,
+  Truck,
+  ShoppingBag,
+  BarChart3,
+  ScanBarcode,
+  Tags,
+  StickyNote,
+  QrCode,
+  Settings2,
+  ScanLine,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -51,6 +63,11 @@ export function SiteHeader() {
     null
   );
   const [activeIndex, setActiveIndex] = React.useState(-1);
+  const [staffCounts, setStaffCounts] = React.useState({
+    pendingApproval: 0,
+    sellTradePending: 0,
+    pendingShipping: 0,
+  });
   const searchRefs = React.useRef<{ desktop: HTMLDivElement | null; mobile: HTMLDivElement | null }>({
     desktop: null,
     mobile: null,
@@ -67,6 +84,12 @@ export function SiteHeader() {
   );
   const cartCountLabel = cartCount > 99 ? "99+" : String(cartCount);
   const logoUrl = settings?.header_logo_url?.trim() || "/odd-wheels-logo.png";
+  const staffTotal =
+    staffCounts.pendingApproval +
+    staffCounts.sellTradePending +
+    staffCounts.pendingShipping;
+  const menuBadgeCount = isStaff ? staffTotal : orderCount;
+  const menuBadgeLabel = menuBadgeCount > 99 ? "99+" : String(menuBadgeCount);
 
   React.useEffect(() => {
     setQ(searchParamQ);
@@ -220,15 +243,110 @@ export function SiteHeader() {
     { key: "sell-trade", href: "/sell-trade", label: "Sell/Trade", icon: ArrowLeftRight, show: true },
     { key: "orders", href: "/orders", label: "Orders", icon: ClipboardList, show: Boolean(user) },
     { key: "account", href: "/account", label: "Account", icon: Settings, show: Boolean(user) },
-    {
-      key: "staff",
-      href: profile?.role === "admin" ? "/admin" : "/cashier",
-      label: profile?.role === "admin" ? "Admin" : "Cashier",
-      icon: Shield,
-      show: isStaff,
-    },
     { key: "login", href: "/auth/login", label: "Login", icon: User2, show: !user },
   ];
+
+  const adminMenuItems = [
+    { key: "admin-dashboard", href: "/admin", label: "Dashboard", icon: Shield },
+    { key: "admin-inventory", href: "/admin/inventory", label: "Inventory", icon: PackageSearch },
+    { key: "admin-inventory-browse", href: "/admin/inventory/browse", label: "Inventory Browse", icon: LayoutGrid },
+    { key: "admin-inventory-sheet", href: "/admin/inventory/sheet", label: "Inventory Sheet", icon: FileSpreadsheet },
+    {
+      key: "admin-orders",
+      href: "/admin/orders",
+      label: "Orders / Approvals",
+      icon: ClipboardList,
+      badge: staffCounts.pendingApproval,
+    },
+    {
+      key: "admin-shipments",
+      href: "/admin/shipments",
+      label: "Shipping Status",
+      icon: Truck,
+      badge: staffCounts.pendingShipping,
+    },
+    {
+      key: "admin-sell-trade",
+      href: "/admin/sell-trade",
+      label: "Sell / Trade Offers",
+      icon: ArrowLeftRight,
+      badge: staffCounts.sellTradePending,
+    },
+    { key: "admin-sales", href: "/admin/sales", label: "Sales", icon: BarChart3 },
+    { key: "admin-carts", href: "/admin/carts", label: "Cart Insights", icon: ShoppingCart },
+    { key: "admin-pos", href: "/cashier", label: "POS (Cashier)", icon: ScanBarcode },
+    { key: "admin-brands", href: "/admin/brands", label: "Brand Tabs", icon: Tags },
+    { key: "admin-notices", href: "/admin/notices", label: "Notice Board", icon: StickyNote },
+    { key: "admin-payment-methods", href: "/admin/settings/payment-methods", label: "Payment Methods", icon: QrCode },
+    { key: "admin-settings", href: "/admin/settings", label: "Settings", icon: Settings2 },
+  ];
+
+  const cashierMenuItems = [
+    { key: "cashier-dashboard", href: "/cashier", label: "Dashboard", icon: ClipboardList },
+    { key: "cashier-orders", href: "/cashier/orders", label: "Orders & Approvals", icon: ShoppingBag },
+    { key: "cashier-shipments", href: "/cashier/shipments", label: "Shipping Status", icon: Truck },
+    { key: "cashier-pos", href: "/cashier/pos", label: "POS Checkout", icon: ScanLine },
+  ];
+
+  const loadStaffCounts = React.useCallback(async () => {
+    if (!isStaff) return;
+    const [pendingOrders, sellTrade, preparingShipA, preparingShipB] =
+      await Promise.all([
+        supabase
+          .from("orders")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "PENDING_APPROVAL"),
+        supabase
+          .from("sell_trade_requests")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "PENDING"),
+        supabase
+          .from("orders")
+          .select("id", { count: "exact", head: true })
+          .eq("payment_status", "PAID")
+          .not("status", "in", "(CANCELLED,VOIDED)")
+          .in("shipping_status", [
+            "PREPARING",
+            "PREPARING_TO_SHIP",
+            "TO_SHIP",
+            "PENDING_SHIPMENT",
+            "NONE",
+          ]),
+        supabase
+          .from("orders")
+          .select("id", { count: "exact", head: true })
+          .eq("payment_status", "PAID")
+          .not("status", "in", "(CANCELLED,VOIDED)")
+          .is("shipping_status", null),
+      ]);
+
+    setStaffCounts({
+      pendingApproval: pendingOrders.count ?? 0,
+      sellTradePending: sellTrade.count ?? 0,
+      pendingShipping:
+        (preparingShipA.count ?? 0) + (preparingShipB.count ?? 0),
+    });
+  }, [isStaff]);
+
+  React.useEffect(() => {
+    if (!isStaff) return;
+    let active = true;
+    const tick = async () => {
+      if (!active) return;
+      await loadStaffCounts();
+    };
+    tick();
+    const id = window.setInterval(tick, 30000);
+    return () => {
+      active = false;
+      window.clearInterval(id);
+    };
+  }, [isStaff, loadStaffCounts]);
+
+  React.useEffect(() => {
+    if (!menuOpen || !isStaff) return;
+    void loadStaffCounts();
+  }, [menuOpen, isStaff, loadStaffCounts]);
 
   return (
     <>
@@ -375,6 +493,28 @@ export function SiteHeader() {
         </div>
 
         <div className="flex items-center gap-2">
+          {isStaff && staffTotal > 0 ? (
+            <div className="hidden items-center gap-2 md:flex">
+              {staffCounts.pendingApproval > 0 ? (
+                <div className="inline-flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs text-amber-100">
+                  <ClipboardList className="h-3.5 w-3.5" />
+                  {staffCounts.pendingApproval}
+                </div>
+              ) : null}
+              {profile?.role === "admin" && staffCounts.sellTradePending > 0 ? (
+                <div className="inline-flex items-center gap-2 rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-1 text-xs text-sky-100">
+                  <ArrowLeftRight className="h-3.5 w-3.5" />
+                  {staffCounts.sellTradePending}
+                </div>
+              ) : null}
+              {staffCounts.pendingShipping > 0 ? (
+                <div className="inline-flex items-center gap-2 rounded-full border border-indigo-500/40 bg-indigo-500/10 px-3 py-1 text-xs text-indigo-100">
+                  <Truck className="h-3.5 w-3.5" />
+                  {staffCounts.pendingShipping}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <ThemeToggle />
 
           <Link
@@ -403,9 +543,9 @@ export function SiteHeader() {
             aria-label="Open menu"
           >
             <Menu className="h-4 w-4" />
-            {orderCount > 0 ? (
+            {menuBadgeCount > 0 ? (
               <span className="absolute -top-1 -right-1 min-w-[18px] rounded-full border border-bg-900/80 bg-accent-500 px-1 text-[10px] font-semibold leading-4 text-white">
-                {orderCountLabel}
+                {menuBadgeLabel}
               </span>
             ) : null}
           </button>
@@ -541,7 +681,7 @@ export function SiteHeader() {
             onClick={() => setMenuOpen(false)}
             aria-label="Close menu"
           />
-          <div className="absolute right-0 top-0 h-full w-[280px] max-w-[85vw] border-l border-white/10 bg-bg-900/95 shadow-2xl">
+          <div className="absolute right-0 top-0 h-full w-[280px] max-w-[85vw] border-l border-white/10 bg-bg-900/95 shadow-2xl flex flex-col">
             <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
               <div className="text-sm font-semibold">Menu</div>
               <button
@@ -553,7 +693,7 @@ export function SiteHeader() {
                 Close
               </button>
             </div>
-            <nav className="p-3 space-y-2">
+            <nav className="p-3 space-y-2 overflow-y-auto">
               {mobileMenuItems
                 .filter((item) => item.show)
                 .map((item) => {
@@ -575,6 +715,64 @@ export function SiteHeader() {
                     </Link>
                   );
                 })}
+              {profile?.role === "admin" ? (
+                <div className="pt-2">
+                  <div className="mb-2 text-[11px] uppercase tracking-wide text-white/50">
+                    Admin
+                  </div>
+                  <div className="space-y-2">
+                    {adminMenuItems.map((item) => {
+                      const Icon = item.icon;
+                      const hasBadge = typeof item.badge === "number";
+                      const badgeValue = hasBadge ? Number(item.badge ?? 0) : 0;
+                      const badgeLabel = badgeValue > 99 ? "99+" : String(badgeValue);
+                      return (
+                        <Link
+                          key={item.key}
+                          href={item.href}
+                          onClick={() => setMenuOpen(false)}
+                          className="flex items-center justify-between rounded-xl border border-white/10 bg-bg-950/30 px-3 py-2 text-sm text-white/90 hover:bg-bg-950/50"
+                        >
+                          <span className="inline-flex items-center gap-2">
+                            <Icon className="h-4 w-4" />
+                            {item.label}
+                          </span>
+                          {hasBadge ? (
+                            <Badge className="px-2 py-0.5 text-xs">
+                              {badgeLabel}
+                            </Badge>
+                          ) : null}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+              {profile?.role === "cashier" ? (
+                <div className="pt-2">
+                  <div className="mb-2 text-[11px] uppercase tracking-wide text-white/50">
+                    Cashier
+                  </div>
+                  <div className="space-y-2">
+                    {cashierMenuItems.map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <Link
+                          key={item.key}
+                          href={item.href}
+                          onClick={() => setMenuOpen(false)}
+                          className="flex items-center justify-between rounded-xl border border-white/10 bg-bg-950/30 px-3 py-2 text-sm text-white/90 hover:bg-bg-950/50"
+                        >
+                          <span className="inline-flex items-center gap-2">
+                            <Icon className="h-4 w-4" />
+                            {item.label}
+                          </span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
             </nav>
           </div>
         </div>

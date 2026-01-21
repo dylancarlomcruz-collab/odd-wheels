@@ -11,6 +11,7 @@ import { formatPHP } from "@/lib/money";
 import { formatConditionLabel } from "@/lib/conditions";
 import { supabase } from "@/lib/supabase/browser";
 import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
 import {
   badgeToneClass,
   formatStatusLabel,
@@ -604,6 +605,14 @@ function OrderDetailContent() {
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
+              <button
+                type="button"
+                onClick={() => router.back()}
+                className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-bg-900/40 px-3 py-1.5 text-xs text-white/70 transition hover:border-white/30 hover:text-white"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Back
+              </button>
               <h1 className="text-2xl font-semibold">
                 Order #{order.id.slice(0, 8)}
               </h1>
@@ -771,17 +780,32 @@ function OrderDetailContent() {
               ) : null}
 
               {order.status === "CANCELLED" ? (
-                <div className="panel border-red-500/30 bg-red-500/10 p-3 text-red-100">
-                  {cancelledReason === "SOLD_OUT"
-                    ? "Items are sold out, please order again."
-                    : cancelledReason === "PAYMENT_TIMEOUT"
-                    ? "Order expired due to non-payment. Items returned to inventory."
-                    : "Order cancelled."}
+                <div className="panel border-red-500/30 bg-red-500/10 p-3 text-red-700 dark:text-red-100">
+                  {cancelledReason === "SOLD_OUT" ? (
+                    <div className="space-y-2">
+                      <div className="font-semibold text-red-800 dark:text-red-100">Sold out update</div>
+                      <div className="text-xs text-red-700/90 dark:text-red-100/90">
+                        Sorry about this. The item was approved for an earlier order
+                        before we could process yours, so it became unavailable.
+                        {hasRemainingItems
+                          ? " Any remaining in-stock items were automatically returned to your cart."
+                          : " Any remaining items were already out of stock."}
+                      </div>
+                      <div className="text-xs text-red-700/70 dark:text-red-100/70">
+                        We're improving our system to help prevent this in the future.
+                        Thank you for your understanding.
+                      </div>
+                    </div>
+                  ) : cancelledReason === "PAYMENT_TIMEOUT" ? (
+                    "Order expired due to non-payment. Items returned to inventory."
+                  ) : (
+                    "Order cancelled."
+                  )}
                 </div>
               ) : null}
 
               {order.status === "VOIDED" ? (
-                <div className="panel border-red-500/30 bg-red-500/10 p-3 text-red-100">
+                <div className="panel border-red-500/30 bg-red-500/10 p-3 text-red-700 dark:text-red-100">
                   Order voided by staff.
                 </div>
               ) : null}
@@ -823,10 +847,10 @@ function OrderDetailContent() {
 
               {canCancel ? (
                 <div className="panel border-red-500/20 bg-red-500/5 p-3 space-y-2">
-                  <div className="text-sm font-semibold text-red-100">
+                  <div className="text-sm font-semibold text-red-700 dark:text-red-100">
                     Cancel order
                   </div>
-                  <div className="text-xs text-red-100/70">
+                  <div className="text-xs text-red-700/70 dark:text-red-100/70">
                     Only unpaid pending orders can be cancelled.
                   </div>
                   <Button
@@ -844,29 +868,25 @@ function OrderDetailContent() {
                 </div>
               ) : null}
 
-              {order.status === "CANCELLED" &&
-              (cancelledReason === "SOLD_OUT" ||
-                cancelledReason === "PAYMENT_TIMEOUT") ? (
+              {order.status === "CANCELLED" && cancelledReason === "SOLD_OUT" ? (
                 <div className="panel p-3 space-y-2">
                   <div className="font-semibold text-white/80">Next steps</div>
-                  <Button
-                    onClick={onReorderRemaining}
-                    disabled={
-                      reorderLoading ||
-                      (cancelledReason === "SOLD_OUT" && !hasRemainingItems)
-                    }
-                  >
-                    {reorderLoading
-                      ? "Reordering..."
-                      : cancelledReason === "SOLD_OUT"
-                      ? "Reorder remaining items"
-                      : "Reorder items"}
+                  <div className="text-xs text-white/60">
+                    {hasRemainingItems
+                      ? "Remaining in-stock items were added to your cart."
+                      : "No remaining items were available to return to your cart."}
+                  </div>
+                  <Button onClick={() => router.push("/cart")}>Go to cart</Button>
+                </div>
+              ) : null}
+
+              {order.status === "CANCELLED" &&
+              cancelledReason === "PAYMENT_TIMEOUT" ? (
+                <div className="panel p-3 space-y-2">
+                  <div className="font-semibold text-white/80">Next steps</div>
+                  <Button onClick={onReorderRemaining} disabled={reorderLoading}>
+                    {reorderLoading ? "Reordering..." : "Reorder items"}
                   </Button>
-                  {cancelledReason === "SOLD_OUT" && !hasRemainingItems ? (
-                    <div className="text-xs text-white/60">
-                      No remaining items to reorder.
-                    </div>
-                  ) : null}
                   {reorderMsg ? (
                     <div className="text-xs text-red-200">{reorderMsg}</div>
                   ) : null}
@@ -932,13 +952,8 @@ function OrderDetailContent() {
                         )}
                       </div>
                       <div className="min-w-0">
-                        <div className="font-medium truncate flex items-center gap-2">
+                        <div className="font-medium truncate">
                           <span>{title}</span>
-                        {soldOut ? (
-                          <Badge className="border-red-500/30 text-red-200">
-                            Sold out
-                          </Badge>
-                        ) : null}
                         </div>
                         <div className="text-xs text-white/60">
                           {formatConditionLabel(it.condition, { upper: true })} x {qty}
@@ -952,7 +967,11 @@ function OrderDetailContent() {
                       </div>
                     </div>
                     <div className="text-sm text-white/80">
-                      {formatPHP(Number.isFinite(lineTotal) ? lineTotal : 0)}
+                      {soldOut ? (
+                        <span className="font-semibold text-price">Sold out</span>
+                      ) : (
+                        formatPHP(Number.isFinite(lineTotal) ? lineTotal : 0)
+                      )}
                     </div>
                   </div>
                 );
@@ -1173,6 +1192,7 @@ export default function OrderDetailPage() {
     </RequireAuth>
   );
 }
+
 
 
 

@@ -72,6 +72,8 @@ const PICKUP_DAYS = [
 const PICKUP_LOCATION = "RSquare Mall, Vito Cruz-Taft, Malate, Manila";
 const PICKUP_DIRECTORY =
   "Along Taft Ave near LRT-1 Vito Cruz (P. Ocampo) Station / DLSU area";
+const FEEDBACK_PROMPT_KEY = "ow_feedback_prompt";
+const FEEDBACK_NEVER_SHOW_KEY = "ow_feedback_never_show";
 
 function formatPhoneError(value: string, show: boolean): string | undefined {
   const digits = sanitizePhone(value);
@@ -810,6 +812,23 @@ function CheckoutContent() {
         },
         selectedLines
       );
+
+      try {
+        if (typeof window !== "undefined") {
+          const neverShow = window.localStorage.getItem(FEEDBACK_NEVER_SHOW_KEY);
+          if (!neverShow) {
+            window.localStorage.setItem(
+              FEEDBACK_PROMPT_KEY,
+              JSON.stringify({
+                orderId: order?.id ?? null,
+                createdAt: new Date().toISOString(),
+              })
+            );
+          }
+        }
+      } catch {
+        // Ignore localStorage issues.
+      }
 
       await reload();
       router.push(`/orders`);

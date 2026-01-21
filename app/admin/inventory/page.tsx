@@ -16,6 +16,7 @@ import {
   inferFieldsFromTitle,
   normalizeKaidoMiniGtTitle,
   normalizeBrandAlias,
+  normalizeLookupTitle,
   normalizeTitleBrandAliases,
 } from "@/lib/titleInference";
 import { formatPHP } from "@/lib/money";
@@ -502,9 +503,9 @@ export default function AdminInventoryPage() {
 
       // Fill product identity, but do not overwrite manual edits
       const rawTitle = String(d.title ?? title ?? "");
-      const normalizedTitle = normalizeTitleBrandAliases(rawTitle);
+      const normalizedTitle = normalizeLookupTitle(rawTitle, d.brand ?? null);
       const kaidoNormalized = normalizeKaidoMiniGtTitle(
-        normalizedTitle,
+        normalizedTitle || normalizeTitleBrandAliases(rawTitle),
         d.color_style ?? null
       );
 
@@ -601,8 +602,9 @@ export default function AdminInventoryPage() {
     result: GoogleLookupData,
     options?: { selected?: Record<string, boolean>; applyImages?: boolean }
   ) {
-    const normalizedTitle = normalizeTitleBrandAliases(
-      String(result.title ?? "")
+    const normalizedTitle = normalizeLookupTitle(
+      String(result.title ?? ""),
+      result.brand ?? null
     );
     if (normalizedTitle) {
       setTitle((prev) => resolveNormalizedTitle(prev, normalizedTitle));
@@ -660,8 +662,11 @@ export default function AdminInventoryPage() {
       }
 
       const d = j.data as GoogleLookupData;
-      const normalizedTitle = normalizeTitleBrandAliases(String(d.title ?? ""));
       const normalizedBrand = normalizeBrandAlias(d.brand) ?? d.brand;
+      const normalizedTitle = normalizeLookupTitle(
+        String(d.title ?? ""),
+        normalizedBrand ?? d.brand ?? null
+      );
       const imgs = Array.isArray(d.images)
         ? d.images.filter(Boolean).slice(0, 9)
         : [];
@@ -718,8 +723,11 @@ export default function AdminInventoryPage() {
 
       const d = j.data as ProductUrlLookupData;
       const rawTitle = String(d.title ?? "").trim();
-      const normalizedTitle = normalizeTitleBrandAliases(rawTitle);
       const normalizedBrand = normalizeBrandAlias(d.brand) ?? d.brand;
+      const normalizedTitle = normalizeLookupTitle(
+        rawTitle,
+        normalizedBrand ?? d.brand ?? null
+      );
       const imgs = Array.isArray(d.images)
         ? d.images.filter(Boolean).slice(0, 9)
         : [];
@@ -1331,12 +1339,28 @@ export default function AdminInventoryPage() {
     )
       return;
 
-    const { error } = await supabase
-      .from("product_variants")
-      .delete()
-      .eq("id", v.id);
+    const { data, error } = await supabase.rpc("fn_delete_variant", {
+      p_variant_id: v.id,
+      p_delete_cart_items: true,
+    });
 
-    if (error) toast({ intent: "error", message: error.message });
+    if (error) {
+      toast({ intent: "error", message: error.message });
+      return;
+    }
+
+    if (!data?.ok) {
+      const reason =
+        data?.error === "HAS_ORDERS"
+          ? "Cannot delete. This variant is linked to orders."
+          : data?.error === "NOT_FOUND"
+            ? "Variant not found."
+            : "Delete failed.";
+      toast({ intent: "error", message: reason });
+      return;
+    }
+
+    toast({ intent: "success", message: "Variant deleted." });
     if (selectedProduct) await loadProduct(selectedProduct);
   }
 
@@ -1374,7 +1398,7 @@ export default function AdminInventoryPage() {
           <div className="text-xl font-semibold">Inventory</div>
           <div className="text-sm text-white/60">
             Search, edit product identity, manage variants
-            (qty/price/cost/barcode), and archive products.
+            (qty/price/cost/barcode), and mark items as sold out.
           </div>
         </CardHeader>
 
@@ -1385,14 +1409,14 @@ export default function AdminInventoryPage() {
               <div>
                 <div className="font-semibold">Inventory Worth</div>
                 <div className="text-xs text-white/60">
-                  Scope: {includeArchived ? "All inventory (active + archived)" : "Active products only"}
+                  Scope: {includeArchived ? "All inventory (active + sold out)" : "Active products only"}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Checkbox
                   checked={includeArchived}
                   onChange={setIncludeArchived}
-                  label="Include archived"
+                  label="Include sold out"
                 />
                 <Checkbox
                   checked={assumeZeroCost}
@@ -1594,7 +1618,7 @@ export default function AdminInventoryPage() {
                                 : "text-red-300 text-xs"
                             }
                           >
-                            {p.is_active ? "ACTIVE" : "ARCHIVED"}
+                            {p.is_active ? "ACTIVE" : "SOLD OUT"}
                           </span>
                         </div>
                         <div className="text-xs text-white/60">
@@ -1938,7 +1962,7 @@ export default function AdminInventoryPage() {
                     onClick={() => toggleArchive(false)}
                     disabled={saving}
                   >
-                    Archive (hide from shop)
+                    Mark sold out
                   </Button>
                 ) : (
                   <Button
@@ -1946,7 +1970,7 @@ export default function AdminInventoryPage() {
                     onClick={() => toggleArchive(true)}
                     disabled={saving}
                   >
-                    Unarchive
+                    Restore to active
                   </Button>
                 )
               ) : null}
@@ -1984,28 +2008,33 @@ export default function AdminInventoryPage() {
 
             <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
               <div className="text-sm font-medium mb-2">
-                Upload image file (optional)
+                Upload image files (optional)
               </div>
               <input
                 type="file"
                 accept="image/*"
+                multiple
                 onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (!f) return;
+                  const list = Array.from(e.target.files ?? []);
+                  if (!list.length) return;
                   const pid = selectedProduct?.id ?? crypto.randomUUID();
-                  uploadImageFile(f, pid);
+                  void uploadImageFiles(list, pid);
+                  e.currentTarget.value = "";
                 }}
               />
+              <div className="text-xs text-white/50 mt-1">
+                Select multiple images from your gallery.
+              </div>
               <div className="mt-2">
                 <input
                   type="file"
                   accept="image/*"
                   capture="environment"
                   onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (!f) return;
+                    const list = Array.from(e.target.files ?? []);
+                    if (!list.length) return;
                     const pid = selectedProduct?.id ?? crypto.randomUUID();
-                    uploadImageFile(f, pid);
+                    void uploadImageFiles(list, pid);
                     e.currentTarget.value = "";
                   }}
                 />

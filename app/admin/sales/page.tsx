@@ -1,6 +1,16 @@
 "use client";
 
 import * as React from "react";
+import {
+  BarChart3,
+  CalendarRange,
+  ClipboardList,
+  Coins,
+  Percent,
+  RefreshCw,
+  TrendingUp,
+  Wallet,
+} from "lucide-react";
 import { RequireAuth } from "@/components/auth/RequireAuth";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -213,41 +223,77 @@ export default function AdminSalesPage() {
         <Card>
           <CardHeader className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-xl font-semibold">Sales Report</div>
+              <div className="flex items-center gap-2 text-xl font-semibold">
+                <BarChart3 className="h-5 w-5 text-amber-300" />
+                Sales Report
+              </div>
               <div className="text-sm text-white/60">PAID orders only (payment_status = PAID)</div>
             </div>
-            <Badge>{orders.length} orders</Badge>
+            <Badge className="border-amber-500/30 text-amber-200">{orders.length} orders</Badge>
           </CardHeader>
           <CardBody className="space-y-6">
-            <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6">
-              <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-                <div className="text-sm text-white/60">Total Sales</div>
-                <div className="text-2xl font-semibold">{peso(totals.sales)}</div>
+            <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+              <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+                <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                  <span>Total Sales</span>
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-200">
+                    <Wallet className="h-4 w-4" />
+                  </span>
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-amber-200">{peso(totals.sales)}</div>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-                <div className="text-sm text-white/60">Orders</div>
-                <div className="text-2xl font-semibold">{totals.count}</div>
+              <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
+                <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                  <span>Orders</span>
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-sky-500/30 bg-sky-500/10 text-sky-200">
+                    <ClipboardList className="h-4 w-4" />
+                  </span>
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-sky-200">{totals.count}</div>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-                <div className="text-sm text-white/60">Avg Order Value</div>
-                <div className="text-2xl font-semibold">{peso(totals.aov)}</div>
+              <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4">
+                <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                  <span>Avg Order Value</span>
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-violet-500/30 bg-violet-500/10 text-violet-200">
+                    <TrendingUp className="h-4 w-4" />
+                  </span>
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-violet-200">{peso(totals.aov)}</div>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-                <div className="text-sm text-white/60">COGS</div>
-                <div className="text-2xl font-semibold">{peso(totals.cogs)}</div>
+              <div className="rounded-2xl border border-orange-500/20 bg-orange-500/5 p-4">
+                <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                  <span>COGS</span>
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-orange-500/30 bg-orange-500/10 text-orange-200">
+                    <Coins className="h-4 w-4" />
+                  </span>
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-orange-200">{peso(totals.cogs)}</div>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-                <div className="text-sm text-white/60">Gross Profit</div>
-                <div className="text-2xl font-semibold">{peso(totals.grossProfit)}</div>
+              <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                  <span>Gross Profit</span>
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-200">
+                    <BarChart3 className="h-4 w-4" />
+                  </span>
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-emerald-200">{peso(totals.grossProfit)}</div>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-                <div className="text-sm text-white/60">Gross Margin</div>
-                <div className="text-2xl font-semibold">{formatPercent(totals.grossMargin)}</div>
+              <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-4">
+                <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                  <span>Gross Margin</span>
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-indigo-500/30 bg-indigo-500/10 text-indigo-200">
+                    <Percent className="h-4 w-4" />
+                  </span>
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-indigo-200">{formatPercent(totals.grossMargin)}</div>
               </div>
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-              <div className="font-semibold">Filters</div>
+              <div className="flex items-center gap-2 font-semibold">
+                <CalendarRange className="h-4 w-4 text-sky-200" />
+                Filters
+              </div>
               <div className="mt-3 flex flex-wrap items-end gap-3">
                 <label className="block">
                   <div className="mb-1 text-sm text-white/80">From</div>
@@ -255,7 +301,7 @@ export default function AdminSalesPage() {
                     type="date"
                     value={from}
                     onChange={(e) => setFrom(e.target.value)}
-                    className="w-full sm:w-[180px] rounded-xl bg-bg-800 border border-white/10 px-4 py-2 text-white"
+                    className="w-full rounded-xl border border-white/10 bg-bg-800 px-4 py-2 text-white sm:w-[180px]"
                   />
                 </label>
                 <label className="block">
@@ -264,10 +310,11 @@ export default function AdminSalesPage() {
                     type="date"
                     value={to}
                     onChange={(e) => setTo(e.target.value)}
-                    className="w-full sm:w-[180px] rounded-xl bg-bg-800 border border-white/10 px-4 py-2 text-white"
+                    className="w-full rounded-xl border border-white/10 bg-bg-800 px-4 py-2 text-white sm:w-[180px]"
                   />
                 </label>
-                <Button variant="secondary" onClick={run} disabled={loading}>
+                <Button variant="secondary" onClick={run} disabled={loading} className="gap-2">
+                  <RefreshCw className="h-4 w-4" />
                   {loading ? "Refreshing..." : "Refresh"}
                 </Button>
               </div>
@@ -275,7 +322,10 @@ export default function AdminSalesPage() {
 
             <div className="grid gap-6 md:grid-cols-2">
               <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-                <div className="font-semibold">Daily Totals</div>
+                <div className="flex items-center gap-2 font-semibold">
+                  <CalendarRange className="h-4 w-4 text-amber-200" />
+                  Daily Totals
+                </div>
                 <div className="mt-3 space-y-2">
                   {daily.length === 0 ? (
                     <div className="text-sm text-white/60">No paid orders in range.</div>
@@ -292,7 +342,10 @@ export default function AdminSalesPage() {
               </div>
 
               <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-                <div className="font-semibold">Channel Breakdown</div>
+                <div className="flex items-center gap-2 font-semibold">
+                  <BarChart3 className="h-4 w-4 text-emerald-200" />
+                  Channel Breakdown
+                </div>
                 <div className="mt-3 space-y-2">
                   {channels.length === 0 ? (
                     <div className="text-sm text-white/60">No data.</div>
@@ -310,13 +363,19 @@ export default function AdminSalesPage() {
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-              <div className="font-semibold">Top-Selling Items</div>
+              <div className="flex items-center gap-2 font-semibold">
+                <TrendingUp className="h-4 w-4 text-violet-200" />
+                Top-Selling Items
+              </div>
               <div className="mt-3 space-y-2">
                 {topItems.length === 0 ? (
                   <div className="text-sm text-white/60">No items.</div>
                 ) : (
                   topItems.map((it) => (
-                    <div key={it.key} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-paper/5 px-3 py-2">
+                    <div
+                      key={it.key}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-paper/5 px-3 py-2"
+                    >
                       <div className="min-w-0">
                         <div className="font-medium truncate">{it.name}</div>
                         <div className="text-xs text-white/60">

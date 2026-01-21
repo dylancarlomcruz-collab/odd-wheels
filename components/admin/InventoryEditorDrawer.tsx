@@ -70,6 +70,10 @@ export function InventoryEditorDrawer({
   const [isActive, setIsActive] = React.useState(true);
   const [variants, setVariants] = React.useState<VariantDraft[]>([]);
   const [saving, setSaving] = React.useState(false);
+  const [deletingVariantId, setDeletingVariantId] = React.useState<string | null>(
+    null
+  );
+  const [deletingProduct, setDeletingProduct] = React.useState(false);
 
   React.useEffect(() => {
     if (!product) return;
@@ -262,6 +266,89 @@ export function InventoryEditorDrawer({
     setVariants((prev) =>
       prev.map((v) => (v.id === id ? { ...v, ...patch } : v))
     );
+  }
+
+  async function deleteVariant(v: VariantDraft) {
+    if (
+      !confirm(
+        "Delete this variant? This will remove it from the database."
+      )
+    )
+      return;
+
+    if (v._isNew) {
+      setVariants((prev) => prev.filter((item) => item.id !== v.id));
+      return;
+    }
+
+    setDeletingVariantId(v.id);
+    try {
+      const { data, error } = await supabase.rpc("fn_delete_variant", {
+        p_variant_id: v.id,
+        p_delete_cart_items: true,
+      });
+
+      if (error) {
+        toast({ intent: "error", message: error.message });
+        return;
+      }
+
+      if (!data?.ok) {
+        const reason =
+          data?.error === "HAS_ORDERS"
+            ? "Cannot delete. This variant is linked to orders."
+            : data?.error === "NOT_FOUND"
+              ? "Variant not found."
+              : "Delete failed.";
+        toast({ intent: "error", message: reason });
+        return;
+      }
+
+      setVariants((prev) => prev.filter((item) => item.id !== v.id));
+      toast({ intent: "success", message: "Variant deleted." });
+      onSaved();
+    } finally {
+      setDeletingVariantId(null);
+    }
+  }
+
+  async function deleteProduct() {
+    if (
+      !confirm(
+        `Delete "${product.title}"? This removes the product and its variants.`
+      )
+    )
+      return;
+
+    setDeletingProduct(true);
+    try {
+      const { data, error } = await supabase.rpc("fn_delete_product", {
+        p_product_id: productId,
+        p_delete_cart_items: true,
+      });
+
+      if (error) {
+        toast({ intent: "error", message: error.message });
+        return;
+      }
+
+      if (!data?.ok) {
+        const reason =
+          data?.error === "HAS_ORDERS"
+            ? "Cannot delete. This product is linked to orders."
+            : data?.error === "NOT_FOUND"
+              ? "Product not found."
+              : "Delete failed.";
+        toast({ intent: "error", message: reason });
+        return;
+      }
+
+      toast({ intent: "success", message: "Product deleted." });
+      onSaved();
+      onClose();
+    } finally {
+      setDeletingProduct(false);
+    }
   }
 
   function addVariant() {
@@ -498,6 +585,13 @@ export function InventoryEditorDrawer({
               onChange={setIsActive}
               label="Active in shop"
             />
+            <Button
+              variant="danger"
+              onClick={deleteProduct}
+              disabled={saving || deletingProduct}
+            >
+              {deletingProduct ? "Deleting..." : "Delete"}
+            </Button>
             <Button variant="ghost" onClick={onClose}>
               Close
             </Button>
@@ -669,8 +763,12 @@ export function InventoryEditorDrawer({
                               ))}
                           </Select>
                         </div>
-                        <Button variant="ghost" onClick={() => updateVariant(v.id, { _delete: true })}>
-                          Remove
+                        <Button
+                          variant="ghost"
+                          onClick={() => deleteVariant(v)}
+                          disabled={saving || deletingVariantId === v.id}
+                        >
+                          {deletingVariantId === v.id ? "Deleting..." : "Delete"}
                         </Button>
                       </div>
 

@@ -1,4 +1,9 @@
 import { NextResponse } from "next/server";
+import {
+  inferFieldsFromTitle,
+  normalizeBrandAlias,
+  normalizeLookupTitle,
+} from "@/lib/titleInference";
 
 type LookupResult = {
   title: string | null;
@@ -93,9 +98,16 @@ function extractFromHtml(html: string, baseUrl: string): LookupResult {
       .filter(Boolean)
   ).slice(0, MAX_IMAGES);
 
+  const inferred = inferFieldsFromTitle(title ?? "");
+  const normalizedBrand = normalizeBrandAlias(brand) ?? inferred.brand ?? brand;
+  const normalizedTitle =
+    normalizeLookupTitle(title ?? "", normalizedBrand ?? inferred.brand ?? null) ||
+    title ||
+    null;
+
   return {
-    title,
-    brand,
+    title: normalizedTitle,
+    brand: normalizedBrand ?? brand,
     model: null,
     variation: null,
     images,

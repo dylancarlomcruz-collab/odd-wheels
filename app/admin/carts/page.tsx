@@ -1,6 +1,15 @@
 "use client";
 
 import * as React from "react";
+import {
+  BarChart3,
+  Boxes,
+  Layers,
+  RefreshCw,
+  ShoppingCart,
+  SlidersHorizontal,
+  Users,
+} from "lucide-react";
 import { supabase } from "@/lib/supabase/browser";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -195,35 +204,61 @@ export default function AdminCartInsightsPage() {
       <Card>
         <CardHeader className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-xl font-semibold">Cart Insights</div>
+            <div className="flex items-center gap-2 text-xl font-semibold">
+              <ShoppingCart className="h-5 w-5 text-amber-300" />
+              Cart Insights
+            </div>
             <div className="text-sm text-white/60">
               See which items are most often left in carts to guide restock or pricing moves.
             </div>
           </div>
-          <Badge>{rows.length} items</Badge>
+          <Badge className="border-amber-500/30 text-amber-200">{rows.length} items</Badge>
         </CardHeader>
         <CardBody className="space-y-6">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
-              <div className="text-sm text-white/60">Cart lines</div>
-              <div className="text-2xl font-semibold">{stats.lines}</div>
+            <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-3 sm:p-4">
+              <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                <span>Cart lines</span>
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-200">
+                  <ShoppingCart className="h-4 w-4" />
+                </span>
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-amber-200">{stats.lines}</div>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
-              <div className="text-sm text-white/60">Distinct customers</div>
-              <div className="text-2xl font-semibold">{stats.customers}</div>
+            <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-3 sm:p-4">
+              <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                <span>Customers</span>
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-sky-500/30 bg-sky-500/10 text-sky-200">
+                  <Users className="h-4 w-4" />
+                </span>
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-sky-200">{stats.customers}</div>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
-              <div className="text-sm text-white/60">Total qty in carts</div>
-              <div className="text-2xl font-semibold">{stats.qty}</div>
+            <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-3 sm:p-4">
+              <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                <span>Total qty</span>
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-violet-500/30 bg-violet-500/10 text-violet-200">
+                  <Layers className="h-4 w-4" />
+                </span>
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-violet-200">{stats.qty}</div>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
-              <div className="text-sm text-white/60">Variants in carts</div>
-              <div className="text-2xl font-semibold">{stats.variants}</div>
+            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-3 sm:p-4">
+              <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                <span>Variants</span>
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-200">
+                  <Boxes className="h-4 w-4" />
+                </span>
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-emerald-200">{stats.variants}</div>
             </div>
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
-            <div className="font-semibold">Filters</div>
+            <div className="flex items-center gap-2 font-semibold">
+              <SlidersHorizontal className="h-4 w-4 text-sky-200" />
+              Filters
+            </div>
             <div className="mt-3 flex flex-wrap items-end gap-3">
               <Input
                 label="Lookback days"
@@ -254,14 +289,18 @@ export default function AdminCartInsightsPage() {
                 <option value="qty">Most qty in carts</option>
                 <option value="customers">Most customers</option>
               </Select>
-              <Button variant="secondary" onClick={load} disabled={loading}>
+              <Button variant="secondary" onClick={load} disabled={loading} className="gap-2">
+                <RefreshCw className="h-4 w-4" />
                 {loading ? "Refreshing..." : "Refresh"}
               </Button>
             </div>
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
-            <div className="font-semibold">Most in carts</div>
+            <div className="flex items-center gap-2 font-semibold">
+              <BarChart3 className="h-4 w-4 text-amber-200" />
+              Most in carts
+            </div>
             <div className="mt-3 space-y-2">
               {loading ? (
                 <div className="text-sm text-white/60">Loading cart insights...</div>
@@ -298,11 +337,17 @@ export default function AdminCartInsightsPage() {
 
                       <div className="flex items-center gap-6">
                         <div className="text-right">
-                          <div className="text-xs text-white/60">In carts</div>
+                          <div className="flex items-center justify-end gap-1 text-xs text-white/60">
+                            <ShoppingCart className="h-3 w-3" />
+                            In carts
+                          </div>
                           <div className="text-lg font-semibold">{row.qty}</div>
                         </div>
                         <div className="text-right">
-                          <div className="text-xs text-white/60">Customers</div>
+                          <div className="flex items-center justify-end gap-1 text-xs text-white/60">
+                            <Users className="h-3 w-3" />
+                            Customers
+                          </div>
                           <div className="text-lg font-semibold">{row.customers}</div>
                         </div>
                       </div>

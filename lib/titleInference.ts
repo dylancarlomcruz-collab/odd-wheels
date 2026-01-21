@@ -241,6 +241,27 @@ export function normalizeTitleBrandAliases(titleRaw: string): string {
   return out;
 }
 
+export function normalizeLookupTitle(
+  titleRaw: string | null | undefined,
+  brandRaw?: string | null
+): string {
+  const base = normalizeTitleBrandAliases(String(titleRaw ?? ""));
+  const cleanedBase = cleanupLookupTitle(base);
+  const normalizedBrand = normalizeBrandAlias(brandRaw) ?? String(brandRaw ?? "").trim();
+  if (!normalizedBrand) return cleanedBase;
+
+  const withoutBrand = cleanupLookupTitle(removeBrandFromTitle(cleanedBase, normalizedBrand));
+  if (!withoutBrand) return normalizedBrand;
+
+  const startsWithBrand = new RegExp(
+    `^${escapeRegExp(normalizedBrand).replace(/\\s+/g, "\\\\s+")}\\b`,
+    "i"
+  );
+  if (startsWithBrand.test(withoutBrand)) return withoutBrand;
+
+  return `${normalizedBrand} ${withoutBrand}`.replace(/\s{2,}/g, " ").trim();
+}
+
 function escapeRegExp(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -251,4 +272,23 @@ function aliasPattern(alias: string) {
 
 function capitalize(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function cleanupLookupTitle(value: string) {
+  let out = String(value ?? "");
+  out = out.replace(/\b1\s*[:/]\s*64\b/gi, " ");
+  out = out.replace(/\(\s*\)/g, " ").replace(/\[\s*\]/g, " ");
+  out = out.replace(/\s{2,}/g, " ");
+  out = out.replace(/^[\s\-|:]+/g, "");
+  out = out.replace(/[\s\-|:]+$/g, "");
+  return out.replace(/\s{2,}/g, " ").trim();
+}
+
+function removeBrandFromTitle(title: string, brand: string) {
+  const brandPattern = escapeRegExp(brand).replace(/\s+/g, "\\s+");
+  let out = String(title ?? "");
+  out = out.replace(new RegExp(`\\bby\\s+${brandPattern}\\b`, "ig"), " ");
+  out = out.replace(new RegExp(`\\b${brandPattern}\\b`, "ig"), " ");
+  out = out.replace(/\bby\b\s*$/i, " ");
+  return out.replace(/\s{2,}/g, " ").trim();
 }

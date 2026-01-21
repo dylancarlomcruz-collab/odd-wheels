@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { inferFieldsFromTitle } from "@/lib/titleInference";
+import {
+  inferFieldsFromTitle,
+  normalizeBrandAlias,
+  normalizeLookupTitle,
+} from "@/lib/titleInference";
 
 export const runtime = "nodejs";
 
@@ -126,12 +130,18 @@ export async function GET(req: Request) {
       if (brand && model && variation) break;
     }
 
+    const normalizedBrand = normalizeBrandAlias(brand) ?? brand;
+    const normalizedTitle =
+      normalizeLookupTitle(title ?? "", normalizedBrand ?? brand ?? null) ||
+      title ||
+      clean(q);
+
     return NextResponse.json(
       {
         ok: true,
         data: {
-          title,
-          brand: clean(brand),
+          title: normalizedTitle,
+          brand: clean(normalizedBrand ?? brand),
           model: clean(model),
           variation: clean(variation),
           images,

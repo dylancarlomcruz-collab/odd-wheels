@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { RequireAuth } from "@/components/auth/RequireAuth";
 import { useCart, type CartLine } from "@/hooks/useCart";
@@ -109,6 +110,11 @@ function CartContent() {
   function openPreview(line: CartLine) {
     setPreviewLine(line);
     setActiveImage(line.variant.product.image_urls?.[0] ?? "");
+  }
+
+  function renderPortal(content: React.ReactNode) {
+    if (typeof document === "undefined") return null;
+    return createPortal(content, document.body);
   }
 
   async function onAddSuggestion(
@@ -388,7 +394,7 @@ function CartContent() {
         </Card>
       ) : null}
     
-      {previewLine ? (
+      {previewLine ? renderPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
           <button
             type="button"

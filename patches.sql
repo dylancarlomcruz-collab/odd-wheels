@@ -317,10 +317,12 @@ returns jsonb
 language plpgsql
 security definer
 set search_path = public
+set row_security = off
 as $$
 declare
   v_product_ids uuid[];
   v_cancel_ids uuid[];
+  v_returned int := 0;
 begin
   if p_variant_ids is null or array_length(p_variant_ids, 1) is null then
     return jsonb_build_object('ok', true, 'variant_count', 0);
@@ -347,7 +349,15 @@ begin
   where o.status not in ('CANCELLED','VOIDED')
     and o.payment_status <> 'PAID'
     and coalesce(o.inventory_deducted, false) = false
-    and oi.variant_id = any(p_variant_ids);
+    and (
+      oi.variant_id = any(p_variant_ids)
+      or oi.item_id = any(p_variant_ids)
+      or (
+        oi.variant_id is null
+        and oi.item_id is null
+        and oi.product_id = any(v_product_ids)
+      )
+    );
 
   if v_cancel_ids is not null then
     update public.orders
@@ -359,13 +369,64 @@ begin
       set is_cancelled = true,
           cancel_reason = 'SOLD_OUT'
     where order_id = any(v_cancel_ids)
-      and variant_id = any(p_variant_ids);
+      and (
+        variant_id = any(p_variant_ids)
+        or item_id = any(p_variant_ids)
+        or (
+          variant_id is null
+          and item_id is null
+          and product_id = any(v_product_ids)
+        )
+      );
+
+    with canceled_orders as (
+      select id, user_id
+      from public.orders
+      where id = any(v_cancel_ids)
+    ),
+    remaining as (
+      select o.user_id, oi.variant_id, sum(oi.qty) as qty
+      from public.order_items oi
+      join canceled_orders o on o.id = oi.order_id
+      where not (
+        oi.variant_id = any(p_variant_ids)
+        or oi.item_id = any(p_variant_ids)
+        or (
+          oi.variant_id is null
+          and oi.item_id is null
+          and oi.product_id = any(v_product_ids)
+        )
+      )
+        and coalesce(oi.is_cancelled, false) = false
+        and coalesce(oi.cancel_reason, '') <> 'SOLD_OUT'
+      group by o.user_id, oi.variant_id
+    ),
+    stock as (
+      select r.user_id, r.variant_id, least(r.qty, pv.qty) as qty
+      from remaining r
+      join public.product_variants pv on pv.id = r.variant_id
+      where pv.qty > 0
+    ),
+    upserted as (
+      insert into public.cart_items (user_id, variant_id, qty)
+      select s.user_id, s.variant_id, s.qty
+      from stock s
+      where s.qty > 0
+      on conflict (user_id, variant_id) do update
+        set qty = least(
+          public.cart_items.qty + excluded.qty,
+          (select pv.qty from public.product_variants pv where pv.id = excluded.variant_id)
+        )
+      returning 1
+    )
+    select count(*) into v_returned from upserted;
   end if;
 
   return jsonb_build_object(
     'ok', true,
     'variant_count', array_length(p_variant_ids, 1),
-    'cancelled_orders', coalesce(array_length(v_cancel_ids, 1), 0)
+    'cancelled_orders', coalesce(array_length(v_cancel_ids, 1), 0),
+    'returned_cart_lines', v_returned
   );
 end;
 $$;

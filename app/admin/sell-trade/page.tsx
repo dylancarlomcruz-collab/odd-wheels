@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { ArrowLeftRight, CheckCircle2, Clock, XCircle } from "lucide-react";
 import { supabase } from "@/lib/supabase/browser";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -120,7 +121,10 @@ export default function AdminSellTradePage() {
       <Card>
         <CardHeader className="flex items-center justify-between">
           <div>
-            <div className="text-xl font-semibold">Sell / Trade Offers</div>
+            <div className="flex items-center gap-2 text-xl font-semibold">
+              <ArrowLeftRight className="h-5 w-5 text-amber-300" />
+              Sell / Trade Offers
+            </div>
             <div className="text-sm text-white/60">
               Review sell/trade submissions, counter, approve, or reject with reasons.
             </div>
@@ -129,21 +133,49 @@ export default function AdminSellTradePage() {
         </CardHeader>
         <CardBody className="space-y-6">
           <div className="grid gap-3 md:grid-cols-4">
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-              <div className="text-sm text-white/60">Pending</div>
-              <div className="text-2xl font-semibold">{pending.length}</div>
+            <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+              <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                <span>Pending</span>
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-200">
+                  <Clock className="h-4 w-4" />
+                </span>
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-amber-200">
+                {pending.length}
+              </div>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-              <div className="text-sm text-white/60">Approved</div>
-              <div className="text-2xl font-semibold">{approved.length}</div>
+            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+              <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                <span>Approved</span>
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-200">
+                  <CheckCircle2 className="h-4 w-4" />
+                </span>
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-emerald-200">
+                {approved.length}
+              </div>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-              <div className="text-sm text-white/60">Countered</div>
-              <div className="text-2xl font-semibold">{countered.length}</div>
+            <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
+              <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                <span>Countered</span>
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-sky-500/30 bg-sky-500/10 text-sky-200">
+                  <ArrowLeftRight className="h-4 w-4" />
+                </span>
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-sky-200">
+                {countered.length}
+              </div>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-              <div className="text-sm text-white/60">Rejected</div>
-              <div className="text-2xl font-semibold">{rejected.length}</div>
+            <div className="rounded-2xl border border-red-500/20 bg-red-500/5 p-4">
+              <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                <span>Rejected</span>
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-red-500/30 bg-red-500/10 text-red-200">
+                  <XCircle className="h-4 w-4" />
+                </span>
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-red-200">
+                {rejected.length}
+              </div>
             </div>
           </div>
 

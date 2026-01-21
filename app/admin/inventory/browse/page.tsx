@@ -16,7 +16,7 @@ export default function AdminInventoryBrowsePage() {
           <div className="text-xl font-semibold">Inventory Browse</div>
           <div className="text-sm text-white/60">
             Browse inventory visually like the shop grid. Click a card to edit
-            product identity, images, variants, pricing, and archive status.
+            product identity, images, variants, pricing, and sold out status.
           </div>
         </CardHeader>
         <CardBody>
