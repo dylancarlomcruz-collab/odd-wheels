@@ -11,7 +11,7 @@ import { readRecentViewEntries } from "@/lib/recentViews";
 import { expandSearchTerms, getLastSearchTerm, normalizeSearchTerm } from "@/lib/search";
 
 const BRAND_ALL_KEY = "__all__";
-const MAX_PRIMARY_BRAND_TABS = 4;
+const MAX_PRIMARY_BRAND_TABS = 8;
 const LIMITED_SECTION_COUNTS: Record<string, number> = {
   trending: 4,
   "for-you": 4,
@@ -32,11 +32,33 @@ const PREFERRED_BRAND_KEYS: Array<{ label: string; keys: string[] }> = [
   { label: "Pop Race", keys: ["poprace"] },
   { label: "Tarmac", keys: ["tarmac", "tarmacworks"] },
 ];
+const BRAND_BUTTON_STYLES = {
+  active:
+    "bg-bg-950/70 text-white border-white/30 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]",
+  idle:
+    "bg-bg-950/40 text-white/80 border-white/10 hover:bg-bg-950/60 hover:text-white",
+};
 
 function normalizeBrandKey(value: string | null | undefined) {
   return String(value ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
+}
+
+function getBrandButtonClasses(active: boolean, joined: boolean) {
+  const toneClasses = active ? BRAND_BUTTON_STYLES.active : BRAND_BUTTON_STYLES.idle;
+  return [
+    "inline-flex h-8 items-center justify-center whitespace-nowrap border px-3 text-xs font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 sm:h-9 sm:px-4 sm:text-sm",
+    joined ? "rounded-none -ml-px first:ml-0" : "rounded-none",
+    toneClasses,
+  ].join(" ");
+}
+
+function getMoreButtonClasses(joined: boolean) {
+  return [
+    "inline-flex h-8 items-center justify-center whitespace-nowrap border border-white/10 bg-bg-950/40 px-3 text-xs font-medium leading-none text-white/80 transition hover:bg-bg-950/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 sm:h-9 sm:px-4 sm:text-sm",
+    joined ? "rounded-none -ml-px first:ml-0" : "rounded-none",
+  ].join(" ");
 }
 
 function takeN<T>(items: T[], n: number) {
@@ -69,6 +91,7 @@ export default function ShopPageClient() {
   const [rows, setRows] = React.useState<VariantRow[]>([]);
   const [brandTab, setBrandTab] = React.useState<string>(BRAND_ALL_KEY);
   const [showAllBrands, setShowAllBrands] = React.useState(false);
+  const [visibleBrandCount, setVisibleBrandCount] = React.useState(0);
   const [expandedSections, setExpandedSections] = React.useState<
     Record<string, boolean>
   >({});
@@ -84,6 +107,8 @@ export default function ShopPageClient() {
   const [lastSearch, setLastSearch] = React.useState<string | null>(null);
   const [showBackToTop, setShowBackToTop] = React.useState(false);
   const resultsRef = React.useRef<HTMLDivElement | null>(null);
+  const brandRowRef = React.useRef<HTMLDivElement | null>(null);
+  const brandMeasureRef = React.useRef<HTMLDivElement | null>(null);
   const lastScrolledQuery = React.useRef<string>("");
   const lastRecentRefresh = React.useRef<number>(0);
 
@@ -318,6 +343,11 @@ export default function ShopPageClient() {
     }));
   }, [brandStats]);
 
+  const brandTabs = React.useMemo(
+    () => [{ key: BRAND_ALL_KEY, label: "All" }, ...primaryBrandTabs],
+    [primaryBrandTabs]
+  );
+
   const allBrandTabs = React.useMemo(() => {
     const list = brandStats.byLabel.map((entry) => ({
       key: entry.key,
@@ -325,6 +355,78 @@ export default function ShopPageClient() {
     }));
     return [{ key: BRAND_ALL_KEY, label: "All" }, ...list];
   }, [brandStats]);
+
+  const resolvedVisibleCount = visibleBrandCount || brandTabs.length;
+  const visibleBrandTabs = React.useMemo(
+    () => brandTabs.slice(0, Math.max(1, resolvedVisibleCount)),
+    [brandTabs, resolvedVisibleCount]
+  );
+  const canExpandBrands = allBrandTabs.length > visibleBrandTabs.length;
+  const moreLabel = showAllBrands ? "Show less" : "Show more";
+
+  React.useLayoutEffect(() => {
+    if (!brandRowRef.current || !brandMeasureRef.current) return;
+    let frame = 0;
+    const row = brandRowRef.current;
+    const measure = brandMeasureRef.current;
+
+    const compute = () => {
+      frame = 0;
+      const rowWidth = row.getBoundingClientRect().width;
+      if (!rowWidth) return;
+      const widths = new Map<string, number>();
+      const buttons = Array.from(
+        measure.querySelectorAll<HTMLButtonElement>("[data-brand-tab]")
+      );
+      for (const button of buttons) {
+        const key = button.dataset.brandTab ?? "";
+        widths.set(key, button.getBoundingClientRect().width);
+      }
+      const moreWidth = widths.get("__more__") ?? 0;
+
+      const computeCount = (reserveMore: boolean) => {
+        let used = 0;
+        let count = 0;
+        for (const tab of brandTabs) {
+          const width = widths.get(tab.key) ?? 0;
+          const reserve = reserveMore ? moreWidth : 0;
+          if (used + width + reserve <= rowWidth || count === 0) {
+            used += width;
+            count += 1;
+          } else {
+            break;
+          }
+        }
+        return count;
+      };
+
+      const reserveMoreInitial = allBrandTabs.length > brandTabs.length;
+      let count = computeCount(reserveMoreInitial);
+      if (count < brandTabs.length) {
+        count = computeCount(true);
+      }
+
+      setVisibleBrandCount((prev) => {
+        const next = Math.max(1, count);
+        return prev === next ? prev : next;
+      });
+    };
+
+    const observer = new ResizeObserver(() => {
+      if (frame) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(compute);
+    });
+    observer.observe(row);
+    compute();
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [
+    brandTabs,
+    allBrandTabs.length,
+    showAllBrands,
+  ]);
 
   const sortedProducts = React.useMemo(() => {
     const withIndex = shopProducts.map((p, index) => {
@@ -655,71 +757,89 @@ export default function ShopPageClient() {
         </div>
       ) : null}
 
-      <div
-        ref={resultsRef}
-        className={`${hasSearch ? "mt-6" : "mt-10"} flex flex-wrap items-center gap-2 pb-2 sm:pb-3`}
-      >
-        <button
-          onClick={() => setBrandTab(BRAND_ALL_KEY)}
-          className={[
-            "whitespace-nowrap rounded-full px-3 py-1.5 text-xs border sm:px-4 sm:py-2 sm:text-sm",
-            brandTab === BRAND_ALL_KEY
-              ? "bg-amber-600 text-black border-amber-500"
-              : "bg-paper/5 text-white/80 border-white/10",
-          ].join(" ")}
-        >
-          All
-        </button>
-        {primaryBrandTabs.map((b) => (
-          <button
-            key={b.key}
-            onClick={() => setBrandTab(b.key)}
-            className={[
-              "whitespace-nowrap rounded-full px-3 py-1.5 text-xs border sm:px-4 sm:py-2 sm:text-sm",
-              b.key === brandTab
-                ? "bg-amber-600 text-black border-amber-500"
-                : "bg-paper/5 text-white/80 border-white/10",
-            ].join(" ")}
-          >
-            {b.label}
-          </button>
-        ))}
-      </div>
-      {allBrandTabs.length > MAX_PRIMARY_BRAND_TABS ? (
-        <div className="pb-2 sm:pb-3">
-          <button
-            type="button"
-            onClick={() => setShowAllBrands((prev) => !prev)}
-            className="w-full rounded-full px-3 py-2 text-xs border border-white/10 bg-black/30 text-white/70 hover:bg-black/40 sm:w-auto sm:px-4 sm:text-sm"
-          >
-            {showAllBrands ? "Show less" : "Show more"}
-          </button>
-        </div>
-      ) : null}
-      {showAllBrands ? (
-        <div className="rounded-xl border border-white/10 bg-black/30 p-3 max-h-40 overflow-y-auto">
-          <div className="flex flex-wrap gap-2">
-            {allBrandTabs.map((b) => (
-              <button
-                key={b.key}
-                type="button"
-                onClick={() => {
-                  setBrandTab(b.key);
-                  setShowAllBrands(false);
-                }}
-                className={[
-                  "whitespace-nowrap rounded-full px-3 py-1 text-xs border",
-                  b.key === brandTab
-                    ? "bg-amber-600 text-black border-amber-500"
-                    : "bg-paper/5 text-white/80 border-white/10",
-                ].join(" ")}
-              >
-                {b.label}
-              </button>
-            ))}
+      <div ref={resultsRef} className="scroll-mt-32 md:scroll-mt-24">
+        <div className="sticky top-28 z-30 md:top-16">
+          <div className="relative border-y border-white/10 bg-bg-900/80 backdrop-blur">
+            <div className="mx-auto flex max-w-6xl items-center px-3 py-2 sm:px-4">
+              <div ref={brandRowRef} className="flex w-full items-center overflow-hidden">
+                <div className="inline-flex flex-nowrap items-center">
+                  {visibleBrandTabs.map((b) => (
+                    <button
+                      key={b.key}
+                      type="button"
+                      onClick={() => setBrandTab(b.key)}
+                      className={getBrandButtonClasses(
+                        b.key === brandTab,
+                        true
+                      )}
+                    >
+                      {b.label}
+                    </button>
+                  ))}
+                  {canExpandBrands ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllBrands((prev) => !prev)}
+                      className={getMoreButtonClasses(true)}
+                    >
+                      {moreLabel}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+            <div
+              ref={brandMeasureRef}
+              className="pointer-events-none absolute left-0 top-0 -z-10 opacity-0"
+              aria-hidden="true"
+            >
+              <div className="inline-flex flex-nowrap items-center">
+                {brandTabs.map((b) => (
+                  <button
+                    key={`measure-${b.key}`}
+                    type="button"
+                    data-brand-tab={b.key}
+                    className={getBrandButtonClasses(false, true)}
+                  >
+                    {b.label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  data-brand-tab="__more__"
+                  className={getMoreButtonClasses(true)}
+                >
+                  {moreLabel}
+                </button>
+              </div>
+            </div>
           </div>
+          {showAllBrands ? (
+            <div className="border-b border-white/10 bg-bg-900/90 px-3 pb-3 pt-2 sm:px-4">
+              <div className="mx-auto max-w-6xl">
+                <div className="flex max-h-44 flex-wrap gap-2 overflow-y-auto">
+                  {allBrandTabs.map((b) => (
+                    <button
+                      key={b.key}
+                      type="button"
+                      onClick={() => {
+                        setBrandTab(b.key);
+                        setShowAllBrands(false);
+                      }}
+                      className={getBrandButtonClasses(
+                        b.key === brandTab,
+                        false
+                      )}
+                    >
+                      {b.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
-      ) : null}
+      </div>
 
       <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
         {feedSections.map((section) => (

@@ -31,7 +31,7 @@ const COLOR_WORDS = [
 ];
 
 export function inferFieldsFromTitle(titleRaw: string): InferredFields {
-  const title = (titleRaw ?? "").trim();
+  const title = stripMarketplaceMentions(titleRaw ?? "").trim();
   if (!title) return {};
 
   const lower = title.toLowerCase();
@@ -219,7 +219,7 @@ export function normalizeBrandAlias(raw: string | null | undefined): string | nu
 }
 
 export function normalizeTitleBrandAliases(titleRaw: string): string {
-  const title = String(titleRaw ?? "");
+  const title = stripMarketplaceMentions(titleRaw ?? "");
   if (!title.trim()) return title;
   let out = title;
 
@@ -278,6 +278,21 @@ function cleanupLookupTitle(value: string) {
   let out = String(value ?? "");
   out = out.replace(/\b1\s*[:/]\s*64\b/gi, " ");
   out = out.replace(/\(\s*\)/g, " ").replace(/\[\s*\]/g, " ");
+  out = out.replace(/\s{2,}/g, " ");
+  out = out.replace(/^[\s\-|:]+/g, "");
+  out = out.replace(/[\s\-|:]+$/g, "");
+  return out.replace(/\s{2,}/g, " ").trim();
+}
+
+function stripMarketplaceMentions(value: string) {
+  let out = String(value ?? "");
+  const patterns = [
+    /\s*(?:[\|\-:]\s*)?\bebay\b\s*/gi,
+    /\s*(?:[\|\-:]\s*)?\bHobbySearch\s+Diecast\s+Car\s+Store\b\s*/gi,
+  ];
+  for (const pattern of patterns) {
+    out = out.replace(pattern, " ");
+  }
   out = out.replace(/\s{2,}/g, " ");
   out = out.replace(/^[\s\-|:]+/g, "");
   out = out.replace(/[\s\-|:]+$/g, "");

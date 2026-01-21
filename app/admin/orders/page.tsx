@@ -260,6 +260,7 @@ export default function AdminOrdersPage() {
   const { orders, itemsByOrderId, loading, reload } = useAllOrders();
   const [voidReason, setVoidReason] = React.useState<Record<string, string>>({});
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = React.useState<string | null>(null);
 
   async function approveOrder(orderId: string) {
     const { error } = await supabase.rpc("fn_staff_approve_order", {
@@ -306,6 +307,28 @@ export default function AdminOrdersPage() {
   const pendingApproval = orders.filter((o) => o.status === "PENDING_APPROVAL");
   const paymentSubmitted = orders.filter((o) => o.status === "PAYMENT_SUBMITTED");
   const awaitingPayment = orders.filter((o) => o.status === "AWAITING_PAYMENT");
+  const visibleOrders = React.useMemo(() => {
+    if (!statusFilter) return orders;
+    return orders.filter((o) => o.status === statusFilter);
+  }, [orders, statusFilter]);
+
+  const summaryCards = [
+    {
+      status: "PENDING_APPROVAL",
+      count: pendingApproval.length,
+      countClass: "text-amber-200",
+    },
+    {
+      status: "PAYMENT_SUBMITTED",
+      count: paymentSubmitted.length,
+      countClass: "text-sky-200",
+    },
+    {
+      status: "AWAITING_PAYMENT",
+      count: awaitingPayment.length,
+      countClass: "text-indigo-200",
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -322,36 +345,46 @@ export default function AdminOrdersPage() {
 
         <CardBody className="space-y-6">
           <div className="grid gap-3 md:grid-cols-3">
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-              <div className="flex items-center justify-between text-sm text-white/60">
-                <span>Pending approval</span>
-                <Clock className="h-4 w-4 text-amber-300/80" />
-              </div>
-              <div className="text-2xl font-semibold text-amber-200">{pendingApproval.length}</div>
-            </div>
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-              <div className="flex items-center justify-between text-sm text-white/60">
-                <span>Receipt submitted</span>
-                <Receipt className="h-4 w-4 text-sky-300/80" />
-              </div>
-              <div className="text-2xl font-semibold text-sky-200">{paymentSubmitted.length}</div>
-            </div>
-            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-              <div className="flex items-center justify-between text-sm text-white/60">
-                <span>Awaiting payment</span>
-                <Wallet className="h-4 w-4 text-indigo-300/80" />
-              </div>
-              <div className="text-2xl font-semibold text-indigo-200">{awaitingPayment.length}</div>
-            </div>
+            {summaryCards.map((card) => {
+              const meta = getStatusMeta(card.status);
+              const Icon = meta.icon;
+              const active = statusFilter === card.status;
+              return (
+                <button
+                  key={card.status}
+                  type="button"
+                  onClick={() =>
+                    setStatusFilter((prev) => (prev === card.status ? null : card.status))
+                  }
+                  className={`rounded-2xl border p-4 text-left transition ${
+                    active
+                      ? "border-white/30 bg-bg-900/50 shadow-soft"
+                      : "border-white/10 bg-bg-900/30 hover:border-white/20 hover:bg-bg-900/40"
+                  }`}
+                  aria-pressed={active}
+                >
+                  <div className="flex items-center justify-between text-sm text-white/60">
+                    <span>{meta.label}</span>
+                    <Icon className="h-4 w-4" />
+                  </div>
+                  <div className={`text-2xl font-semibold ${card.countClass}`}>
+                    {card.count}
+                  </div>
+                  <Badge className={`mt-3 w-fit ${meta.badgeClass}`}>
+                    Status: {meta.label}
+                  </Badge>
+                </button>
+              );
+            })}
           </div>
 
           {loading ? (
             <div className="text-white/60">Loading...</div>
-          ) : orders.length === 0 ? (
+          ) : visibleOrders.length === 0 ? (
             <div className="text-white/60">No orders.</div>
           ) : (
             <div className="space-y-3">
-              {orders.map((o: any) => {
+              {visibleOrders.map((o: any) => {
                 const details = parseJsonMaybe(o.shipping_details) ?? {};
                 const method = String(details.method ?? o.shipping_method ?? "").toUpperCase();
                 const isCop = method === "LBC" && Boolean(details.cop);

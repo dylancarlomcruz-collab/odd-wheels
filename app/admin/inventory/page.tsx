@@ -68,14 +68,14 @@ type ShipClass =
   | "ACRYLIC_TRUE_SCALE"
   | "BLISTER"
   | "LALAMOVE";
-type GoogleLookupData = {
+type LookupData = {
   title: string | null;
   brand: string | null;
   model: string | null;
   variation: string | null;
   images: string[];
 };
-type ProductUrlLookupData = GoogleLookupData & {
+type ProductUrlLookupData = LookupData & {
   source_url?: string;
 };
 
@@ -92,20 +92,6 @@ type BarcodeLog = {
   product_title: string | null;
   description: string | null;
   barcode: string;
-};
-
-type ProductClickRow = {
-  product_id: string;
-  clicks: number;
-  last_clicked_at: string | null;
-  product: {
-    id: string;
-    title: string;
-    brand: string | null;
-    model: string | null;
-    variation: string | null;
-    image_urls: string[] | null;
-  } | null;
 };
 
 function n(v: any, fallback = 0) {
@@ -212,17 +198,6 @@ export default function AdminInventoryPage() {
     Record<string, boolean>
   >({});
 
-  // Google search lookup
-  const [googleQuery, setGoogleQuery] = React.useState("");
-  const [googleQueryTouched, setGoogleQueryTouched] = React.useState(false);
-  const [googleLoading, setGoogleLoading] = React.useState(false);
-  const [googleMsg, setGoogleMsg] = React.useState<string | null>(null);
-  const [googleResult, setGoogleResult] =
-    React.useState<GoogleLookupData | null>(null);
-  const [googleSelectedImages, setGoogleSelectedImages] = React.useState<
-    Record<string, boolean>
-  >({});
-
   // Product fields (edit)
   const [title, setTitle] = React.useState("");
   const [brand, setBrand] = React.useState("");
@@ -259,16 +234,10 @@ export default function AdminInventoryPage() {
   const [barcodeLogsError, setBarcodeLogsError] = React.useState<string | null>(
     null
   );
-  const [topClicks, setTopClicks] = React.useState<ProductClickRow[]>([]);
-  const [topClicksLoading, setTopClicksLoading] = React.useState(false);
-  const [topClicksError, setTopClicksError] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    if (!googleQueryTouched && !googleQuery.trim() && title.trim()) {
-      setGoogleQuery(title.trim());
-    }
-  }, [googleQuery, googleQueryTouched, title]);
-
+  const [showBarcodeLogs, setShowBarcodeLogs] = React.useState(true);
+  const [addQtyByVariant, setAddQtyByVariant] = React.useState<
+    Record<string, string>
+  >({});
   React.useEffect(() => {
     if (isDioramaCondition(condition)) {
       setShipClass("LALAMOVE");
@@ -281,7 +250,6 @@ export default function AdminInventoryPage() {
   React.useEffect(() => {
     void loadValuations();
     void loadBarcodeLogs();
-    void loadTopClicks();
   }, []);
 
   async function loadValuations() {
@@ -332,34 +300,6 @@ export default function AdminInventoryPage() {
     }
 
     setBarcodeLogsLoading(false);
-  }
-
-  async function loadTopClicks() {
-    setTopClicksLoading(true);
-    setTopClicksError(null);
-
-    const { data, error } = await supabase
-      .from("product_clicks")
-      .select(
-        "product_id,clicks,last_clicked_at,product:products(id,title,brand,model,variation,image_urls)"
-      )
-      .order("clicks", { ascending: false })
-      .limit(10);
-
-    if (error) {
-      setTopClicksError(error.message || "Failed to load top clicks.");
-      setTopClicks([]);
-    } else {
-      const normalized = (data as any[] | null)?.map((row) => ({
-        ...row,
-        product: Array.isArray(row.product)
-          ? row.product[0] ?? null
-          : row.product ?? null,
-      }));
-      setTopClicks((normalized as ProductClickRow[]) ?? []);
-    }
-
-    setTopClicksLoading(false);
   }
 
   async function runSearch() {
@@ -455,11 +395,6 @@ export default function AdminInventoryPage() {
     setSelectedImages({});
     setLookupMsg(null);
     setVariants([]);
-    setGoogleQuery("");
-    setGoogleQueryTouched(false);
-    setGoogleResult(null);
-    setGoogleSelectedImages({});
-    setGoogleMsg(null);
     setProductUrl("");
     setProductUrlMsg(null);
     setProductUrlResult(null);
@@ -599,7 +534,7 @@ export default function AdminInventoryPage() {
   }
 
   function applyLookupResult(
-    result: GoogleLookupData,
+    result: LookupData,
     options?: { selected?: Record<string, boolean>; applyImages?: boolean }
   ) {
     const normalizedTitle = normalizeLookupTitle(
@@ -641,60 +576,6 @@ export default function AdminInventoryPage() {
       });
       return next;
     });
-  }
-
-  async function lookupGoogle() {
-    const q = googleQuery.trim() || title.trim();
-    if (!q) return;
-
-    setGoogleLoading(true);
-    setGoogleMsg(null);
-
-    try {
-      const r = await fetch(`/api/google/lookup?q=${encodeURIComponent(q)}`);
-      const j = await r.json();
-
-      if (!j.ok) {
-        setGoogleMsg(j.error ?? "Google lookup failed.");
-        setGoogleResult(null);
-        setGoogleSelectedImages({});
-        return;
-      }
-
-      const d = j.data as GoogleLookupData;
-      const normalizedBrand = normalizeBrandAlias(d.brand) ?? d.brand;
-      const normalizedTitle = normalizeLookupTitle(
-        String(d.title ?? ""),
-        normalizedBrand ?? d.brand ?? null
-      );
-      const imgs = Array.isArray(d.images)
-        ? d.images.filter(Boolean).slice(0, 9)
-        : [];
-      const map: Record<string, boolean> = {};
-      imgs.forEach((u) => {
-        map[u] = true;
-      });
-
-      const normalizedResult: GoogleLookupData = {
-        ...d,
-        title: normalizedTitle || d.title,
-        brand: normalizedBrand ?? d.brand,
-        images: imgs,
-      };
-
-      setGoogleResult(normalizedResult);
-      setGoogleSelectedImages(map);
-
-      applyLookupResult(normalizedResult, { applyImages: false });
-
-      setGoogleMsg(
-        "Google search success. Review details and confirm images before saving."
-      );
-    } catch (e: any) {
-      setGoogleMsg(e?.message ?? "Lookup failed.");
-    } finally {
-      setGoogleLoading(false);
-    }
   }
 
   async function lookupProductUrl() {
@@ -996,6 +877,16 @@ export default function AdminInventoryPage() {
     updateVariant(v, { qty: next });
   }
 
+  function addQtyToVariant(v: Variant) {
+    const raw = addQtyByVariant[v.id] ?? "";
+    const parsed = Math.trunc(n(raw));
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    const current = Math.trunc(n(v.qty));
+    const next = Math.max(0, current + parsed);
+    updateVariant(v, { qty: next });
+    setAddQtyByVariant((prev) => ({ ...prev, [v.id]: "" }));
+  }
+
   function reorderImages(fromIndex: number, toIndex: number) {
     if (fromIndex === toIndex) return;
     setImages((prev) => {
@@ -1054,10 +945,11 @@ export default function AdminInventoryPage() {
 
     setSaving(true);
     try {
+      const normalizedTitle = normalizeTitleBrandAliases(title).trim();
       const { error: uErr } = await supabase
         .from("products")
         .update({
-          title,
+          title: normalizedTitle,
           brand: brand || null,
           model: model || null,
           variation: variation || null,
@@ -1128,7 +1020,8 @@ export default function AdminInventoryPage() {
     setSaving(true);
 
     try {
-      if (!title.trim()) throw new Error("Title is required.");
+      const normalizedTitle = normalizeTitleBrandAliases(title).trim();
+      if (!normalizedTitle) throw new Error("Title is required.");
       if (!cost || !price || !qty)
         throw new Error("Cost, Selling Price, and Quantity are required.");
 
@@ -1154,7 +1047,7 @@ export default function AdminInventoryPage() {
         const { data: p, error: pErr } = await supabase
           .from("products")
           .insert({
-            title,
+            title: normalizedTitle,
             brand: brand || null,
             model: model || null,
             variation: variation || null,
@@ -1184,7 +1077,7 @@ export default function AdminInventoryPage() {
         const { error: uErr } = await supabase
           .from("products")
           .update({
-            title,
+            title: normalizedTitle,
             brand: brand || null,
             model: model || null,
             variation: variation || null,
@@ -1219,7 +1112,12 @@ export default function AdminInventoryPage() {
       if (vErr) throw vErr;
 
       if (generatedBarcode) {
-        await recordGeneratedBarcode(productId!, generatedBarcode, condition);
+        await recordGeneratedBarcode(
+          productId!,
+          generatedBarcode,
+          condition,
+          normalizedTitle
+        );
       }
 
       toast({ intent: "success", message: "Saved product + variant." });
@@ -1299,19 +1197,21 @@ export default function AdminInventoryPage() {
   async function recordGeneratedBarcode(
     productId: string,
     barcode: string,
-    variantCondition: string
+    variantCondition: string,
+    productTitle?: string
   ) {
     const detail = [brand, model, variation].filter(Boolean).join(" ");
     const conditionLabel = variantCondition
       ? `Condition: ${formatConditionLabel(variantCondition, { upper: true })}`
       : "";
     const description = [detail, conditionLabel].filter(Boolean).join(" • ");
+    const titleValue = String(productTitle ?? title ?? "").trim();
 
     const { data, error } = await supabase
       .from("barcode_logs")
       .insert({
         product_id: productId,
-        product_title: title.trim() || null,
+        product_title: titleValue || null,
         description: description || null,
         barcode,
       })
@@ -1331,6 +1231,44 @@ export default function AdminInventoryPage() {
   function formatLogDate(value: string) {
     const d = new Date(value);
     return Number.isNaN(d.getTime()) ? value : d.toLocaleString("en-PH");
+  }
+
+  function getBarcodeDetail(log: BarcodeLog) {
+    const raw = String(log.description ?? "").trim();
+    if (raw) {
+      if (/condition:/i.test(raw)) {
+        const withoutCondition = raw.split(/condition:/i)[0];
+        return withoutCondition.replace(/[•›|\-–—\s]+$/g, "").trim();
+      }
+      const parts = raw
+        .split("ƒ?›")
+        .map((part) => part.trim())
+        .filter(Boolean);
+      if (parts.length) {
+        return parts[0].replace(/[•›|\-–—\s]+$/g, "").trim();
+      }
+      return raw.replace(/[•›|\-–—\s]+$/g, "").trim();
+    }
+    return String(log.product_title ?? "Item").trim() || "Item";
+  }
+
+  function downloadBarcodeLogsCsv() {
+    if (!barcodeLogs.length) return;
+    const rows = barcodeLogs.map((log) => [
+      getBarcodeDetail(log),
+      String(log.barcode ?? "").trim(),
+    ]);
+    const escape = (value: string) => `"${value.replace(/"/g, "\"\"")}"`;
+    const csv = rows
+      .map((row) => row.map((value) => escape(String(value ?? ""))).join(","))
+      .join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `generated-barcodes-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   async function deleteVariant(v: Variant) {
@@ -1487,80 +1425,6 @@ export default function AdminInventoryPage() {
                 {formatCount(allValuation.missing_cost_variants)}
               </div>
             </div>
-          </div>
-
-          {/* Most clicked items */}
-          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="font-semibold">Most clicked items</div>
-                <div className="text-xs text-white/60">
-                  Based on shop product clicks.
-                </div>
-              </div>
-              <Button
-                variant="ghost"
-                onClick={loadTopClicks}
-                disabled={topClicksLoading}
-              >
-                {topClicksLoading ? "Refreshing..." : "Refresh"}
-              </Button>
-            </div>
-
-            {topClicksError ? (
-              <div className="text-sm text-red-200">{topClicksError}</div>
-            ) : null}
-            {topClicksLoading && topClicks.length === 0 ? (
-              <div className="text-sm text-white/60">Loading click stats...</div>
-            ) : null}
-            {topClicks.length === 0 && !topClicksLoading ? (
-              <div className="text-sm text-white/60">No click data yet.</div>
-            ) : null}
-            {topClicks.length ? (
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {topClicks.map((row) => {
-                  const product = row.product;
-                  const image = product?.image_urls?.[0] ?? null;
-                  return (
-                    <div
-                      key={row.product_id}
-                      className="rounded-xl border border-white/10 bg-paper/5 p-3 flex gap-3"
-                    >
-                      <div className="h-14 w-14 flex-shrink-0 rounded-lg bg-black/20 flex items-center justify-center overflow-hidden">
-                        {image ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={image}
-                            alt=""
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <div className="text-[10px] text-white/50">No image</div>
-                        )}
-                      </div>
-                      <div className="flex-1">
-                        <div className="text-sm font-semibold line-clamp-1">
-                          {product?.title ?? "Unknown item"}
-                        </div>
-                        <div className="text-xs text-white/60 line-clamp-1">
-                          {product?.brand ?? "-"}
-                          {product?.model ? ` • ${product.model}` : ""}
-                        </div>
-                        <div className="mt-2 text-xs text-white/70">
-                          {row.clicks} clicks
-                          {row.last_clicked_at ? (
-                            <span className="text-white/40">
-                              {" "}
-                              • {formatLogDate(row.last_clicked_at)}
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
           </div>
 
           {/* Search */}
@@ -1806,104 +1670,6 @@ export default function AdminInventoryPage() {
                       })
                     }
                     disabled={productUrlLoading || !productUrlResult}
-                  >
-                    Use result
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          {/* Google search lookup */}
-          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
-            <div className="font-semibold">Google Search Lookup</div>
-            <div className="flex gap-2">
-              <div className="flex-1">
-                <Input
-                  placeholder="Search by title, model, or barcode..."
-                  value={googleQuery}
-                  onChange={(e) => {
-                    setGoogleQueryTouched(true);
-                    setGoogleQuery(e.target.value);
-                  }}
-                />
-              </div>
-              <Button
-                variant="secondary"
-                onClick={lookupGoogle}
-                disabled={googleLoading}
-              >
-                {googleLoading ? "Searching..." : "Search Google"}
-              </Button>
-            </div>
-
-            {googleMsg ? (
-              <div className="text-sm text-white/70">{googleMsg}</div>
-            ) : null}
-
-            {googleResult ? (
-              <div className="space-y-3">
-                <div className="grid gap-3 md:grid-cols-2">
-                  <Input
-                    label="Suggested Title"
-                    value={googleResult.title ?? ""}
-                    readOnly
-                  />
-                  <Input
-                    label="Suggested Brand"
-                    value={googleResult.brand ?? ""}
-                    readOnly
-                  />
-                  <Input
-                    label="Suggested Model"
-                    value={googleResult.model ?? ""}
-                    readOnly
-                  />
-                  <Input
-                    label="Suggested Variation"
-                    value={googleResult.variation ?? ""}
-                    readOnly
-                  />
-                </div>
-
-                {googleResult.images?.length ? (
-                  <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
-                    {googleResult.images.slice(0, 9).map((u) => (
-                      <div
-                        key={u}
-                        className="rounded-xl border border-white/10 bg-bg-900/40 overflow-hidden"
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={u} alt="" className="h-40 w-full object-cover" />
-                        <div className="p-3">
-                          <Checkbox
-                            checked={!!googleSelectedImages[u]}
-                            onChange={(v) =>
-                              setGoogleSelectedImages((m) => ({ ...m, [u]: v }))
-                            }
-                            label="Include image"
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-sm text-white/50">
-                    No images found for this query.
-                  </div>
-                )}
-
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="secondary"
-                    type="button"
-                    onClick={() =>
-                      googleResult &&
-                      applyLookupResult(googleResult, {
-                        selected: googleSelectedImages,
-                      })
-                    }
-                    disabled={googleLoading || !googleResult}
                   >
                     Use result
                   </Button>
@@ -2190,6 +1956,34 @@ export default function AdminInventoryPage() {
                             aria-label="Increase quantity"
                           >
                             +
+                          </Button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={addQtyByVariant[v.id] ?? ""}
+                            onChange={(e) =>
+                              setAddQtyByVariant((prev) => ({
+                                ...prev,
+                                [v.id]: e.target.value,
+                              }))
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                addQtyToVariant(v);
+                              }
+                            }}
+                            placeholder="Add qty"
+                            aria-label="Add quantity"
+                            className="flex-1"
+                          />
+                          <Button
+                            variant="secondary"
+                            type="button"
+                            className="h-10 px-3 text-xs"
+                            onClick={() => addQtyToVariant(v)}
+                          >
+                            Add
                           </Button>
                         </div>
                       </div>
@@ -2546,43 +2340,64 @@ export default function AdminInventoryPage() {
 
           {/* Generated barcode log */}
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="font-semibold">Generated Barcodes</div>
-              <Badge>{barcodeLogs.length}</Badge>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="font-semibold">Generated Barcodes</div>
+                <Badge>{barcodeLogs.length}</Badge>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={() => setShowBarcodeLogs((prev) => !prev)}
+                >
+                  {showBarcodeLogs ? "Collapse" : "Expand"}
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={downloadBarcodeLogsCsv}
+                  disabled={!barcodeLogs.length}
+                >
+                  Download Excel
+                </Button>
+              </div>
             </div>
 
-            {barcodeLogsLoading ? (
-              <div className="text-white/60">Loading...</div>
-            ) : barcodeLogsError ? (
-              <div className="text-sm text-red-300">{barcodeLogsError}</div>
-            ) : barcodeLogs.length === 0 ? (
-              <div className="text-sm text-white/50">No generated barcodes yet.</div>
+            {showBarcodeLogs ? (
+              barcodeLogsLoading ? (
+                <div className="text-white/60">Loading...</div>
+              ) : barcodeLogsError ? (
+                <div className="text-sm text-red-300">{barcodeLogsError}</div>
+              ) : barcodeLogs.length === 0 ? (
+                <div className="text-sm text-white/50">No generated barcodes yet.</div>
+              ) : (
+                <div className="space-y-3">
+                  {barcodeLogs.map((log) => (
+                    <div
+                      key={log.id}
+                      className="rounded-xl border border-white/10 bg-paper/5 p-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-medium">
+                          {log.product_title ?? "Item"}
+                        </div>
+                        <div className="text-xs text-white/50">
+                          {formatLogDate(log.created_at)}
+                        </div>
+                      </div>
+                      {log.description ? (
+                        <div className="text-sm text-white/60">
+                          {log.description}
+                        </div>
+                      ) : null}
+                      <div className="text-sm text-white/80">
+                        Barcode: <span className="font-medium">{log.barcode}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
             ) : (
-              <div className="space-y-3">
-                {barcodeLogs.map((log) => (
-                  <div
-                    key={log.id}
-                    className="rounded-xl border border-white/10 bg-paper/5 p-3"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="font-medium">
-                        {log.product_title ?? "Item"}
-                      </div>
-                      <div className="text-xs text-white/50">
-                        {formatLogDate(log.created_at)}
-                      </div>
-                    </div>
-                    {log.description ? (
-                      <div className="text-sm text-white/60">
-                        {log.description}
-                      </div>
-                    ) : null}
-                    <div className="text-sm text-white/80">
-                      Barcode: <span className="font-medium">{log.barcode}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <div className="text-sm text-white/50">Collapsed.</div>
             )}
           </div>
         </CardBody>

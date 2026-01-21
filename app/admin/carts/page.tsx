@@ -5,6 +5,7 @@ import {
   BarChart3,
   Boxes,
   Layers,
+  MousePointerClick,
   RefreshCw,
   ShoppingCart,
   SlidersHorizontal,
@@ -35,6 +36,20 @@ type CartInsightStat = {
   customers: number;
   qty: number;
   variants: number;
+};
+
+type ProductClickRow = {
+  product_id: string;
+  clicks: number;
+  last_clicked_at: string | null;
+  product: {
+    id: string;
+    title: string;
+    brand: string | null;
+    model: string | null;
+    variation: string | null;
+    image_urls: string[] | null;
+  } | null;
 };
 
 function peso(n: number) {
@@ -75,6 +90,11 @@ function formatDateShort(value: string | null) {
   }
 }
 
+function formatLogDate(value: string) {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleString("en-PH");
+}
+
 export default function AdminCartInsightsPage() {
   const [days, setDays] = React.useState("30");
   const [limit, setLimit] = React.useState("20");
@@ -87,6 +107,9 @@ export default function AdminCartInsightsPage() {
     qty: 0,
     variants: 0,
   });
+  const [topClicks, setTopClicks] = React.useState<ProductClickRow[]>([]);
+  const [topClicksLoading, setTopClicksLoading] = React.useState(false);
+  const [topClicksError, setTopClicksError] = React.useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -186,7 +209,7 @@ export default function AdminCartInsightsPage() {
   }
 
   React.useEffect(() => {
-    load();
+    refreshAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -199,6 +222,39 @@ export default function AdminCartInsightsPage() {
     return limitNum > 0 ? ordered.slice(0, limitNum) : ordered;
   }, [rows, sortBy, limit]);
 
+  async function loadTopClicks() {
+    setTopClicksLoading(true);
+    setTopClicksError(null);
+
+    const { data, error } = await supabase
+      .from("product_clicks")
+      .select(
+        "product_id,clicks,last_clicked_at,product:products(id,title,brand,model,variation,image_urls)"
+      )
+      .order("clicks", { ascending: false })
+      .limit(10);
+
+    if (error) {
+      setTopClicksError(error.message || "Failed to load top clicks.");
+      setTopClicks([]);
+    } else {
+      const normalized = (data as any[] | null)?.map((row) => ({
+        ...row,
+        product: Array.isArray(row.product)
+          ? row.product[0] ?? null
+          : row.product ?? null,
+      }));
+      setTopClicks((normalized as ProductClickRow[]) ?? []);
+    }
+
+    setTopClicksLoading(false);
+  }
+
+  function refreshAll() {
+    void load();
+    void loadTopClicks();
+  }
+
   return (
     <div className="space-y-6">
       <Card>
@@ -206,10 +262,10 @@ export default function AdminCartInsightsPage() {
           <div>
             <div className="flex items-center gap-2 text-xl font-semibold">
               <ShoppingCart className="h-5 w-5 text-amber-300" />
-              Cart Insights
+              Cart + Click Insights
             </div>
             <div className="text-sm text-white/60">
-              See which items are most often left in carts to guide restock or pricing moves.
+              See which items are most often left in carts and most clicked in the shop.
             </div>
           </div>
           <Badge className="border-amber-500/30 text-amber-200">{rows.length} items</Badge>
@@ -289,7 +345,12 @@ export default function AdminCartInsightsPage() {
                 <option value="qty">Most qty in carts</option>
                 <option value="customers">Most customers</option>
               </Select>
-              <Button variant="secondary" onClick={load} disabled={loading} className="gap-2">
+              <Button
+                variant="secondary"
+                onClick={refreshAll}
+                disabled={loading}
+                className="gap-2"
+              >
                 <RefreshCw className="h-4 w-4" />
                 {loading ? "Refreshing..." : "Refresh"}
               </Button>
@@ -355,6 +416,77 @@ export default function AdminCartInsightsPage() {
                   );
                 })
               )}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 font-semibold">
+                <MousePointerClick className="h-4 w-4 text-sky-200" />
+                Most clicked items
+              </div>
+              <Button
+                variant="ghost"
+                onClick={loadTopClicks}
+                disabled={topClicksLoading}
+              >
+                {topClicksLoading ? "Refreshing..." : "Refresh"}
+              </Button>
+            </div>
+            <div className="mt-1 text-xs text-white/60">Based on shop product clicks.</div>
+            <div className="mt-3 space-y-2">
+              {topClicksError ? (
+                <div className="text-sm text-red-200">{topClicksError}</div>
+              ) : null}
+              {topClicksLoading && topClicks.length === 0 ? (
+                <div className="text-sm text-white/60">Loading click stats...</div>
+              ) : null}
+              {topClicks.length === 0 && !topClicksLoading ? (
+                <div className="text-sm text-white/60">No click data yet.</div>
+              ) : null}
+              {topClicks.length ? (
+                topClicks.map((row) => {
+                  const product = row.product;
+                  const image = product?.image_urls?.[0] ?? null;
+                  return (
+                    <div
+                      key={row.product_id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-paper/5 px-3 py-2 sm:py-3"
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-3 sm:min-w-[240px]">
+                        <div className="h-12 w-12 rounded-lg border border-white/10 bg-bg-800 overflow-hidden flex-shrink-0">
+                          {image ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={image} alt="" className="h-full w-full object-cover" />
+                          ) : null}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-medium truncate">
+                            {product?.title ?? "Unknown item"}
+                          </div>
+                          <div className="text-xs text-white/60">
+                            {product?.brand ?? "-"}
+                            {product?.model ? ` | ${product.model}` : ""}
+                          </div>
+                          {row.last_clicked_at ? (
+                            <div className="text-xs text-white/50">
+                              Last click: {formatLogDate(row.last_clicked_at)}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      <div className="text-right">
+                        <div className="flex items-center justify-end gap-1 text-xs text-white/60">
+                          <MousePointerClick className="h-3 w-3" />
+                          Clicks
+                        </div>
+                        <div className="text-lg font-semibold">{row.clicks}</div>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : null}
             </div>
           </div>
         </CardBody>

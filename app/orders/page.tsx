@@ -61,7 +61,11 @@ const LEAD_TIME_RULES: Array<{
   { labels: ["PUERTO PRINCESA"], minDays: 2, maxDays: 3 },
   { labels: ["BATANES"], minDays: 3, maxDays: 5 },
   { labels: ["CORON"], minDays: 3, maxDays: 4 },
-  { labels: ["MINDORO", "MASBATE", "CATANDUANES", "MARINDUQUE"], minDays: 2, maxDays: 4 },
+  {
+    labels: ["MINDORO", "MASBATE", "CATANDUANES", "MARINDUQUE"],
+    minDays: 2,
+    maxDays: 4,
+  },
 ];
 
 const JT_LEAD_TIME_RULES: Array<{
@@ -104,7 +108,7 @@ function isJtCourier(raw: string | null | undefined) {
 
 function getLeadTime(
   region: string | null | undefined,
-  courier: string | null | undefined
+  courier: string | null | undefined,
 ) {
   const normalized = normalizeRegion(region);
   if (!normalized) return null;
@@ -247,7 +251,8 @@ function getItemThumb(it: OrderItemPreview): string | null {
   const urls = it?.product_variant?.product?.image_urls;
   if (Array.isArray(urls) && urls.length) return String(urls[0]);
   const fallbackUrls = it?.product?.image_urls;
-  if (Array.isArray(fallbackUrls) && fallbackUrls.length) return String(fallbackUrls[0]);
+  if (Array.isArray(fallbackUrls) && fallbackUrls.length)
+    return String(fallbackUrls[0]);
   return null;
 }
 
@@ -350,7 +355,9 @@ function OrderCard({
     e.preventDefault();
     e.stopPropagation();
     if (!canCancel) return;
-    const confirmed = window.confirm("Cancel this order? This cannot be undone.");
+    const confirmed = window.confirm(
+      "Cancel this order? This cannot be undone.",
+    );
     if (!confirmed) return;
     setCancelMsg(null);
     setCanceling(true);
@@ -401,7 +408,9 @@ function OrderCard({
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-[180px]">
-          <div className="text-base font-semibold">Order #{o.id.slice(0, 8)}</div>
+          <div className="text-base font-semibold">
+            Order #{o.id.slice(0, 8)}
+          </div>
           {createdAt ? (
             <div className="text-xs text-white/50">Placed {createdAt}</div>
           ) : null}
@@ -414,7 +423,10 @@ function OrderCard({
       <div className="mt-3 flex flex-wrap gap-2 text-xs">
         {badges.length ? (
           badges.map((badge, index) => (
-            <Badge key={`${badge.label}-${index}`} className={badgeToneClass(badge.tone)}>
+            <Badge
+              key={`${badge.label}-${index}`}
+              className={badgeToneClass(badge.tone)}
+            >
               {badge.label}
             </Badge>
           ))
@@ -452,19 +464,31 @@ function OrderCard({
                     <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-bg-900/40">
                       {thumb ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={thumb} alt={title} className="h-full w-full object-cover" />
+                        <img
+                          src={thumb}
+                          alt={title}
+                          className="h-full w-full object-cover"
+                        />
                       ) : (
-                        <span className="px-1 text-[10px] text-white/50">No photo</span>
+                        <span className="px-1 text-[10px] text-white/50">
+                          No photo
+                        </span>
                       )}
                     </div>
                     <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium">{title}</div>
+                      <div className="truncate text-sm font-medium">
+                        {title}
+                      </div>
                       <div className="text-xs text-white/60">{subtitle}</div>
                     </div>
-                      {soldOut ? (
-                        <div className="text-sm font-semibold text-price">Sold out</div>
+                    {soldOut ? (
+                      <div className="text-sm font-semibold text-price">
+                        Sold out
+                      </div>
                     ) : price > 0 ? (
-                      <div className="text-sm text-price">{formatPHP(price)}</div>
+                      <div className="text-sm text-price">
+                        {formatPHP(price)}
+                      </div>
                     ) : null}
                   </div>
                 );
@@ -513,7 +537,9 @@ function OrderCard({
           >
             Copy
           </Button>
-          {copyMsg ? <span className="text-[10px] text-white/50">{copyMsg}</span> : null}
+          {copyMsg ? (
+            <span className="text-[10px] text-white/50">{copyMsg}</span>
+          ) : null}
         </div>
       ) : null}
       {etaLabel ? (
@@ -529,7 +555,12 @@ function OrderCard({
       {canPayNow || canCancel ? (
         <div className="mt-4 flex flex-wrap items-center gap-3">
           {canPayNow ? (
-            <Button type="button" size="sm" variant="primary" onClick={onPayNow}>
+            <Button
+              type="button"
+              size="sm"
+              variant="primary"
+              onClick={onPayNow}
+            >
               Pay now
             </Button>
           ) : null}
@@ -557,10 +588,11 @@ function OrderCard({
       ) : null}
       {o.status === "CANCELLED" && o.cancelled_reason === "SOLD_OUT" ? (
         <div className="mt-2 text-xs text-red-800 dark:text-red-100">
-          Sorry about this. The item was approved for an earlier order before we could
-          process yours, so it became unavailable. Any remaining in-stock items were
-          automatically returned to your cart. We’re improving our system to help
-          prevent this in the future. Thank you for your understanding.
+          Sorry about this. The item was approved for an earlier order before we
+          could process yours, so it became unavailable. Any remaining in-stock
+          items were automatically returned to your cart. We’re improving our
+          system to help prevent this in the future. Thank you for your
+          understanding.
         </div>
       ) : null}
     </Link>
@@ -569,10 +601,12 @@ function OrderCard({
 
 function OrdersContent() {
   const { orders, itemsByOrderId, loading } = useOrders();
-  const [activeTab, setActiveTab] = React.useState<StageKey>("PENDING_APPROVAL");
+  const [activeTab, setActiveTab] =
+    React.useState<StageKey>("PENDING_APPROVAL");
   const router = useRouter();
   const [showFeedback, setShowFeedback] = React.useState(false);
-  const [feedbackPrompt, setFeedbackPrompt] = React.useState<FeedbackPrompt | null>(null);
+  const [feedbackPrompt, setFeedbackPrompt] =
+    React.useState<FeedbackPrompt | null>(null);
   const [rating, setRating] = React.useState(0);
   const [feedbackExperience, setFeedbackExperience] = React.useState("");
   const [feedbackChange, setFeedbackChange] = React.useState("");
@@ -580,12 +614,18 @@ function OrdersContent() {
   const [feedbackNeverShow, setFeedbackNeverShow] = React.useState(false);
 
   const activeOrders = React.useMemo(
-    () => (orders ?? []).filter((o) => o.status !== "VOIDED" && o.status !== "CANCELLED"),
-    [orders]
+    () =>
+      (orders ?? []).filter(
+        (o) => o.status !== "VOIDED" && o.status !== "CANCELLED",
+      ),
+    [orders],
   );
   const cancelled = React.useMemo(
-    () => (orders ?? []).filter((o) => o.status === "VOIDED" || o.status === "CANCELLED"),
-    [orders]
+    () =>
+      (orders ?? []).filter(
+        (o) => o.status === "VOIDED" || o.status === "CANCELLED",
+      ),
+    [orders],
   );
 
   const stageBuckets = React.useMemo(() => {
@@ -607,7 +647,8 @@ function OrdersContent() {
   React.useEffect(() => {
     if (loading) return;
     const firstWithOrders =
-      STAGE_ORDER.find((key) => stageBuckets[key].length > 0) ?? "PENDING_APPROVAL";
+      STAGE_ORDER.find((key) => stageBuckets[key].length > 0) ??
+      "PENDING_APPROVAL";
     setActiveTab((cur) => (cur === firstWithOrders ? cur : firstWithOrders));
   }, [loading, stageBuckets]);
 
@@ -630,7 +671,7 @@ function OrdersContent() {
           const fallbackUntil = Date.now() + FEEDBACK_NEVER_SHOW_TTL_MS;
           window.localStorage.setItem(
             FEEDBACK_NEVER_SHOW_KEY,
-            JSON.stringify({ until: fallbackUntil })
+            JSON.stringify({ until: fallbackUntil }),
           );
           return;
         }
@@ -678,7 +719,7 @@ function OrdersContent() {
       try {
         window.localStorage.setItem(
           FEEDBACK_NEVER_SHOW_KEY,
-          JSON.stringify({ until: Date.now() + FEEDBACK_NEVER_SHOW_TTL_MS })
+          JSON.stringify({ until: Date.now() + FEEDBACK_NEVER_SHOW_TTL_MS }),
         );
       } catch {
         // Ignore localStorage issues.
@@ -712,7 +753,11 @@ function OrdersContent() {
       // Ignore localStorage issues.
     }
 
-    toast({ message: "Thanks for the feedback!", intent: "success", duration: 2200 });
+    toast({
+      message: "Thanks for the feedback!",
+      intent: "success",
+      duration: 2200,
+    });
     setRating(0);
     setFeedbackExperience("");
     setFeedbackChange("");
@@ -731,7 +776,9 @@ function OrdersContent() {
           Back
         </button>
         <h1 className="text-2xl font-semibold">My Orders</h1>
-        <div className="text-sm text-white/60">Track your orders and shipping updates.</div>
+        <div className="text-sm text-white/60">
+          Track your orders and shipping updates.
+        </div>
       </div>
 
       <div className="-mx-4 px-4">
@@ -778,7 +825,9 @@ function OrdersContent() {
         <CardHeader className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="font-semibold">{STAGE_META[activeTab].label}</div>
-            <div className="text-xs text-white/60">{STAGE_META[activeTab].hint}</div>
+            <div className="text-xs text-white/60">
+              {STAGE_META[activeTab].hint}
+            </div>
           </div>
           <Badge className={STAGE_META[activeTab].badgeClass}>
             {loading ? "..." : activeList.length}
@@ -818,7 +867,12 @@ function OrdersContent() {
             ) : (
               <div className="space-y-3">
                 {cancelled.map((o) => (
-                  <OrderCard key={o.id} o={o} stage={null} items={itemsByOrderId[o.id] ?? []} />
+                  <OrderCard
+                    key={o.id}
+                    o={o}
+                    stage={null}
+                    items={itemsByOrderId[o.id] ?? []}
+                  />
                 ))}
               </div>
             )}
@@ -846,8 +900,8 @@ function OrdersContent() {
                   </span>
                 </div>
                 <div className="text-xs text-white/60">
-                  Thanks for your order{promptOrderId ? ` #${promptOrderId}` : ""}. How
-                  was checkout?
+                  Thanks for your order
+                  {promptOrderId ? ` #${promptOrderId}` : ""}. How was checkout?
                 </div>
               </div>
               <button
@@ -877,7 +931,9 @@ function OrdersContent() {
                       className="rounded-full border border-white/10 bg-bg-900/50 p-2 text-white/60 transition hover:border-white/30 hover:text-white"
                     >
                       <Star
-                        className={active ? "h-5 w-5 text-amber-300" : "h-5 w-5"}
+                        className={
+                          active ? "h-5 w-5 text-amber-300" : "h-5 w-5"
+                        }
                         fill={active ? "currentColor" : "none"}
                       />
                     </button>
@@ -890,7 +946,9 @@ function OrdersContent() {
               <Textarea
                 label="How was your experience and what should we improve?"
                 rows={4}
-                value={[feedbackExperience, feedbackChange].filter(Boolean).join("\n")}
+                value={[feedbackExperience, feedbackChange]
+                  .filter(Boolean)
+                  .join("\n")}
                 onChange={(e) => {
                   const next = e.target.value;
                   setFeedbackExperience(next);
