@@ -313,9 +313,10 @@ export function InventoryEditorDrawer({
   }
 
   async function deleteProduct() {
+    const productName = product?.title?.trim() || "this product";
     if (
       !confirm(
-        `Delete "${product.title}"? This removes the product and its variants.`
+        `Delete "${productName}"? This removes the product and its variants.`
       )
     )
       return;
