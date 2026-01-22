@@ -759,8 +759,8 @@ export default function ShopPageClient() {
 
       <div ref={resultsRef} className="scroll-mt-32 md:scroll-mt-24">
         <div className="sticky top-28 z-30 md:top-16">
-          <div className="relative border-y border-white/10 bg-bg-900/80 backdrop-blur">
-            <div className="mx-auto flex max-w-6xl items-center px-3 py-2 sm:px-4">
+          <div className="relative -mx-3 border-y border-white/10 bg-bg-900/80 backdrop-blur sm:-mx-4">
+            <div className="mx-auto flex max-w-6xl items-center px-0 py-2 sm:px-4">
               <div ref={brandRowRef} className="flex w-full items-center overflow-hidden">
                 <div className="inline-flex flex-nowrap items-center">
                   {visibleBrandTabs.map((b) => (
@@ -815,7 +815,7 @@ export default function ShopPageClient() {
             </div>
           </div>
           {showAllBrands ? (
-            <div className="border-b border-white/10 bg-bg-900/90 px-3 pb-3 pt-2 sm:px-4">
+            <div className="-mx-3 border-b border-white/10 bg-bg-900/90 px-0 pb-3 pt-2 sm:-mx-4 sm:px-4">
               <div className="mx-auto max-w-6xl">
                 <div className="flex max-h-44 flex-wrap gap-2 overflow-y-auto">
                   {allBrandTabs.map((b) => (

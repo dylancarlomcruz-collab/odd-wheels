@@ -34,24 +34,20 @@ function CartContent() {
     () => lines.filter((line) => selectedIds.includes(line.id)),
     [lines, selectedIds],
   );
-  const hasUnsealedInCart = React.useMemo(
-    () =>
-      lines.some((line) =>
-        String(line.variant.condition ?? "")
-          .toLowerCase()
-          .includes("unsealed"),
-      ),
-    [lines],
-  );
-  const hasUnsealedSelected = React.useMemo(
-    () =>
-      selectedLines.some((line) =>
-        String(line.variant.condition ?? "")
-          .toLowerCase()
-          .includes("unsealed"),
-      ),
-    [selectedLines],
-  );
+  const hasNonSealedInCart = React.useMemo(() => {
+    const isSealed = (value: string | null | undefined) => {
+      const normalized = String(value ?? "").toLowerCase().trim();
+      return normalized === "sealed" || normalized === "sealed_blister";
+    };
+    return lines.some((line) => !isSealed(line.variant.condition));
+  }, [lines]);
+  const hasNonSealedSelected = React.useMemo(() => {
+    const isSealed = (value: string | null | undefined) => {
+      const normalized = String(value ?? "").toLowerCase().trim();
+      return normalized === "sealed" || normalized === "sealed_blister";
+    };
+    return selectedLines.some((line) => !isSealed(line.variant.condition));
+  }, [selectedLines]);
   const selectedSubtotal = selectedLines.reduce(
     (acc, l) => acc + Number(l.variant.price) * l.qty,
     0,
@@ -63,7 +59,7 @@ function CartContent() {
     ? `/checkout?selected=${encodeURIComponent(selectedIds.join(","))}`
     : "/checkout";
   const checkoutDisabled =
-    selectedLines.length === 0 || (hasUnsealedSelected && !unsealedAck);
+    selectedLines.length === 0 || (hasNonSealedSelected && !unsealedAck);
   const freeShippingThreshold = Number(settings?.free_shipping_threshold ?? 0);
   const freeShippingGap =
     freeShippingThreshold > 0 ? freeShippingThreshold - selectedSubtotal : 0;
@@ -128,8 +124,8 @@ function CartContent() {
   }, [previewLine]);
 
   React.useEffect(() => {
-    if (!hasUnsealedSelected) setUnsealedAck(false);
-  }, [hasUnsealedSelected]);
+    if (!hasNonSealedSelected) setUnsealedAck(false);
+  }, [hasNonSealedSelected]);
 
   function openPreview(line: CartLine) {
     setPreviewLine(line);
@@ -418,27 +414,27 @@ function CartContent() {
         </CardBody>
       </Card>
 
-      {hasUnsealedInCart ? (
-        <div className="rounded-xl border border-white/10 bg-bg-900/30 p-4 text-xs text-white/70 space-y-2">
-          <div className="text-sm text-white/80">
+      {hasNonSealedInCart ? (
+        <div className="rounded-xl border border-amber-300/50 bg-amber-50 p-4 text-xs text-amber-900/80 space-y-2 dark:border-white/10 dark:bg-bg-900/30 dark:text-white/70">
+          <div className="text-sm text-amber-900 dark:text-white/80">
             Quick note: Unsealed items may show light signs of handling or
             display.
           </div>
-          <label className="flex items-start gap-2 text-xs text-white/70">
+          <label className="flex items-start gap-2 text-xs text-amber-900/80 dark:text-white/70">
             <input
               type="checkbox"
               className="mt-0.5 h-4 w-4"
               checked={unsealedAck}
               onChange={(e) => setUnsealedAck(e.target.checked)}
-              disabled={!hasUnsealedSelected}
+              disabled={!hasNonSealedSelected}
             />
             <span>
               I understand that photos are for reference, and unsealed items may
               have minor imperfections.
             </span>
           </label>
-          {hasUnsealedSelected && !unsealedAck ? (
-            <div className="text-[11px] text-white/50">
+          {hasNonSealedSelected && !unsealedAck ? (
+            <div className="text-[11px] text-amber-900/60 dark:text-white/50">
               Please tick this box to continue.
             </div>
           ) : null}
@@ -573,7 +569,7 @@ function CartContent() {
                       ) : null}
                     </div>
 
-                    <div className="rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+                    <div className="rounded-xl border border-amber-300/70 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-100">
                       Photos are for reference only (may not be the exact
                       on-hand item). For more photos/details, please message our
                       Facebook page.

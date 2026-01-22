@@ -154,6 +154,11 @@ export default function ProductCard({
   const isNearMint = previewSelected?.condition === "near_mint";
   const lowStock = (selected?.qty ?? 0) > 0 && (selected?.qty ?? 0) <= 2;
   const onlyOneLeft = (selected?.qty ?? 0) === 1;
+  const qtyLabel =
+    (selected?.qty ?? 0) > 0 && (selected?.qty ?? 0) <= 3
+      ? `${selected?.qty ?? 0} left`
+      : null;
+  const conditionLabel = selected?.condition ?? "-";
   const proofBits = [
     socialProof?.inCarts ? `${socialProof.inCarts} in carts` : null,
     socialProof?.soldThisWeek
@@ -392,7 +397,7 @@ export default function ProductCard({
               {displayPrice}
             </div>
             <div className="text-[11px] sm:text-xs text-white/60">
-              {selected?.qty ?? 0} left ({selected?.condition ?? "-"})
+              {qtyLabel ? `${qtyLabel} (${conditionLabel})` : conditionLabel}
             </div>
           </div>
 
@@ -405,7 +410,7 @@ export default function ProductCard({
           ) : null}
 
           {lowStock && !onlyOneLeft ? (
-            <div className="mt-2 text-[11px] sm:text-xs text-amber-200/90">
+            <div className="mt-2 text-[11px] sm:text-xs font-semibold text-amber-700 dark:text-amber-200/90">
               Almost sold out.
             </div>
           ) : null}
@@ -442,7 +447,7 @@ export default function ProductCard({
                         : "border-white/20 bg-bg-900/60 text-white/80 hover:bg-bg-900/80 dark:border-white/10 dark:bg-paper/5 dark:text-white/70 dark:hover:bg-paper/10",
                     ].join(" ")}
                   >
-                    {o.condition} ({o.qty} left)
+                    {o.condition}
                   </button>
                 );
               })}
@@ -665,7 +670,7 @@ export default function ProductCard({
                           ) : null}
                         </div>
 
-                        <div className="rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+                        <div className="rounded-xl border border-amber-300/70 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-100">
                           Photos are for reference only. For more
                           photos/details, please message our Facebook page.
                         </div>
