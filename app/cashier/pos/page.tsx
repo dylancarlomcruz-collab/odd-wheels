@@ -28,6 +28,8 @@ type Variant = {
   product_id: string;
   condition:
     | "sealed"
+    | "resealed"
+    | "near_mint"
     | "unsealed"
     | "with_issues"
     | "diorama"

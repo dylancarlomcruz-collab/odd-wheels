@@ -776,6 +776,10 @@ export default function CashierShipmentsPage() {
                                 it?.condition ?? it?.product_variant?.condition,
                                 { upper: true }
                               );
+                              const itemCondition = String(
+                                it?.condition ?? it?.product_variant?.condition ?? ""
+                              ).toLowerCase();
+                              const isNearMint = itemCondition === "near_mint";
                               const notes = String(
                                 it?.issue_notes ?? it?.product_variant?.issue_notes ?? ""
                               ).trim();
@@ -805,8 +809,12 @@ export default function CashierShipmentsPage() {
                                       {qty} x {peso(price)} | Line: {peso(line)}
                                     </div>
                                     {notes ? (
-                                      <div className="mt-1 text-xs text-yellow-200">
-                                        Notes: {notes}
+                                      <div
+                                        className={`mt-1 text-xs ${
+                                          isNearMint ? "text-white/60" : "text-yellow-200"
+                                        }`}
+                                      >
+                                        {isNearMint ? "Condition note" : "Notes"}: {notes}
                                       </div>
                                     ) : null}
                                   </div>

@@ -314,8 +314,16 @@ export default function ProductDetailPage() {
                       <div className="text-price">{formatPHP(Number(v.price))}</div>
                     </div>
 
-                    {v.condition === "with_issues" && v.issue_notes ? (
-                      <div className="mt-2 text-sm text-red-200/80">Issue: {v.issue_notes}</div>
+                    {v.issue_notes ? (
+                      v.condition === "near_mint" ? (
+                        <div className="mt-2 text-sm text-white/70">
+                          Condition note: {v.issue_notes}
+                        </div>
+                      ) : v.condition === "with_issues" ? (
+                        <div className="mt-2 text-sm text-red-200/80">
+                          Issue: {v.issue_notes}
+                        </div>
+                      ) : null
                     ) : null}
 
                     {v.public_notes ? (

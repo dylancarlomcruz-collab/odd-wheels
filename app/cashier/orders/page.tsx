@@ -224,6 +224,10 @@ export default function CashierOrdersPage() {
                               it?.condition ?? it?.product_variant?.condition,
                               { upper: true }
                             );
+                            const itemCondition = String(
+                              it?.condition ?? it?.product_variant?.condition ?? ""
+                            ).toLowerCase();
+                            const isNearMint = itemCondition === "near_mint";
                             const notes = String(it?.issue_notes ?? it?.product_variant?.issue_notes ?? "").trim();
                             const price = getItemPrice(it);
                             const qty = Number(it?.qty ?? 1);
@@ -242,7 +246,15 @@ export default function CashierOrdersPage() {
                                   <div className="text-xs text-white/60">
                                     {condition ? `${condition} • ` : ""}{qty} × {peso(price)} • Line: {peso(line)}
                                   </div>
-                                  {notes ? <div className="mt-1 text-xs text-yellow-200">Notes: {notes}</div> : null}
+                                  {notes ? (
+                                    <div
+                                      className={`mt-1 text-xs ${
+                                        isNearMint ? "text-white/60" : "text-yellow-200"
+                                      }`}
+                                    >
+                                      {isNearMint ? "Condition note" : "Notes"}: {notes}
+                                    </div>
+                                  ) : null}
                                 </div>
                               </div>
                             );

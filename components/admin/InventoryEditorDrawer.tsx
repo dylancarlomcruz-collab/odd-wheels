@@ -31,6 +31,8 @@ type InventoryEditorDrawerProps = {
 
 const CONDITION_OPTIONS: Array<VariantDraft["condition"]> = [
   "sealed",
+  "resealed",
+  "near_mint",
   "diorama",
   "sealed_blister",
   "unsealed_blister",
@@ -45,6 +47,10 @@ const SHIP_OPTIONS = [
   "POPRACE",
   "ACRYLIC_TRUE_SCALE",
   "BLISTER",
+  "TOMICA",
+  "HOT_WHEELS_MAINLINE",
+  "HOT_WHEELS_PREMIUM",
+  "LOOSE_NO_BOX",
   "LALAMOVE",
 ];
 
@@ -494,7 +500,9 @@ export function InventoryEditorDrawer({
                 issue_notes:
                   v.condition === "with_issues"
                     ? v.issue_notes || null
-                    : null,
+                    : v.condition === "near_mint"
+                      ? v.issue_notes || "Near Mint Condition"
+                      : null,
                 issue_photo_urls:
                   v.condition === "with_issues"
                     ? (v.issue_photo_urls?.length ? v.issue_photo_urls : null)
@@ -537,7 +545,11 @@ export function InventoryEditorDrawer({
               : v.ship_class || null,
             public_notes: v.public_notes || null,
             issue_notes:
-              v.condition === "with_issues" ? v.issue_notes || null : null,
+              v.condition === "with_issues"
+                ? v.issue_notes || null
+                : v.condition === "near_mint"
+                  ? v.issue_notes || "Near Mint Condition"
+                  : null,
             issue_photo_urls:
               v.condition === "with_issues"
                 ? (v.issue_photo_urls?.length ? v.issue_photo_urls : null)
@@ -735,6 +747,13 @@ export function InventoryEditorDrawer({
                               {
                                 const nextCondition = e.target
                                   .value as VariantDraft["condition"];
+                                const nextIssueNotes =
+                                  nextCondition === "near_mint"
+                                    ? "Near Mint Condition"
+                                    : v.condition === "near_mint" &&
+                                        v.issue_notes === "Near Mint Condition"
+                                      ? null
+                                      : v.issue_notes ?? null;
                                 const nextShipClass =
                                   isDioramaCondition(nextCondition)
                                     ? "LALAMOVE"
@@ -747,6 +766,7 @@ export function InventoryEditorDrawer({
                                 updateVariant(v.id, {
                                   condition: nextCondition,
                                   ship_class: nextShipClass ?? null,
+                                  issue_notes: nextIssueNotes,
                                 });
                               }}
                           >

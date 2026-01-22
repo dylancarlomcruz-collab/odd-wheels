@@ -17,7 +17,6 @@ import { formatConditionLabel } from "@/lib/conditions";
 import { useSettings } from "@/hooks/useSettings";
 import { toast } from "@/components/ui/toast";
 
-
 function CartContent() {
   const { lines, loading, updateQty, remove, add } = useCart();
   const { settings } = useSettings();
@@ -29,14 +28,33 @@ function CartContent() {
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
   const [previewLine, setPreviewLine] = React.useState<CartLine | null>(null);
   const [activeImage, setActiveImage] = React.useState("");
+  const [unsealedAck, setUnsealedAck] = React.useState(false);
 
   const selectedLines = React.useMemo(
     () => lines.filter((line) => selectedIds.includes(line.id)),
-    [lines, selectedIds]
+    [lines, selectedIds],
+  );
+  const hasUnsealedInCart = React.useMemo(
+    () =>
+      lines.some((line) =>
+        String(line.variant.condition ?? "")
+          .toLowerCase()
+          .includes("unsealed"),
+      ),
+    [lines],
+  );
+  const hasUnsealedSelected = React.useMemo(
+    () =>
+      selectedLines.some((line) =>
+        String(line.variant.condition ?? "")
+          .toLowerCase()
+          .includes("unsealed"),
+      ),
+    [selectedLines],
   );
   const selectedSubtotal = selectedLines.reduce(
     (acc, l) => acc + Number(l.variant.price) * l.qty,
-    0
+    0,
   );
   const allSelected = lines.length > 0 && selectedIds.length === lines.length;
   const someSelected =
@@ -44,12 +62,14 @@ function CartContent() {
   const checkoutHref = selectedIds.length
     ? `/checkout?selected=${encodeURIComponent(selectedIds.join(","))}`
     : "/checkout";
+  const checkoutDisabled =
+    selectedLines.length === 0 || (hasUnsealedSelected && !unsealedAck);
   const freeShippingThreshold = Number(settings?.free_shipping_threshold ?? 0);
   const freeShippingGap =
     freeShippingThreshold > 0 ? freeShippingThreshold - selectedSubtotal : 0;
   const cartProductIds = React.useMemo(
     () => new Set(lines.map((line) => line.variant.product.id).filter(Boolean)),
-    [lines]
+    [lines],
   );
   const completeSet = React.useMemo(() => {
     if (!allProducts.length || cartProductIds.size === 0) return [];
@@ -107,6 +127,10 @@ function CartContent() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [previewLine]);
 
+  React.useEffect(() => {
+    if (!hasUnsealedSelected) setUnsealedAck(false);
+  }, [hasUnsealedSelected]);
+
   function openPreview(line: CartLine) {
     setPreviewLine(line);
     setActiveImage(line.variant.product.image_urls?.[0] ?? "");
@@ -119,7 +143,7 @@ function CartContent() {
 
   async function onAddSuggestion(
     product: ShopProduct,
-    option: ShopProduct["options"][number]
+    option: ShopProduct["options"][number],
   ) {
     try {
       const result = await add(option.id, 1);
@@ -137,7 +161,7 @@ function CartContent() {
               message: "Maximum qty available added to cart.",
               qty: result.nextQty,
             }
-          : { ...baseToast, qty: 1 }
+          : { ...baseToast, qty: 1 },
       );
     } catch (e: any) {
       toast({
@@ -149,25 +173,32 @@ function CartContent() {
   }
 
   const previewImages = (previewLine?.variant.product.image_urls ?? []).filter(
-    (img) => Boolean(img)
+    (img) => Boolean(img),
   );
-  const previewPrice = previewLine ? formatPHP(Number(previewLine.variant.price)) : "";
+  const previewPrice = previewLine
+    ? formatPHP(Number(previewLine.variant.price))
+    : "";
   const previewCondition = previewLine?.variant.condition ?? "";
   const previewIssue = previewLine?.variant.issue_notes ?? null;
   const previewNotes = previewLine?.variant.public_notes ?? null;
+  const isPreviewNearMint = previewCondition === "near_mint";
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Cart</h1>
-        <div className="text-sm text-white/60">Review items before checkout.</div>
+        <div className="text-sm text-white/60">
+          Review items before checkout.
+        </div>
       </div>
 
       {freeShippingThreshold > 0 ? (
         <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4 text-sm text-white/70">
           {freeShippingGap > 0 ? (
             <span>
-              Add <span className="text-price">{formatPHP(freeShippingGap)}</span> more to unlock free shipping.
+              Add{" "}
+              <span className="text-price">{formatPHP(freeShippingGap)}</span>{" "}
+              more to unlock free shipping.
             </span>
           ) : (
             <span className="text-accent-700 dark:text-accent-200">
@@ -199,7 +230,9 @@ function CartContent() {
                     className="h-4 w-4"
                     checked={allSelected}
                     onChange={(e) =>
-                      setSelectedIds(e.target.checked ? lines.map((l) => l.id) : [])
+                      setSelectedIds(
+                        e.target.checked ? lines.map((l) => l.id) : [],
+                      )
                     }
                   />
                   Select all
@@ -214,7 +247,10 @@ function CartContent() {
                 const checked = selectedIds.includes(l.id);
 
                 return (
-                  <div key={l.id} className="rounded-xl border border-white/10 bg-bg-900/30 p-4">
+                  <div
+                    key={l.id}
+                    className="rounded-xl border border-white/10 bg-bg-900/30 p-4"
+                  >
                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                       <div className="flex items-start gap-3">
                         <input
@@ -225,7 +261,7 @@ function CartContent() {
                             setSelectedIds((prev) =>
                               e.target.checked
                                 ? [...prev, l.id]
-                                : prev.filter((id) => id !== l.id)
+                                : prev.filter((id) => id !== l.id),
                             )
                           }
                           aria-label={`Select ${l.variant.product.title}`}
@@ -242,10 +278,10 @@ function CartContent() {
                             alt=""
                             className="h-full w-full object-contain bg-neutral-50"
                             onError={(e) =>
-                              ((e.currentTarget.style.display = "none"))
+                              (e.currentTarget.style.display = "none")
                             }
                           />
-                          </button>
+                        </button>
                         <div>
                           <button
                             type="button"
@@ -255,7 +291,11 @@ function CartContent() {
                             {l.variant.product.title}
                           </button>
                           <div className="text-sm text-white/60">
-                            {formatConditionLabel(l.variant.condition, { upper: true })} - <span className="text-price">
+                            {formatConditionLabel(l.variant.condition, {
+                              upper: true,
+                            })}{" "}
+                            -{" "}
+                            <span className="text-price">
                               {formatPHP(Number(l.variant.price))}
                             </span>
                           </div>
@@ -271,10 +311,16 @@ function CartContent() {
                           >
                             View details
                           </button>
-                          {l.variant.condition === "with_issues" && l.variant.issue_notes ? (
-                            <div className="text-sm text-red-200/80">
-                              Issue: {l.variant.issue_notes}
-                            </div>
+                          {l.variant.issue_notes ? (
+                            l.variant.condition === "near_mint" ? (
+                              <div className="text-sm text-white/70">
+                                Condition note: {l.variant.issue_notes}
+                              </div>
+                            ) : l.variant.condition === "with_issues" ? (
+                              <div className="text-sm text-red-200/80">
+                                Issue: {l.variant.issue_notes}
+                              </div>
+                            ) : null
                           ) : null}
                         </div>
                       </div>
@@ -296,7 +342,9 @@ function CartContent() {
                               value={String(l.qty)}
                               inputMode="numeric"
                               onChange={(e) => {
-                                const v = Number(e.target.value.replace(/[^0-9]/g, ""));
+                                const v = Number(
+                                  e.target.value.replace(/[^0-9]/g, ""),
+                                );
                                 if (!Number.isFinite(v)) return;
                                 updateQty(l.id, v);
                               }}
@@ -319,37 +367,49 @@ function CartContent() {
                       </div>
                     </div>
 
-{invalid ? (
-  <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200 space-y-2">
-    <div>Item sold out, browse our page for similar items.</div>
-    {(() => {
-      const target = {
-        id: l.variant.product.id,
-        title: l.variant.product.title,
-        brand: l.variant.product.brand,
-        model: l.variant.product.model,
-        min_price: Number(l.variant.price),
-      };
-      const recs = recommendSimilar(allProducts as any, target as any, 4);
-      return recs.length ? (
-        <div className="grid gap-2 sm:grid-cols-2">
-          {recs.map((p: any) => (
-            <Link
-              key={p.id}
-              href={`/product/${p.id}`}
-              className="rounded-xl border border-white/10 bg-bg-900/30 px-3 py-2 text-white/80 hover:bg-paper/5"
-            >
-              <div className="font-medium line-clamp-1">{p.title}</div>
-              <div className="text-xs text-white/60">{formatPHP(p.min_price)}</div>
-            </Link>
-          ))}
-        </div>
-      ) : null;
-    })()}
-  </div>
-) : (
-  <div className="mt-3 text-sm text-white/50">In stock: {available}</div>
-)}
+                    {invalid ? (
+                      <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200 space-y-2">
+                        <div>
+                          Item sold out, browse our page for similar items.
+                        </div>
+                        {(() => {
+                          const target = {
+                            id: l.variant.product.id,
+                            title: l.variant.product.title,
+                            brand: l.variant.product.brand,
+                            model: l.variant.product.model,
+                            min_price: Number(l.variant.price),
+                          };
+                          const recs = recommendSimilar(
+                            allProducts as any,
+                            target as any,
+                            4,
+                          );
+                          return recs.length ? (
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              {recs.map((p: any) => (
+                                <Link
+                                  key={p.id}
+                                  href={`/product/${p.id}`}
+                                  className="rounded-xl border border-white/10 bg-bg-900/30 px-3 py-2 text-white/80 hover:bg-paper/5"
+                                >
+                                  <div className="font-medium line-clamp-1">
+                                    {p.title}
+                                  </div>
+                                  <div className="text-xs text-white/60">
+                                    {formatPHP(p.min_price)}
+                                  </div>
+                                </Link>
+                              ))}
+                            </div>
+                          ) : null;
+                        })()}
+                      </div>
+                    ) : (
+                      <div className="mt-3 text-sm text-white/50">
+                        In stock: {available}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -358,15 +418,48 @@ function CartContent() {
         </CardBody>
       </Card>
 
+      {hasUnsealedInCart ? (
+        <div className="rounded-xl border border-white/10 bg-bg-900/30 p-4 text-xs text-white/70 space-y-2">
+          <div className="text-sm text-white/80">
+            Quick note: Unsealed items may show light signs of handling or
+            display.
+          </div>
+          <label className="flex items-start gap-2 text-xs text-white/70">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4"
+              checked={unsealedAck}
+              onChange={(e) => setUnsealedAck(e.target.checked)}
+              disabled={!hasUnsealedSelected}
+            />
+            <span>
+              I understand that photos are for reference, and unsealed items may
+              have minor imperfections.
+            </span>
+          </label>
+          {hasUnsealedSelected && !unsealedAck ? (
+            <div className="text-[11px] text-white/50">
+              Please tick this box to continue.
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <Card>
         <CardBody className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <div className="text-sm text-white/60">Selected subtotal</div>
-            <div className="text-xl text-price">{formatPHP(selectedSubtotal)}</div>
+            <div className="text-xl text-price">
+              {formatPHP(selectedSubtotal)}
+            </div>
           </div>
-          <Link href={checkoutHref}>
-            <Button disabled={selectedLines.length === 0}>Proceed to checkout</Button>
-          </Link>
+          {checkoutDisabled ? (
+            <Button disabled>Proceed to checkout</Button>
+          ) : (
+            <Link href={checkoutHref}>
+              <Button>Proceed to checkout</Button>
+            </Link>
+          )}
         </CardBody>
       </Card>
 
@@ -385,7 +478,9 @@ function CartContent() {
                   key={item.key}
                   product={item}
                   onAddToCart={(opt) => onAddSuggestion(item, opt)}
-                  onRelatedAddToCart={(related, opt) => onAddSuggestion(related, opt)}
+                  onRelatedAddToCart={(related, opt) =>
+                    onAddSuggestion(related, opt)
+                  }
                   relatedPool={shopProducts}
                 />
               ))}
@@ -393,119 +488,136 @@ function CartContent() {
           </CardBody>
         </Card>
       ) : null}
-    
-      {previewLine ? renderPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={() => setPreviewLine(null)}
-            aria-label="Close preview"
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            className="relative w-full max-w-3xl rounded-2xl border border-white/10 bg-bg-900/95 p-5 shadow-soft"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs text-white/50">Item preview</div>
-                <div className="text-lg font-semibold">
-                  {previewLine.variant.product.title}
-                </div>
-                <div className="text-sm text-white/60">
-                  {previewLine.variant.product.brand ?? "-"}
-                  {previewLine.variant.product.model
-                    ? ` - ${previewLine.variant.product.model}`
-                    : ""}
-                </div>
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
+
+      {previewLine
+        ? renderPortal(
+            <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
+              <button
+                type="button"
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
                 onClick={() => setPreviewLine(null)}
+                aria-label="Close preview"
+              />
+              <div
+                role="dialog"
+                aria-modal="true"
+                className="relative w-full max-w-3xl rounded-2xl border border-white/10 bg-bg-900/95 p-5 shadow-soft"
               >
-                Close
-              </Button>
-            </div>
-
-            <div className="mt-4 grid gap-4 md:grid-cols-[1.2fr_1fr]">
-              <div className="rounded-xl border border-white/10 bg-bg-950/50 p-3">
-                {activeImage ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={activeImage}
-                    alt=""
-                    className="h-64 w-full rounded-lg object-contain"
-                  />
-                ) : (
-                  <div className="flex h-64 items-center justify-center text-sm text-white/50">
-                    No image available.
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-3">
-                <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3 space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-white/60">Condition</span>
-                    <span className="text-white/90">
-                      {formatConditionLabel(previewCondition, { upper: true })}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-white/60">Price</span>
-                    <span className="text-price">{previewPrice}</span>
-                  </div>
-                  {previewNotes ? (
-                    <div className="text-sm text-white/70">
-                      Notes: {previewNotes}
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-white/50">Item preview</div>
+                    <div className="text-lg font-semibold">
+                      {previewLine.variant.product.title}
                     </div>
-                  ) : null}
-                  {previewIssue ? (
-                    <div className="text-sm text-red-200/80">
-                      Issue: {previewIssue}
+                    <div className="text-sm text-white/60">
+                      {previewLine.variant.product.brand ?? "-"}
+                      {previewLine.variant.product.model
+                        ? ` - ${previewLine.variant.product.model}`
+                        : ""}
                     </div>
-                  ) : null}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setPreviewLine(null)}
+                  >
+                    Close
+                  </Button>
                 </div>
 
-                <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
-                    Photos
+                <div className="mt-4 grid gap-4 md:grid-cols-[1.2fr_1fr]">
+                  <div className="rounded-xl border border-white/10 bg-bg-950/50 p-3">
+                    {activeImage ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={activeImage}
+                        alt=""
+                        className="h-64 w-full rounded-lg object-contain"
+                      />
+                    ) : (
+                      <div className="flex h-64 items-center justify-center text-sm text-white/50">
+                        No image available.
+                      </div>
+                    )}
                   </div>
-                  {previewImages.length ? (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {previewImages.map((img, index) => (
-                        <button
-                          key={`${img}-${index}`}
-                          type="button"
-                          onClick={() => setActiveImage(img)}
-                          className={`h-16 w-16 overflow-hidden rounded-lg border transition ${
-                            activeImage === img
-                              ? "border-accent-400/80"
-                              : "border-white/10"
-                          }`}
-                        >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={img}
-                            alt=""
-                            className="h-full w-full object-cover"
-                          />
-                        </button>
-                      ))}
+
+                  <div className="space-y-3">
+                    <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3 space-y-2">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-white/60">Condition</span>
+                        <span className="text-white/90">
+                          {formatConditionLabel(previewCondition, {
+                            upper: true,
+                          })}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-white/60">Price</span>
+                        <span className="text-price">{previewPrice}</span>
+                      </div>
+                      {previewNotes ? (
+                        <div className="text-sm text-white/70">
+                          Notes: {previewNotes}
+                        </div>
+                      ) : null}
+                      {previewIssue ? (
+                        isPreviewNearMint ? (
+                          <div className="text-sm text-white/70">
+                            Condition note: {previewIssue}
+                          </div>
+                        ) : (
+                          <div className="text-sm text-red-200/80">
+                            Issue: {previewIssue}
+                          </div>
+                        )
+                      ) : null}
                     </div>
-                  ) : (
-                    <div className="mt-2 text-xs text-white/50">
-                      No additional photos.
+
+                    <div className="rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+                      Photos are for reference only (may not be the exact
+                      on-hand item). For more photos/details, please message our
+                      Facebook page.
                     </div>
-                  )}
+
+                    <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
+                        Photos
+                      </div>
+                      {previewImages.length ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {previewImages.map((img, index) => (
+                            <button
+                              key={`${img}-${index}`}
+                              type="button"
+                              onClick={() => setActiveImage(img)}
+                              className={`h-16 w-16 overflow-hidden rounded-lg border transition ${
+                                activeImage === img
+                                  ? "border-accent-400/80"
+                                  : "border-white/10"
+                              }`}
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={img}
+                                alt=""
+                                className="h-full w-full object-cover"
+                              />
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-xs text-white/50">
+                          No additional photos.
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
-        </div>
-      ) : null}</main>
+            </div>,
+          )
+        : null}
+    </main>
   );
 }
 
@@ -516,17 +628,3 @@ export default function CartPage() {
     </RequireAuth>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-

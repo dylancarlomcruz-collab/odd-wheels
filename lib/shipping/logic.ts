@@ -9,6 +9,10 @@ export function emptyShipCounts(): ShipCounts {
     POPRACE: 0,
     ACRYLIC_TRUE_SCALE: 0,
     BLISTER: 0,
+    TOMICA: 0,
+    HOT_WHEELS_MAINLINE: 0,
+    HOT_WHEELS_PREMIUM: 0,
+    LOOSE_NO_BOX: 0,
     LALAMOVE: 0,
   };
 }

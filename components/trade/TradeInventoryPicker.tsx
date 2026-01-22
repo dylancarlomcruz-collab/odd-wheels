@@ -22,6 +22,8 @@ type TradeVariant = {
   id: string;
   condition:
     | "sealed"
+    | "resealed"
+    | "near_mint"
     | "unsealed"
     | "with_issues"
     | "diorama"
@@ -113,16 +115,32 @@ function TradeProductCard({
   }, [product.product_variants]);
   const displayVariants = React.useMemo<TradeVariant[]>(() => {
     const sealed = variants.find((v) => v.condition === "sealed");
+    const resealed = variants.find((v) => v.condition === "resealed");
+    const nearMint = variants.find((v) => v.condition === "near_mint");
     const sealedBlister = variants.find((v) => v.condition === "sealed_blister");
     const unsealedBlister = variants.find(
       (v) => v.condition === "unsealed_blister"
     );
     const blistered = variants.find((v) => v.condition === "blistered");
     const unsealed = variants.find((v) => v.condition === "unsealed");
-    if (sealed || unsealed || sealedBlister || unsealedBlister || blistered) {
-      return [sealed, sealedBlister, unsealed, unsealedBlister, blistered].filter(
-        (v): v is TradeVariant => Boolean(v)
-      );
+    if (
+      sealed ||
+      resealed ||
+      nearMint ||
+      unsealed ||
+      sealedBlister ||
+      unsealedBlister ||
+      blistered
+    ) {
+      return [
+        sealed,
+        resealed,
+        nearMint,
+        sealedBlister,
+        unsealed,
+        unsealedBlister,
+        blistered,
+      ].filter((v): v is TradeVariant => Boolean(v));
     }
     return variants;
   }, [variants]);

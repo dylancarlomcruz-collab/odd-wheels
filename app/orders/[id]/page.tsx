@@ -958,11 +958,16 @@ function OrderDetailContent() {
                         <div className="text-xs text-white/60">
                           {formatConditionLabel(it.condition, { upper: true })} x {qty}
                         </div>
-                        {String(it.condition) === "with_issues" &&
-                        it.issue_notes ? (
-                          <div className="text-xs text-red-200/80 truncate">
-                            Issue: {it.issue_notes}
-                          </div>
+                        {it.issue_notes ? (
+                          String(it.condition) === "near_mint" ? (
+                            <div className="text-xs text-white/70 truncate">
+                              Condition note: {it.issue_notes}
+                            </div>
+                          ) : String(it.condition) === "with_issues" ? (
+                            <div className="text-xs text-red-200/80 truncate">
+                              Issue: {it.issue_notes}
+                            </div>
+                          ) : null
                         ) : null}
                       </div>
                     </div>

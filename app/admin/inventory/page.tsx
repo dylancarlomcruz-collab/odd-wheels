@@ -43,6 +43,8 @@ type Variant = {
   product_id: string;
   condition:
     | "sealed"
+    | "resealed"
+    | "near_mint"
     | "unsealed"
     | "with_issues"
     | "diorama"
@@ -67,6 +69,10 @@ type ShipClass =
   | "POPRACE"
   | "ACRYLIC_TRUE_SCALE"
   | "BLISTER"
+  | "TOMICA"
+  | "HOT_WHEELS_MAINLINE"
+  | "HOT_WHEELS_PREMIUM"
+  | "LOOSE_NO_BOX"
   | "LALAMOVE";
 type LookupData = {
   title: string | null;
@@ -736,6 +742,8 @@ export default function AdminInventoryPage() {
 
   function nextConditionFromExisting(list: Variant[]): VariantCondition {
     const hasDiorama = list.some((v) => v.condition === "diorama");
+    const hasNearMint = list.some((v) => v.condition === "near_mint");
+    const hasResealed = list.some((v) => v.condition === "resealed");
     const hasSealed = list.some((v) => v.condition === "sealed");
     const hasUnsealed = list.some((v) => v.condition === "unsealed");
     const hasSealedBlister = list.some(
@@ -746,6 +754,8 @@ export default function AdminInventoryPage() {
     );
     const hasBlistered = list.some((v) => v.condition === "blistered");
     if (hasDiorama) return "diorama";
+    if (hasNearMint) return "near_mint";
+    if (hasResealed) return "resealed";
     if (hasSealed && hasUnsealed) return "with_issues";
     if (hasSealed) return "unsealed";
     if (hasUnsealed) return "sealed";
@@ -1097,7 +1107,12 @@ export default function AdminInventoryPage() {
         product_id: productId!,
         condition,
         public_notes: publicNotes.trim() || null,
-        issue_notes: condition === "with_issues" ? issueNotes.trim() : null,
+        issue_notes:
+          condition === "with_issues"
+            ? issueNotes.trim()
+            : condition === "near_mint"
+              ? "Near Mint Condition"
+              : null,
         issue_photo_urls:
           condition === "with_issues" && issuePhotos.length
             ? issuePhotos
@@ -1889,9 +1904,15 @@ export default function AdminInventoryPage() {
                       <div className="font-medium">
                         {formatConditionLabel(v.condition, { upper: true })}{" "}
                         {v.issue_notes ? (
-                          <span className="text-white/50">
-                            • {v.issue_notes}
-                          </span>
+                          v.condition === "near_mint" ? (
+                            <span className="text-white/60">
+                              • Note: {v.issue_notes}
+                            </span>
+                          ) : (
+                            <span className="text-white/50">
+                              • {v.issue_notes}
+                            </span>
+                          )
                         ) : null}
                       </div>
                       <div className="text-xs text-white/50">
@@ -2004,6 +2025,10 @@ export default function AdminInventoryPage() {
                           ACRYLIC_TRUE_SCALE
                         </option>
                         <option value="BLISTER">BLISTER</option>
+                        <option value="TOMICA">TOMICA</option>
+                        <option value="HOT_WHEELS_MAINLINE">HOT_WHEELS_MAINLINE</option>
+                        <option value="HOT_WHEELS_PREMIUM">HOT_WHEELS_PREMIUM</option>
+                        <option value="LOOSE_NO_BOX">LOOSE_NO_BOX</option>
                         <option value="LALAMOVE">LALAMOVE</option>
                       </Select>
 
@@ -2133,7 +2158,16 @@ export default function AdminInventoryPage() {
                 value={condition}
                 onChange={(e) => {
                   const next = e.target.value as VariantCondition;
+                  const leavingNearMint =
+                    condition === "near_mint" &&
+                    issueNotes.trim() === "Near Mint Condition" &&
+                    next !== "near_mint";
                   setCondition(next);
+                  if (next === "near_mint") {
+                    setIssueNotes("Near Mint Condition");
+                  } else if (leavingNearMint) {
+                    setIssueNotes("");
+                  }
                   if (isDioramaCondition(next)) {
                     setShipClass("LALAMOVE");
                   } else if (isBlisterCondition(next)) {
@@ -2144,6 +2178,8 @@ export default function AdminInventoryPage() {
                 }}
               >
                 <option value="sealed">Sealed</option>
+                <option value="resealed">Resealed</option>
+                <option value="near_mint">Near Mint</option>
                 <option value="sealed_blister">Sealed blister</option>
                 <option value="unsealed">Unsealed</option>
                 <option value="unsealed_blister">Unsealed blister</option>
@@ -2162,6 +2198,10 @@ export default function AdminInventoryPage() {
                 <option value="POPRACE">Pop Race</option>
                 <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
                 <option value="BLISTER">Blister</option>
+                <option value="TOMICA">Tomica</option>
+                <option value="HOT_WHEELS_MAINLINE">Hot Wheels Mainline</option>
+                <option value="HOT_WHEELS_PREMIUM">Hot Wheels Premium</option>
+                <option value="LOOSE_NO_BOX">Loose (No Box)</option>
                 <option value="LALAMOVE">Lalamove</option>
               </Select>
 

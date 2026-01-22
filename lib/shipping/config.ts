@@ -7,6 +7,10 @@ export type ShipClass =
   | "POPRACE"
   | "ACRYLIC_TRUE_SCALE"
   | "BLISTER"
+  | "TOMICA"
+  | "HOT_WHEELS_MAINLINE"
+  | "HOT_WHEELS_PREMIUM"
+  | "LOOSE_NO_BOX"
   | "LALAMOVE";
 
 export type JntPouch = "SMALL" | "MEDIUM"; // Large not available per SRS
@@ -39,6 +43,10 @@ export const JNT_CAPACITY: Record<JntPouch, Record<ShipClass, number>> = {
     POPRACE: 2,
     ACRYLIC_TRUE_SCALE: 1,
     BLISTER: 0,
+    TOMICA: 10,
+    HOT_WHEELS_MAINLINE: 0,
+    HOT_WHEELS_PREMIUM: 0,
+    LOOSE_NO_BOX: 10,
     LALAMOVE: 0,
   },
   MEDIUM: {
@@ -47,6 +55,10 @@ export const JNT_CAPACITY: Record<JntPouch, Record<ShipClass, number>> = {
     POPRACE: 8,
     ACRYLIC_TRUE_SCALE: 4,
     BLISTER: 2,
+    TOMICA: 30,
+    HOT_WHEELS_MAINLINE: 8,
+    HOT_WHEELS_PREMIUM: 6,
+    LOOSE_NO_BOX: 30,
     LALAMOVE: 0,
   }, // x4 of small
 };
@@ -58,6 +70,10 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     POPRACE: 1,
     ACRYLIC_TRUE_SCALE: 1,
     BLISTER: 0,
+    TOMICA: 4,
+    HOT_WHEELS_MAINLINE: 0,
+    HOT_WHEELS_PREMIUM: 0,
+    LOOSE_NO_BOX: 4,
     LALAMOVE: 0,
   },
   MINIBOX: {
@@ -66,6 +82,10 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     POPRACE: 4,
     ACRYLIC_TRUE_SCALE: 4,
     BLISTER: 1,
+    TOMICA: 20,
+    HOT_WHEELS_MAINLINE: 8,
+    HOT_WHEELS_PREMIUM: 6,
+    LOOSE_NO_BOX: 20,
     LALAMOVE: 0,
   },
   SMALL_BOX: {
@@ -74,6 +94,10 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     POPRACE: Math.floor(4 * 3.5),
     ACRYLIC_TRUE_SCALE: Math.floor(4 * 3.5),
     BLISTER: 8,
+    TOMICA: 20,
+    HOT_WHEELS_MAINLINE: 20,
+    HOT_WHEELS_PREMIUM: 16,
+    LOOSE_NO_BOX: 20,
     LALAMOVE: 0,
   },
 };

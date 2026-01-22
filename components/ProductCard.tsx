@@ -68,16 +68,19 @@ export default function ProductCard({
 }: {
   product: ShopProduct;
   onAddToCart: (option: ConditionOption) => void | Promise<void>;
-  onRelatedAddToCart?: (product: ShopProduct, option: ConditionOption) => void | Promise<void>;
+  onRelatedAddToCart?: (
+    product: ShopProduct,
+    option: ConditionOption,
+  ) => void | Promise<void>;
   onProductClick?: (product: ShopProduct) => void | Promise<void>;
   socialProof?: SocialProof;
   relatedPool?: ShopProduct[] | null;
 }) {
   const [selectedId, setSelectedId] = React.useState<string>(
-    product.options[0]?.id ?? ""
+    product.options[0]?.id ?? "",
   );
   const [hasPicked, setHasPicked] = React.useState(
-    (product.options?.length ?? 0) <= 1
+    (product.options?.length ?? 0) <= 1,
   );
   const [isOpen, setIsOpen] = React.useState(false);
   const [previewStack, setPreviewStack] = React.useState<PreviewEntry[]>([]);
@@ -93,7 +96,7 @@ export default function ProductCard({
   const selected = React.useMemo(
     () =>
       product.options.find((o) => o.id === selectedId) ?? product.options[0],
-    [product.options, selectedId]
+    [product.options, selectedId],
   );
   const previewEntry = previewStack[previewStack.length - 1];
   const previewProduct = previewEntry?.product ?? product;
@@ -103,7 +106,7 @@ export default function ProductCard({
     () =>
       previewProduct.options.find((o) => o.id === previewSelectedId) ??
       previewProduct.options[0],
-    [previewProduct.options, previewSelectedId]
+    [previewProduct.options, previewSelectedId],
   );
 
   const cardImages = React.useMemo(() => {
@@ -126,7 +129,7 @@ export default function ProductCard({
 
   const issueImages = React.useMemo(
     () => (selected?.issue_photo_urls ?? []).filter(Boolean) as string[],
-    [selected?.issue_photo_urls]
+    [selected?.issue_photo_urls],
   );
 
   const priceLabel =
@@ -135,7 +138,11 @@ export default function ProductCard({
       : `${peso(product.minPrice)} - ${peso(product.maxPrice)}`;
   const hasMultiple = product.options.length > 1;
   const displayPrice =
-    hasPicked || !hasMultiple ? (selected ? peso(selected.price) : priceLabel) : priceLabel;
+    hasPicked || !hasMultiple
+      ? selected
+        ? peso(selected.price)
+        : priceLabel
+      : priceLabel;
 
   const isOut = !selected || (selected.qty ?? 0) <= 0;
   const activeImage = previewImages[activeIndex] ?? "";
@@ -144,12 +151,16 @@ export default function ProductCard({
   const hasIssuePhotos = issueImages.length > 0;
   const publicNotes = String(previewSelected?.public_notes ?? "").trim();
   const issueNotes = String(previewSelected?.issue_notes ?? "").trim();
+  const isNearMint = previewSelected?.condition === "near_mint";
   const lowStock = (selected?.qty ?? 0) > 0 && (selected?.qty ?? 0) <= 2;
   const onlyOneLeft = (selected?.qty ?? 0) === 1;
   const proofBits = [
     socialProof?.inCarts ? `${socialProof.inCarts} in carts` : null,
-    socialProof?.soldThisWeek ? `${socialProof.soldThisWeek} sold this week` : null,
-    socialProof?.lastViewedMinutes !== null && socialProof?.lastViewedMinutes !== undefined
+    socialProof?.soldThisWeek
+      ? `${socialProof.soldThisWeek} sold this week`
+      : null,
+    socialProof?.lastViewedMinutes !== null &&
+    socialProof?.lastViewedMinutes !== undefined
       ? `Viewed ${socialProof.lastViewedMinutes}m ago`
       : null,
   ].filter(Boolean);
@@ -157,10 +168,13 @@ export default function ProductCard({
   const relatedItems = React.useMemo(() => {
     if (!isOpen || !relatedPool?.length) return [];
     const targetText = normalizeSearchTerm(
-      `${previewProduct.title} ${previewProduct.brand ?? ""} ${previewProduct.model ?? ""}`
+      `${previewProduct.title} ${previewProduct.brand ?? ""} ${previewProduct.model ?? ""}`,
     );
     const targetTokens = new Set(
-      targetText.split(" ").map((token) => token.trim()).filter(Boolean)
+      targetText
+        .split(" ")
+        .map((token) => token.trim())
+        .filter(Boolean),
     );
     const targetBrand = normalizeSearchTerm(previewProduct.brand ?? "");
     const targetModel = normalizeSearchTerm(previewProduct.model ?? "");
@@ -169,7 +183,7 @@ export default function ProductCard({
       .map((p) => {
         let score = 0;
         const text = normalizeSearchTerm(
-          `${p.title} ${p.brand ?? ""} ${p.model ?? ""}`
+          `${p.title} ${p.brand ?? ""} ${p.model ?? ""}`,
         );
         if (targetBrand && normalizeSearchTerm(p.brand ?? "") === targetBrand) {
           score += 3;
@@ -180,7 +194,7 @@ export default function ProductCard({
         const tokens = text.split(" ").filter(Boolean);
         const overlap = tokens.reduce(
           (acc, token) => acc + (targetTokens.has(token) ? 1 : 0),
-          0
+          0,
         );
         score += overlap;
         return { product: p, score };
@@ -191,7 +205,7 @@ export default function ProductCard({
 
     const picked = new Set(scored.map((item) => item.key));
     const fallback = relatedPool.filter(
-      (p) => p.key !== previewProduct.key && !picked.has(p.key)
+      (p) => p.key !== previewProduct.key && !picked.has(p.key),
     );
     return scored.concat(fallback).slice(0, 6);
   }, [
@@ -288,7 +302,9 @@ export default function ProductCard({
 
   function step(delta: number) {
     if (previewImages.length <= 1) return;
-    setActiveIndex((prev) => (prev + delta + previewImages.length) % previewImages.length);
+    setActiveIndex(
+      (prev) => (prev + delta + previewImages.length) % previewImages.length,
+    );
   }
 
   function openIssuePhotos() {
@@ -299,7 +315,9 @@ export default function ProductCard({
 
   function stepIssue(delta: number) {
     if (issueImages.length <= 1) return;
-    setIssueIndex((prev) => (prev + delta + issueImages.length) % issueImages.length);
+    setIssueIndex(
+      (prev) => (prev + delta + issueImages.length) % issueImages.length,
+    );
   }
 
   function renderPortal(content: React.ReactNode) {
@@ -310,7 +328,7 @@ export default function ProductCard({
   function handleTouchStart(
     event: React.TouchEvent,
     startX: React.MutableRefObject<number | null>,
-    startY: React.MutableRefObject<number | null>
+    startY: React.MutableRefObject<number | null>,
   ) {
     const touch = event.touches[0];
     startX.current = touch?.clientX ?? null;
@@ -321,7 +339,7 @@ export default function ProductCard({
     event: React.TouchEvent,
     startX: React.MutableRefObject<number | null>,
     startY: React.MutableRefObject<number | null>,
-    onSwipe: (delta: number) => void
+    onSwipe: (delta: number) => void,
   ) {
     if (startX.current === null || startY.current === null) return;
     const touch = event.changedTouches[0];
@@ -370,7 +388,9 @@ export default function ProductCard({
           </div>
 
           <div className="mt-2 sm:mt-3 flex items-center justify-between">
-            <div className="text-price text-sm sm:text-base">{displayPrice}</div>
+            <div className="text-price text-sm sm:text-base">
+              {displayPrice}
+            </div>
             <div className="text-[11px] sm:text-xs text-white/60">
               {selected?.qty ?? 0} left ({selected?.condition ?? "-"})
             </div>
@@ -455,326 +475,385 @@ export default function ProductCard({
         </div>
       </div>
 
-      {isOpen ? renderPortal(
-        <div className="fixed inset-0 z-50 flex items-start justify-center px-3 py-4 sm:items-center sm:px-4 sm:py-6">
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={closePreview}
-            aria-label="Close preview"
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            className="relative w-full max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-bg-900/95 shadow-soft"
-          >
-            <div
-              ref={previewScrollRef}
-              className="max-h-[85vh] overflow-y-auto sm:max-h-[90vh]"
-            >
-              <div className="sticky top-0 z-10 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 items-start gap-3">
-                    {canGoBack ? (
-                      <button
-                        type="button"
-                        onClick={goBackPreview}
-                        className="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-bg-950/40 px-2.5 py-2 text-sm text-white/80 hover:bg-bg-950/60"
-                        aria-label="Back to previous item"
-                      >
-                        <ChevronLeft className="h-4 w-4" />
-                        Back
-                      </button>
-                    ) : null}
-                    <div className="min-w-0">
-                      <div className="text-xs text-white/50">Item preview</div>
-                      <div className="text-base font-semibold leading-snug line-clamp-2 sm:text-lg">
-                        {previewProduct.title}
-                      </div>
-                      <div className="text-xs text-white/60 sm:text-sm">
-                        {previewProduct.brand ?? "-"}
-                        {previewProduct.model ? ` - ${previewProduct.model}` : ""}
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={closePreview}
-                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
-                  >
-                    <X className="h-4 w-4" />
-                    Close
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-4 sm:p-5">
-                <div className="mb-3 flex items-center gap-2 text-[11px] text-white/50 sm:hidden">
-                  <ChevronDown className="h-4 w-4 text-white/40" />
-                  <span>Scroll down for details and suggestions</span>
-                </div>
-                <div className="grid gap-4 md:grid-cols-[1.2fr_1fr]">
+      {isOpen
+        ? renderPortal(
+            <div className="fixed inset-0 z-50 flex items-start justify-center px-3 py-4 sm:items-center sm:px-4 sm:py-6">
+              <button
+                type="button"
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                onClick={closePreview}
+                aria-label="Close preview"
+              />
               <div
-                className="group relative overflow-hidden rounded-xl border border-white/10 bg-bg-950/50"
-                onTouchStart={(event) => handleTouchStart(event, touchStartX, touchStartY)}
-                onTouchEnd={(event) => handleTouchEnd(event, touchStartX, touchStartY, step)}
+                role="dialog"
+                aria-modal="true"
+                className="relative w-full max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-bg-900/95 shadow-soft"
               >
-                {activeImage ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={activeImage}
-                    alt=""
-                    className="h-72 w-full object-contain bg-neutral-50"
-                  />
-                ) : (
-                  <div className="flex h-72 items-center justify-center text-sm text-white/50">
-                    No image available.
-                  </div>
-                )}
-                {previewImages.length > 1 ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => step(-1)}
-                      className="absolute inset-y-0 left-0 w-1/2"
-                      aria-label="Previous photo"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => step(1)}
-                      className="absolute inset-y-0 right-0 w-1/2"
-                      aria-label="Next photo"
-                    />
-                    <div className="pointer-events-none absolute bottom-3 right-3 rounded-full bg-black/60 px-2 py-0.5 text-[10px] text-white/80">
-                      {activeIndex + 1}/{previewImages.length}
-                    </div>
-                  </>
-                ) : null}
-              </div>
-
-                  <div className="space-y-3">
-                <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3 space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-white/60">Selected condition</span>
-                    <span className="text-white/90">
-                      {previewSelected?.condition ?? "-"}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-white/60">Price</span>
-                    <span className="text-price">
-                      {previewSelected ? peso(previewSelected.price) : "-"}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-white/60">Available</span>
-                    <span className="text-white/80">{previewSelected?.qty ?? 0} left</span>
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
-                    Conditions
-                  </div>
-                  <div className="mt-2 space-y-2 text-sm">
-                    {previewProduct.options.map((o) => {
-                      const isSelected = o.id === previewSelected?.id;
-                      return (
-                        <div
-                          key={o.id}
-                          className="flex items-center justify-between gap-2"
-                        >
-                          <span className={isSelected ? "text-white" : "text-white/70"}>
-                            {o.condition}
-                          </span>
-                          <span className={isSelected ? "text-white/90" : "text-white/60"}>
-                            {peso(o.price)} - {o.qty} left
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
-                    Notes
-                  </div>
-                  <div className="mt-2 text-sm text-white/70">
-                    {publicNotes ? publicNotes : "No notes for this item."}
-                  </div>
-                  {issueNotes ? (
-                    <div className="mt-2 text-sm text-red-200/80">
-                      Issue: {issueNotes}
-                    </div>
-                  ) : null}
-                </div>
-                  </div>
-                </div>
-
-                {relatedItems.length ? (
-                  <div className="mt-5 border-t border-white/10 pt-4">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
-                      You may also like
-                    </div>
-                    <div className="mt-3 flex gap-3 overflow-x-auto pb-2">
-                      {relatedItems.map((item) => {
-                        const image =
-                          item.image_url ?? item.image_urls?.[0] ?? null;
-                        const defaultOption = item.options[0];
-                        const canAdd = Boolean(
-                          onRelatedAddToCart && defaultOption && defaultOption.qty > 0
-                        );
-                        return (
-                          <div
-                            key={item.key}
-                            onClick={() => pushPreview(item)}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" || event.key === " ") {
-                                event.preventDefault();
-                                pushPreview(item);
-                              }
-                            }}
-                            role="button"
-                            tabIndex={0}
-                            className="min-w-[160px] rounded-xl border border-white/10 bg-bg-950/40 p-2 hover:border-white/20 hover:bg-bg-950/60"
-                            aria-label={`Preview ${item.title}`}
-                          >
-                            <div className="h-24 w-full rounded-lg border border-white/10 bg-bg-900/60 overflow-hidden">
-                              {image ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={image}
-                                  alt=""
-                                  className="h-full w-full object-contain bg-neutral-50"
-                                />
-                              ) : null}
-                            </div>
-                            <div className="mt-2 text-xs font-semibold line-clamp-2 text-white/90">
-                              {item.title}
-                            </div>
-                            <div className="text-[11px] text-white/50">
-                              {item.brand ?? "-"}
-                            </div>
-                            <div className="mt-2 flex items-center justify-between text-[11px]">
-                              <span className="text-price">
-                                {defaultOption ? peso(defaultOption.price) : "-"}
-                              </span>
-                              {canAdd ? (
-                                <button
-                                  type="button"
-                                  className="rounded-full border border-white/10 bg-black/50 px-2 py-0.5 text-[10px] text-white/80 hover:bg-black/70"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    if (defaultOption) {
-                                      onRelatedAddToCart?.(item, defaultOption);
-                                    }
-                                  }}
-                                >
-                                  Add to cart
-                                </button>
-                              ) : null}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {issueOpen ? renderPortal(
-        <div className="fixed inset-0 z-50 flex items-start justify-center px-3 py-4 sm:items-center sm:px-4 sm:py-6">
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={() => setIssueOpen(false)}
-            aria-label="Close issue photos"
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            className="relative w-full max-w-3xl overflow-hidden rounded-2xl border border-white/10 bg-bg-900/95 shadow-soft"
-          >
-            <div className="max-h-[85vh] overflow-y-auto sm:max-h-[90vh]">
-              <div className="sticky top-0 z-10 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-xs text-white/50">Issue photos</div>
-                    <div className="text-base font-semibold leading-snug line-clamp-2 sm:text-lg">
-                      {product.title}
-                    </div>
-                    <div className="text-xs text-white/60 sm:text-sm">
-                      {selected?.condition ?? "-"}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIssueOpen(false)}
-                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
-                  >
-                    <X className="h-4 w-4" />
-                    Close
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-4 sm:p-5">
                 <div
-                  className="group relative overflow-hidden rounded-xl border border-white/10 bg-bg-950/50"
-                  onTouchStart={(event) =>
-                    handleTouchStart(event, issueTouchStartX, issueTouchStartY)
-                  }
-                  onTouchEnd={(event) =>
-                    handleTouchEnd(event, issueTouchStartX, issueTouchStartY, stepIssue)
-                  }
+                  ref={previewScrollRef}
+                  className="max-h-[85vh] overflow-y-auto sm:max-h-[90vh]"
                 >
-                  {activeIssueImage ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={activeIssueImage}
-                      alt="Issue photo"
-                      className="h-72 w-full object-contain bg-neutral-50"
-                    />
-                  ) : (
-                    <div className="flex h-72 items-center justify-center text-sm text-white/50">
-                      No issue photos available.
-                    </div>
-                  )}
-                  {issueImages.length > 1 ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => stepIssue(-1)}
-                        className="absolute inset-y-0 left-0 w-1/2"
-                        aria-label="Previous issue photo"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => stepIssue(1)}
-                        className="absolute inset-y-0 right-0 w-1/2"
-                        aria-label="Next issue photo"
-                      />
-                      <div className="pointer-events-none absolute bottom-3 right-3 rounded-full bg-black/60 px-2 py-0.5 text-[10px] text-white/80">
-                        {issueIndex + 1}/{issueImages.length}
+                  <div className="sticky top-0 z-10 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-start gap-3">
+                        {canGoBack ? (
+                          <button
+                            type="button"
+                            onClick={goBackPreview}
+                            className="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-bg-950/40 px-2.5 py-2 text-sm text-white/80 hover:bg-bg-950/60"
+                            aria-label="Back to previous item"
+                          >
+                            <ChevronLeft className="h-4 w-4" />
+                            Back
+                          </button>
+                        ) : null}
+                        <div className="min-w-0">
+                          <div className="text-xs text-white/50">
+                            Item preview
+                          </div>
+                          <div className="text-base font-semibold leading-snug line-clamp-2 sm:text-lg">
+                            {previewProduct.title}
+                          </div>
+                          <div className="text-xs text-white/60 sm:text-sm">
+                            {previewProduct.brand ?? "-"}
+                            {previewProduct.model
+                              ? ` - ${previewProduct.model}`
+                              : ""}
+                          </div>
+                        </div>
                       </div>
-                    </>
-                  ) : null}
+                      <button
+                        type="button"
+                        onClick={closePreview}
+                        className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
+                      >
+                        <X className="h-4 w-4" />
+                        Close
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-4 sm:p-5">
+                    <div className="mb-3 flex items-center gap-2 text-[11px] text-white/50 sm:hidden">
+                      <ChevronDown className="h-4 w-4 text-white/40" />
+                      <span>Scroll down for details and suggestions</span>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-[1.2fr_1fr]">
+                      <div
+                        className="group relative overflow-hidden rounded-xl border border-white/10 bg-bg-950/50"
+                        onTouchStart={(event) =>
+                          handleTouchStart(event, touchStartX, touchStartY)
+                        }
+                        onTouchEnd={(event) =>
+                          handleTouchEnd(event, touchStartX, touchStartY, step)
+                        }
+                      >
+                        {activeImage ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={activeImage}
+                            alt=""
+                            className="h-72 w-full object-contain bg-neutral-50"
+                          />
+                        ) : (
+                          <div className="flex h-72 items-center justify-center text-sm text-white/50">
+                            No image available.
+                          </div>
+                        )}
+                        {previewImages.length > 1 ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => step(-1)}
+                              className="absolute inset-y-0 left-0 w-1/2"
+                              aria-label="Previous photo"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => step(1)}
+                              className="absolute inset-y-0 right-0 w-1/2"
+                              aria-label="Next photo"
+                            />
+                            <div className="pointer-events-none absolute bottom-3 right-3 rounded-full bg-black/60 px-2 py-0.5 text-[10px] text-white/80">
+                              {activeIndex + 1}/{previewImages.length}
+                            </div>
+                          </>
+                        ) : null}
+                      </div>
+
+                      <div className="space-y-3">
+                        <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3 space-y-2">
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-white/60">
+                              Selected condition
+                            </span>
+                            <span className="text-white/90">
+                              {previewSelected?.condition ?? "-"}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-white/60">Price</span>
+                            <span className="text-price">
+                              {previewSelected
+                                ? peso(previewSelected.price)
+                                : "-"}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-white/60">Available</span>
+                            <span className="text-white/80">
+                              {previewSelected?.qty ?? 0} left
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3">
+                          <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
+                            Conditions
+                          </div>
+                          <div className="mt-2 space-y-2 text-sm">
+                            {previewProduct.options.map((o) => {
+                              const isSelected = o.id === previewSelected?.id;
+                              return (
+                                <div
+                                  key={o.id}
+                                  className="flex items-center justify-between gap-2"
+                                >
+                                  <span
+                                    className={
+                                      isSelected
+                                        ? "text-white"
+                                        : "text-white/70"
+                                    }
+                                  >
+                                    {o.condition}
+                                  </span>
+                                  <span
+                                    className={
+                                      isSelected
+                                        ? "text-white/90"
+                                        : "text-white/60"
+                                    }
+                                  >
+                                    {peso(o.price)} - {o.qty} left
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3">
+                          <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
+                            Notes
+                          </div>
+                          <div className="mt-2 text-sm text-white/70">
+                            {publicNotes
+                              ? publicNotes
+                              : "No notes for this item."}
+                          </div>
+                          {issueNotes ? (
+                            isNearMint ? (
+                              <div className="mt-2 text-sm text-white/70">
+                                Condition note: {issueNotes}
+                              </div>
+                            ) : (
+                              <div className="mt-2 text-sm text-red-200/80">
+                                Issue: {issueNotes}
+                              </div>
+                            )
+                          ) : null}
+                        </div>
+
+                        <div className="rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+                          Photos are for reference only. For more
+                          photos/details, please message our Facebook page.
+                        </div>
+                      </div>
+                    </div>
+
+                    {relatedItems.length ? (
+                      <div className="mt-5 border-t border-white/10 pt-4">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
+                          You may also like
+                        </div>
+                        <div className="mt-3 flex gap-3 overflow-x-auto pb-2">
+                          {relatedItems.map((item) => {
+                            const image =
+                              item.image_url ?? item.image_urls?.[0] ?? null;
+                            const defaultOption = item.options[0];
+                            const canAdd = Boolean(
+                              onRelatedAddToCart &&
+                              defaultOption &&
+                              defaultOption.qty > 0,
+                            );
+                            return (
+                              <div
+                                key={item.key}
+                                onClick={() => pushPreview(item)}
+                                onKeyDown={(event) => {
+                                  if (
+                                    event.key === "Enter" ||
+                                    event.key === " "
+                                  ) {
+                                    event.preventDefault();
+                                    pushPreview(item);
+                                  }
+                                }}
+                                role="button"
+                                tabIndex={0}
+                                className="min-w-[160px] rounded-xl border border-white/10 bg-bg-950/40 p-2 hover:border-white/20 hover:bg-bg-950/60"
+                                aria-label={`Preview ${item.title}`}
+                              >
+                                <div className="h-24 w-full rounded-lg border border-white/10 bg-bg-900/60 overflow-hidden">
+                                  {image ? (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img
+                                      src={image}
+                                      alt=""
+                                      className="h-full w-full object-contain bg-neutral-50"
+                                    />
+                                  ) : null}
+                                </div>
+                                <div className="mt-2 text-xs font-semibold line-clamp-2 text-white/90">
+                                  {item.title}
+                                </div>
+                                <div className="text-[11px] text-white/50">
+                                  {item.brand ?? "-"}
+                                </div>
+                                <div className="mt-2 flex items-center justify-between text-[11px]">
+                                  <span className="text-price">
+                                    {defaultOption
+                                      ? peso(defaultOption.price)
+                                      : "-"}
+                                  </span>
+                                  {canAdd ? (
+                                    <button
+                                      type="button"
+                                      className="rounded-full border border-white/10 bg-black/50 px-2 py-0.5 text-[10px] text-white/80 hover:bg-black/70"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        if (defaultOption) {
+                                          onRelatedAddToCart?.(
+                                            item,
+                                            defaultOption,
+                                          );
+                                        }
+                                      }}
+                                    >
+                                      Add to cart
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+            </div>,
+          )
+        : null}
+
+      {issueOpen
+        ? renderPortal(
+            <div className="fixed inset-0 z-50 flex items-start justify-center px-3 py-4 sm:items-center sm:px-4 sm:py-6">
+              <button
+                type="button"
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                onClick={() => setIssueOpen(false)}
+                aria-label="Close issue photos"
+              />
+              <div
+                role="dialog"
+                aria-modal="true"
+                className="relative w-full max-w-3xl overflow-hidden rounded-2xl border border-white/10 bg-bg-900/95 shadow-soft"
+              >
+                <div className="max-h-[85vh] overflow-y-auto sm:max-h-[90vh]">
+                  <div className="sticky top-0 z-10 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-xs text-white/50">
+                          Issue photos
+                        </div>
+                        <div className="text-base font-semibold leading-snug line-clamp-2 sm:text-lg">
+                          {product.title}
+                        </div>
+                        <div className="text-xs text-white/60 sm:text-sm">
+                          {selected?.condition ?? "-"}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIssueOpen(false)}
+                        className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
+                      >
+                        <X className="h-4 w-4" />
+                        Close
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-4 sm:p-5">
+                    <div
+                      className="group relative overflow-hidden rounded-xl border border-white/10 bg-bg-950/50"
+                      onTouchStart={(event) =>
+                        handleTouchStart(
+                          event,
+                          issueTouchStartX,
+                          issueTouchStartY,
+                        )
+                      }
+                      onTouchEnd={(event) =>
+                        handleTouchEnd(
+                          event,
+                          issueTouchStartX,
+                          issueTouchStartY,
+                          stepIssue,
+                        )
+                      }
+                    >
+                      {activeIssueImage ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={activeIssueImage}
+                          alt="Issue photo"
+                          className="h-72 w-full object-contain bg-neutral-50"
+                        />
+                      ) : (
+                        <div className="flex h-72 items-center justify-center text-sm text-white/50">
+                          No issue photos available.
+                        </div>
+                      )}
+                      {issueImages.length > 1 ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => stepIssue(-1)}
+                            className="absolute inset-y-0 left-0 w-1/2"
+                            aria-label="Previous issue photo"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => stepIssue(1)}
+                            className="absolute inset-y-0 right-0 w-1/2"
+                            aria-label="Next issue photo"
+                          />
+                          <div className="pointer-events-none absolute bottom-3 right-3 rounded-full bg-black/60 px-2 py-0.5 text-[10px] text-white/80">
+                            {issueIndex + 1}/{issueImages.length}
+                          </div>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>,
+          )
+        : null}
     </>
   );
 }
-
-
-
-
-

@@ -1,5 +1,7 @@
 export type VariantCondition =
   | "sealed"
+  | "resealed"
+  | "near_mint"
   | "unsealed"
   | "with_issues"
   | "diorama"
@@ -9,6 +11,8 @@ export type VariantCondition =
 
 const CONDITION_LABELS: Record<VariantCondition, string> = {
   sealed: "Sealed",
+  resealed: "Resealed",
+  near_mint: "Near Mint",
   unsealed: "Unsealed",
   with_issues: "With issues",
   diorama: "Diorama",
@@ -42,18 +46,22 @@ export function conditionSortOrder(value: string | null | undefined): number {
   switch (value) {
     case "sealed":
       return 0;
-    case "sealed_blister":
+    case "resealed":
       return 1;
-    case "unsealed":
+    case "near_mint":
       return 2;
+    case "sealed_blister":
+      return 3;
+    case "unsealed":
+      return 4;
     case "unsealed_blister":
     case "blistered":
-      return 3;
-    case "diorama":
-      return 4;
-    case "with_issues":
       return 5;
-    default:
+    case "diorama":
       return 6;
+    case "with_issues":
+      return 7;
+    default:
+      return 8;
   }
 }

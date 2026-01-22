@@ -506,10 +506,30 @@ function CheckoutContent() {
     }
   }, [hasLalamoveOnly, shippingMethod]);
 
-  const lbcFitsNsakto = React.useMemo(
-    () => fitsCapacity(shipCounts, LBC_CAPACITY.N_SAKTO),
+  const lbcFitMap = React.useMemo(
+    () => ({
+      N_SAKTO: fitsCapacity(shipCounts, LBC_CAPACITY.N_SAKTO),
+      MINIBOX: fitsCapacity(shipCounts, LBC_CAPACITY.MINIBOX),
+      SMALL_BOX: fitsCapacity(shipCounts, LBC_CAPACITY.SMALL_BOX),
+    }),
     [shipCounts]
   );
+
+  const lbcAllowedPacks = React.useMemo(() => {
+    const allowed: LbcPackage[] = [];
+    if (lbcFitMap.N_SAKTO) allowed.push("N_SAKTO");
+    if (lbcFitMap.MINIBOX) allowed.push("MINIBOX");
+    if (lbcFitMap.SMALL_BOX) allowed.push("SMALL_BOX");
+    return allowed;
+  }, [lbcFitMap]);
+
+  React.useEffect(() => {
+    if (shippingMethod !== "LBC") return;
+    if (!lbcAllowedPacks.length) return;
+    if (!lbcAllowedPacks.includes(lbcPackageChoice)) {
+      setLbcPackageChoice(lbcAllowedPacks[0]);
+    }
+  }, [shippingMethod, lbcAllowedPacks, lbcPackageChoice]);
 
   const shippingMeta = React.useMemo(() => {
     const counts = shipCounts;
@@ -526,8 +546,8 @@ function CheckoutContent() {
     }
 
     if (shippingMethod === "LBC") {
-      if (lbcFitsNsakto) {
-        const pack = lbcPackageChoice;
+      const pack = lbcPackageChoice;
+      if (lbcFitMap[pack]) {
         return {
           ok: true as const,
           label: `LBC ${pack.replaceAll("_", " ")}`,
@@ -558,7 +578,7 @@ function CheckoutContent() {
     }
 
     return { ok: true as const, label: "Lalamove", fee: 0, pack: null };
-  }, [shipCounts, shippingMethod, region, lbcFitsNsakto, lbcPackageChoice]);
+  }, [shipCounts, shippingMethod, region, lbcFitMap, lbcPackageChoice]);
 
   // ✅ COP => shipping fee is paid at branch, so DO NOT include shipping fee in total
   const fees = React.useMemo(() => {
@@ -1010,7 +1030,7 @@ function CheckoutContent() {
                   />
                 </div>
 
-                {lbcFitsNsakto ? (
+                {lbcAllowedPacks.length ? (
                   <Select
                     label="LBC Package"
                     value={lbcPackageChoice}
@@ -1018,8 +1038,15 @@ function CheckoutContent() {
                       setLbcPackageChoice(e.target.value as LbcPackage)
                     }
                   >
-                    <option value="N_SAKTO">N-Sakto pouch</option>
-                    <option value="MINIBOX">Mini Box</option>
+                    {lbcAllowedPacks.includes("N_SAKTO") ? (
+                      <option value="N_SAKTO">N-Sakto pouch</option>
+                    ) : null}
+                    {lbcAllowedPacks.includes("MINIBOX") ? (
+                      <option value="MINIBOX">Mini Box</option>
+                    ) : null}
+                    {lbcAllowedPacks.includes("SMALL_BOX") ? (
+                      <option value="SMALL_BOX">Small Box</option>
+                    ) : null}
                   </Select>
                 ) : null}
 
