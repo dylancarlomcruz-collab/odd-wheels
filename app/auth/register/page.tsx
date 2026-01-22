@@ -10,7 +10,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { isSupabaseConfigured } from "@/lib/env";
 import { PHONE_MAX_LENGTH, sanitizePhone, validatePhone11 } from "@/lib/phone";
 
-export default function RegisterPage() {
+function RegisterContent() {
   const router = useRouter();
   const sp = useSearchParams();
   const redirectParam = sp.get("redirect");
@@ -188,5 +188,19 @@ export default function RegisterPage() {
         </CardBody>
       </Card>
     </main>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <React.Suspense
+      fallback={
+        <main className="mx-auto max-w-md px-4 py-10 text-white/60">
+          Loading...
+        </main>
+      }
+    >
+      <RegisterContent />
+    </React.Suspense>
   );
 }

@@ -225,12 +225,13 @@ export function useCart() {
         const guestQty = Number(item.qty ?? 0);
         if (!Number.isFinite(guestQty) || guestQty <= 0) continue;
         const available = inventoryMap.get(variantId);
-        if (Number.isFinite(available) && available <= 0) continue;
+        if (typeof available === "number" && available <= 0) continue;
         const existing = existingMap.get(variantId);
         const prevQty = existing?.qty ?? 0;
         const desired = prevQty + guestQty;
-        const nextQty = Number.isFinite(available)
-          ? Math.max(1, Math.min(desired, available))
+        const availableQty = typeof available === "number" ? available : undefined;
+        const nextQty = typeof availableQty === "number"
+          ? Math.max(1, Math.min(desired, availableQty))
           : Math.max(1, desired);
         if (existing?.id) {
           if (nextQty !== prevQty) {

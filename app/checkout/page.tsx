@@ -1294,7 +1294,17 @@ function CheckoutContent() {
 }
 
 export default function CheckoutPage() {
-  return <CheckoutContent />;
+  return (
+    <React.Suspense
+      fallback={
+        <main className="mx-auto max-w-3xl px-4 py-10 text-white/60">
+          Loading...
+        </main>
+      }
+    >
+      <CheckoutContent />
+    </React.Suspense>
+  );
 }
 
 

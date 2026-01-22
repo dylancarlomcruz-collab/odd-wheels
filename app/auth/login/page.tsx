@@ -11,7 +11,7 @@ import { isSupabaseConfigured } from "@/lib/env";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { REMEMBER_ME_KEY, SUPABASE_AUTH_STORAGE_KEY } from "@/lib/supabase/browser";
 
-export default function LoginPage() {
+function LoginContent() {
   const router = useRouter();
   const sp = useSearchParams();
   const redirectParam = sp.get("redirect");
@@ -117,5 +117,19 @@ export default function LoginPage() {
         </CardBody>
       </Card>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <React.Suspense
+      fallback={
+        <main className="mx-auto max-w-md px-4 py-10 text-white/60">
+          Loading...
+        </main>
+      }
+    >
+      <LoginContent />
+    </React.Suspense>
   );
 }
