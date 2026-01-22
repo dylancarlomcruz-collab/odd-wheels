@@ -53,6 +53,12 @@ type SearchSuggestion = {
   source: "recent" | "popular";
 };
 
+const SHOP_SORT_OPTIONS: Array<{ value: "relevance" | "newest" | "popular"; label: string }> = [
+  { value: "relevance", label: "Relevance" },
+  { value: "newest", label: "Newest" },
+  { value: "popular", label: "Most Popular" },
+];
+
 export function SiteHeader() {
   const { user } = useAuth();
   const { profile } = useProfile();
@@ -387,7 +393,7 @@ export function SiteHeader() {
         ref={headerRef}
         className="sticky top-0 z-40 border-b border-white/10 bg-bg-900/80 backdrop-blur"
       >
-        <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-3 sm:gap-3">
+        <div className="mx-auto flex max-w-6xl items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4 sm:py-3">
         <Link href="/" className="flex items-center gap-2">
           <div className="h-9 w-9 rounded-xl bg-bg-800 border border-white/10 grid place-items-center overflow-hidden shadow-soft">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -423,12 +429,13 @@ export function SiteHeader() {
                   onChange={(e) => setQ(e.target.value)}
                   onFocus={() => setActiveSearch("desktop")}
                   onKeyDown={(e) => onSearchKeyDown(e, suggestions)}
+                  className="h-9 px-3 text-sm sm:h-10 sm:px-4 sm:text-base"
                 />
               </div>
               <button
                 type="submit"
                 aria-label="Search"
-                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-bg-950/40 text-white/80 hover:bg-bg-950/60"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-bg-950/40 text-white/80 hover:bg-bg-950/60 sm:h-10 sm:w-10"
               >
                 <Search className="h-4 w-4" />
               </button>
@@ -585,7 +592,7 @@ export function SiteHeader() {
         </div>
       </div>
 
-      <div className="md:hidden border-t border-white/10 px-4 py-3">
+      <div className="md:hidden border-t border-white/10 px-3 py-2 sm:px-4 sm:py-3">
         <div
           ref={(node) => {
             searchRefs.current.mobile = node;
@@ -600,12 +607,13 @@ export function SiteHeader() {
                 onChange={(e) => setQ(e.target.value)}
                 onFocus={() => setActiveSearch("mobile")}
                 onKeyDown={(e) => onSearchKeyDown(e, suggestions)}
+                className="h-9 px-3 text-sm sm:h-10 sm:px-4 sm:text-base"
               />
             </div>
             <button
               type="submit"
               aria-label="Search"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-bg-950/40 text-white/80 hover:bg-bg-950/60"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-bg-950/40 text-white/80 hover:bg-bg-950/60 sm:h-10 sm:w-10"
             >
               <Search className="h-4 w-4" />
             </button>
@@ -706,14 +714,10 @@ export function SiteHeader() {
       </div>
       {showShopSort ? (
         <div className="border-t border-white/10 bg-bg-900/90">
-          <div className="mx-auto max-w-6xl px-4 py-2">
+          <div className="mx-auto max-w-6xl px-3 py-2 sm:px-4">
             <div className="w-full">
               <div className="grid grid-cols-4 gap-1 sm:gap-2">
-                {[
-                  { value: "relevance", label: "Relevance" },
-                  { value: "newest", label: "Newest" },
-                  { value: "popular", label: "Most Popular" },
-                ].map((option) => {
+                {SHOP_SORT_OPTIONS.map((option) => {
                   const active = option.value === sortBy;
                   return (
                     <button

@@ -823,7 +823,7 @@ export default function ShopPageClient() {
 
   return (
     <>
-      <main className="px-3 py-5 sm:px-4 sm:py-6">
+      <main className="px-2 py-4 sm:px-4 sm:py-6">
       {loading ? <div className="text-white/60">Loading...</div> : null}
       {err ? <div className="text-red-300">{err}</div> : null}
 
@@ -863,8 +863,8 @@ export default function ShopPageClient() {
           className="sticky z-30"
           style={{ top: "var(--shop-header-height, 0px)" }}
         >
-          <div className="relative -mx-3 border-y border-white/10 bg-bg-900/80 backdrop-blur sm:-mx-4">
-            <div className="mx-auto flex max-w-6xl items-center px-4 py-2">
+          <div className="relative -mx-2 border-y border-white/10 bg-bg-900/80 backdrop-blur sm:-mx-4">
+            <div className="mx-auto flex max-w-6xl items-center px-2 py-2 sm:px-4">
               <div ref={brandRowRef} className="flex w-full items-center overflow-hidden">
                 <div className="inline-flex flex-nowrap items-center">
                   {visibleBrandTabs.map((b) => (
@@ -919,7 +919,7 @@ export default function ShopPageClient() {
             </div>
           </div>
           {showAllBrands ? (
-            <div className="-mx-3 border-b border-white/10 bg-bg-900/90 px-0 pb-3 pt-2 sm:-mx-4 sm:px-4">
+            <div className="-mx-2 border-b border-white/10 bg-bg-900/90 px-0 pb-3 pt-2 sm:-mx-4 sm:px-4">
               <div className="mx-auto max-w-6xl">
                 <div className="flex max-h-44 flex-wrap gap-2 overflow-y-auto">
                   {allBrandTabs.map((b) => (
@@ -945,7 +945,7 @@ export default function ShopPageClient() {
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
         {mainSection ? (
           <>
             <div className="col-span-full flex flex-col gap-2 pt-2 sm:flex-row sm:items-center sm:justify-between">

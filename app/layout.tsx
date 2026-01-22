@@ -1,5 +1,5 @@
 import "./globals.css";
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import Link from "next/link";
 import { AuthProvider } from "@/components/auth/AuthProvider";
@@ -19,6 +19,11 @@ export const metadata: Metadata = {
     shortcut: "/odd-wheels-logo.png",
     apple: "/odd-wheels-logo.png",
   },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({
