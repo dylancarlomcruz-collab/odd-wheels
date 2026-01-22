@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { ChevronDown, ChevronLeft, X } from "lucide-react";
 import { recordRecentView } from "@/lib/recentViews";
 import { normalizeSearchTerm } from "@/lib/search";
+import { formatConditionLabel } from "@/lib/conditions";
 
 type ConditionOption = {
   id: string; // this is the PRODUCT ROW ID for that condition
@@ -158,7 +159,9 @@ export default function ProductCard({
     (selected?.qty ?? 0) > 0 && (selected?.qty ?? 0) <= 3
       ? `${selected?.qty ?? 0} left`
       : null;
-  const conditionLabel = selected?.condition ?? "-";
+  const conditionLabel = formatConditionLabel(selected?.condition ?? "-", {
+    upper: true,
+  });
   const proofBits = [
     socialProof?.inCarts ? `${socialProof.inCarts} in carts` : null,
     socialProof?.soldThisWeek
@@ -169,6 +172,7 @@ export default function ProductCard({
       ? `Viewed ${socialProof.lastViewedMinutes}m ago`
       : null,
   ].filter(Boolean);
+  const primaryProof = proofBits[0];
 
   const relatedItems = React.useMemo(() => {
     if (!isOpen || !relatedPool?.length) return [];
@@ -383,14 +387,10 @@ export default function ProductCard({
           <button
             type="button"
             onClick={openPreview}
-            className="text-left text-sm sm:text-base text-white font-semibold line-clamp-2"
+            className="min-h-[2.6rem] text-left text-sm sm:min-h-[3rem] sm:text-base text-white font-semibold line-clamp-2"
           >
             {product.title}
           </button>
-          <div className="text-white/60 text-[11px] sm:text-xs mt-1 line-clamp-1">
-            {product.brand ?? "-"}
-            {product.model ? ` - ${product.model}` : ""}
-          </div>
 
           <div className="mt-2 sm:mt-3 flex items-center justify-between">
             <div className="text-price text-sm sm:text-base">
@@ -401,32 +401,25 @@ export default function ProductCard({
             </div>
           </div>
 
-          {onlyOneLeft ? (
-            <div className="mt-2">
-              <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700 dark:border-rose-400/40 dark:bg-rose-500/20 dark:text-rose-200">
-                Only 1 left
-              </span>
-            </div>
-          ) : null}
-
-          {lowStock && !onlyOneLeft ? (
-            <div className="mt-2 text-[11px] sm:text-xs font-semibold text-amber-700 dark:text-amber-200/90">
-              Almost sold out.
-            </div>
-          ) : null}
-
-          {proofBits.length ? (
-            <div className="mt-2 flex flex-wrap gap-2 text-[11px] sm:text-xs text-white/60">
-              {proofBits.map((label) => (
-                <span
-                  key={label}
-                  className="rounded-full border border-white/10 bg-bg-900/60 px-2 py-0.5"
-                >
-                  {label}
+          <div className="mt-2 sm:mt-3">
+            <div className="min-h-[1.2rem]">
+              {onlyOneLeft ? (
+                <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700 dark:border-rose-400/40 dark:bg-rose-500/20 dark:text-rose-200">
+                  Only 1 left
                 </span>
-              ))}
+              ) : lowStock ? (
+                <div className="text-[11px] sm:text-xs font-semibold text-amber-700 dark:text-amber-200/90">
+                  Almost sold out.
+                </div>
+              ) : primaryProof ? (
+                <span className="inline-flex items-center rounded-full border border-white/10 bg-bg-900/60 px-2 py-0.5 text-[11px] sm:text-xs text-white/60">
+                  {primaryProof}
+                </span>
+              ) : (
+                <span className="invisible text-[11px] sm:text-xs">placeholder</span>
+              )}
             </div>
-          ) : null}
+          </div>
 
           <div className="mt-2 sm:mt-3 space-y-2">
             <div className="flex flex-wrap gap-2">
@@ -447,7 +440,7 @@ export default function ProductCard({
                         : "border-white/20 bg-bg-900/60 text-white/80 hover:bg-bg-900/80 dark:border-white/10 dark:bg-paper/5 dark:text-white/70 dark:hover:bg-paper/10",
                     ].join(" ")}
                   >
-                    {o.condition}
+                    {formatConditionLabel(o.condition, { upper: true })}
                   </button>
                 );
               })}
@@ -516,14 +509,8 @@ export default function ProductCard({
                           <div className="text-xs text-white/50">
                             Item preview
                           </div>
-                          <div className="text-base font-semibold leading-snug line-clamp-2 sm:text-lg">
+                          <div className="text-base font-semibold leading-snug line-clamp-3 sm:line-clamp-2 sm:text-lg">
                             {previewProduct.title}
-                          </div>
-                          <div className="text-xs text-white/60 sm:text-sm">
-                            {previewProduct.brand ?? "-"}
-                            {previewProduct.model
-                              ? ` - ${previewProduct.model}`
-                              : ""}
                           </div>
                         </div>
                       </div>
