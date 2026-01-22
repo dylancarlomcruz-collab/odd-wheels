@@ -8,6 +8,7 @@ import { normalizeSearchTerm } from "@/lib/search";
 import { formatConditionLabel } from "@/lib/conditions";
 import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
 import { getOptionPricing, getProductEffectiveRange } from "@/lib/pricing";
+import { formatTitle } from "@/lib/text";
 
 type ConditionOption = {
   id: string; // this is the PRODUCT ROW ID for that condition
@@ -573,7 +574,7 @@ export default function ProductCard({
                         ) : null}
                         <div className="min-w-0">
                           <div className="text-xs text-white/50">
-                            Item preview
+                            {formatTitle("Item preview")}
                           </div>
                           <div className="text-base font-semibold leading-snug line-clamp-3 sm:line-clamp-2 sm:text-lg">
                             {previewProduct.title}
@@ -607,14 +608,16 @@ export default function ProductCard({
                         }
                       >
                         {activeImage ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={activeImage}
-                            alt=""
-                            className="h-72 w-full object-contain bg-neutral-50"
-                          />
+                          <div className="aspect-[4/3] w-full bg-neutral-50">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={activeImage}
+                              alt=""
+                              className="h-full w-full object-contain"
+                            />
+                          </div>
                         ) : (
-                          <div className="flex h-72 items-center justify-center text-sm text-white/50">
+                          <div className="flex aspect-[4/3] w-full items-center justify-center text-sm text-white/50">
                             No image available.
                           </div>
                         )}

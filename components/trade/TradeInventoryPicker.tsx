@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { BrandTabs } from "@/components/BrandTabs";
 import { formatPHP } from "@/lib/money";
 import { conditionSortOrder, formatConditionLabel } from "@/lib/conditions";
+import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
 
 export type TradePick = {
   product_id: string;
@@ -90,6 +91,13 @@ function buildVariantQtyMap(rows: TradeProduct[]) {
   return map;
 }
 
+function pickPrimaryImage(urls: string[] | null) {
+  const list = Array.isArray(urls) ? urls.filter(Boolean) : [];
+  if (!list.length) return null;
+  const cropped = list.find((url) => url.includes("#crop="));
+  return cropped ?? list[0] ?? null;
+}
+
 function conditionLabel(value: TradeVariant["condition"]) {
   return formatConditionLabel(value);
 }
@@ -156,15 +164,23 @@ function TradeProductCard({
   const selectedPrice = selected ? formatPHP(Number(selected.price ?? 0)) : priceLabel;
   const pick = picks.find((p) => p.variant_id === selected?.id);
 
-  const image = product.image_urls?.[0] ?? null;
+  const image = pickPrimaryImage(product.image_urls);
   const canAdd = Boolean(selected) && selectedQty > 0;
+  const parsedImage = image ? parseImageCrop(image) : null;
 
     return (
       <div className="rounded-xl sm:rounded-2xl overflow-hidden bg-paper/5 border border-white/10 text-left shadow-sm hover:border-accent-500/40 hover:shadow-accent-500/10 transition">
-        <div className="aspect-[4/3] bg-black/10 flex items-center justify-center">
-          {image ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={image} alt={product.title} className="h-full w-full object-contain bg-neutral-50" />
+        <div className="relative aspect-[4/3] w-full overflow-hidden bg-black/10 flex items-center justify-center">
+          {parsedImage ? (
+            <div className="h-full w-full bg-neutral-50">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={parsedImage.src}
+                alt={product.title}
+                className="h-full w-full object-contain"
+                style={cropStyle(parsedImage.crop)}
+              />
+            </div>
           ) : (
             <div className="text-white/60 text-sm">No image</div>
           )}
@@ -178,13 +194,7 @@ function TradeProductCard({
           <div className="text-sm sm:text-base text-white font-semibold line-clamp-2">
             {product.title}
           </div>
-          <div className="text-white/60 text-[11px] sm:text-xs line-clamp-1">
-            {product.brand ?? "Unknown"}
-            {product.model ? ` - ${product.model}` : ""}
-            {product.variation ? ` - ${product.variation}` : ""}
-          </div>
-
-          <div className="flex items-center justify-between pt-2">
+          <div className="flex items-center justify-between pt-1.5">
             <div className="text-price text-sm sm:text-base">{selectedPrice}</div>
             <div className="text-[11px] sm:text-xs text-white/60">{selectedQty} in stock</div>
           </div>
@@ -298,8 +308,18 @@ function PicksPanel({
               >
                 <div className="h-12 w-12 rounded-lg border border-white/10 bg-bg-800 overflow-hidden">
                   {p.snapshot_image_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={p.snapshot_image_url} alt={p.snapshot_title} className="h-full w-full object-cover" />
+                    (() => {
+                      const parsedThumb = parseImageCrop(p.snapshot_image_url);
+                      return (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={parsedThumb.src}
+                          alt={p.snapshot_title}
+                          className="h-full w-full object-contain"
+                          style={cropStyle(parsedThumb.crop)}
+                        />
+                      );
+                    })()
                   ) : null}
                 </div>
                 <div className="min-w-0 flex-1">
@@ -384,6 +404,7 @@ export function TradeInventoryPicker({
   const [searchInput, setSearchInput] = React.useState("");
   const [searchTerm, setSearchTerm] = React.useState("");
   const [brandTab, setBrandTab] = React.useState("all");
+  const picksPanelRef = React.useRef<HTMLDivElement | null>(null);
 
   const filtersKey = `${searchTerm}|${brandTab}`;
 
@@ -397,6 +418,18 @@ export function TradeInventoryPicker({
   }, [rows]);
 
   const variantQtyMap = React.useMemo(() => buildVariantQtyMap(rows), [rows]);
+  const pickSummary = React.useMemo(() => {
+    const totalCount = picks.reduce((sum, p) => sum + p.qty, 0);
+    const totalValue = picks.reduce(
+      (sum, p) => sum + p.qty * Number(p.snapshot_price ?? 0),
+      0
+    );
+    const thumbs = picks
+      .map((p) => p.snapshot_image_url)
+      .filter(Boolean)
+      .slice(0, 4) as string[];
+    return { totalCount, totalValue, thumbs };
+  }, [picks]);
 
   const loadPage = React.useCallback(
     async (pageIndex: number, replace = false) => {
@@ -490,39 +523,109 @@ export function TradeInventoryPicker({
         <BrandTabs value={brandTab} onChange={setBrandTab} />
       </div>
 
-      {error ? <div className="text-red-300">{error}</div> : null}
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
-        {filteredRows.map((p) => (
-          <TradeProductCard
-            key={p.id}
-            product={p}
-            picks={picks}
-            onAdd={handleAdd}
-          />
-        ))}
-      </div>
-
-      {loading ? <div className="text-white/60">Loading...</div> : null}
-
-      {!loading && !filteredRows.length ? (
-        <div className="text-white/60">No products match your filters.</div>
-      ) : null}
-
-      {hasMore && !loading ? (
-        <div className="flex justify-center">
-          <Button variant="secondary" onClick={() => loadPage(page + 1)}>
-            Load more
-          </Button>
+      {picks.length > 0 ? (
+        <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-white/70 lg:hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="flex -space-x-2">
+                {pickSummary.thumbs.map((src, index) => (
+                  (() => {
+                    const parsedThumb = parseImageCrop(src);
+                    return (
+                      <div
+                        key={`${src}-${index}`}
+                        className="h-7 w-7 overflow-hidden rounded-full border border-white/10 bg-bg-900"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={parsedThumb.src}
+                          alt=""
+                          className="h-full w-full object-contain"
+                          style={cropStyle(parsedThumb.crop)}
+                        />
+                      </div>
+                    );
+                  })()
+                ))}
+                {picks.length > pickSummary.thumbs.length ? (
+                  <div className="h-7 w-7 rounded-full border border-white/10 bg-bg-900/80 text-[10px] font-semibold text-white/70 flex items-center justify-center">
+                    +{picks.length - pickSummary.thumbs.length}
+                  </div>
+                ) : null}
+              </div>
+              <div className="min-w-0">
+                <div className="font-semibold text-amber-100">
+                  Trade picks
+                </div>
+                <div className="text-[11px] text-white/60">
+                  {pickSummary.totalCount} items | {formatPHP(pickSummary.totalValue)}
+                </div>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() =>
+                picksPanelRef.current?.scrollIntoView({
+                  behavior: "smooth",
+                  block: "start",
+                })
+              }
+            >
+              View list
+            </Button>
+          </div>
         </div>
       ) : null}
 
-      <PicksPanel
-        picks={picks}
-        variantQtyMap={variantQtyMap}
-        onChange={onChange}
-        onContinue={onContinue}
-      />
+      {error ? <div className="text-red-300">{error}</div> : null}
+
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
+            {filteredRows.map((p) => (
+              <TradeProductCard
+                key={p.id}
+                product={p}
+                picks={picks}
+                onAdd={handleAdd}
+              />
+            ))}
+          </div>
+
+          {loading ? <div className="text-white/60">Loading...</div> : null}
+
+          {!loading && !filteredRows.length ? (
+            <div className="text-white/60">No products match your filters.</div>
+          ) : null}
+
+          {hasMore && !loading ? (
+            <div className="flex justify-center">
+              <Button variant="secondary" onClick={() => loadPage(page + 1)}>
+                Load more
+              </Button>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="hidden lg:block lg:sticky lg:top-24 lg:self-start">
+          <PicksPanel
+            picks={picks}
+            variantQtyMap={variantQtyMap}
+            onChange={onChange}
+            onContinue={onContinue}
+          />
+        </div>
+      </div>
+
+      <div ref={picksPanelRef} className="lg:hidden">
+        <PicksPanel
+          picks={picks}
+          variantQtyMap={variantQtyMap}
+          onChange={onChange}
+          onContinue={onContinue}
+        />
+      </div>
     </div>
   );
 }

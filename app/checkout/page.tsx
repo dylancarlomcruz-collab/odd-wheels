@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/Textarea";
 import { Select } from "@/components/ui/Select";
 import { FeeBreakdown, type FeeLine } from "@/components/checkout/FeeBreakdown";
 import Link from "next/link";
+import { createPortal } from "react-dom";
 import {
   LalamoveTimeSlotPicker,
   LALAMOVE_WINDOWS,
@@ -140,6 +141,60 @@ function buildLalamoveSelectionFromSlot(
   return null;
 }
 
+type CheckoutAuthModalProps = {
+  open: boolean;
+  checkoutRedirect: string;
+};
+
+function CheckoutAuthModal({
+  open,
+  checkoutRedirect,
+}: CheckoutAuthModalProps) {
+  React.useEffect(() => {
+    if (!open || typeof document === "undefined") return undefined;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [open]);
+
+  if (!open || typeof document === "undefined") return null;
+
+  const content = (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 p-4">
+      <div className="w-full max-w-md">
+        <Card className="border border-white/10 bg-bg-900/95 shadow-soft">
+          <CardHeader className="space-y-1">
+            <div className="text-xl font-semibold">Checkout</div>
+            <div className="text-sm text-white/60">
+              Login or create an account to complete checkout.
+            </div>
+          </CardHeader>
+          <CardFooter className="flex flex-wrap gap-2">
+            <Link
+              href={`/auth/login?redirect=${encodeURIComponent(
+                checkoutRedirect
+              )}`}
+            >
+              <Button>Login</Button>
+            </Link>
+            <Link
+              href={`/auth/register?redirect=${encodeURIComponent(
+                checkoutRedirect
+              )}`}
+            >
+              <Button variant="secondary">Create account</Button>
+            </Link>
+          </CardFooter>
+        </Card>
+      </div>
+    </div>
+  );
+
+  return createPortal(content, document.body);
+}
+
 function resolveLalamoveSelections(
   sd: ShippingDefaults
 ): LalamoveSelection[] {
@@ -219,29 +274,14 @@ function CheckoutContent() {
 
   if (!user) {
     return (
-      <main className="mx-auto max-w-3xl px-4 py-10 space-y-6">
-        <div className="rounded-2xl border border-white/10 bg-bg-900/60 p-6 shadow-soft">
-          <div className="text-2xl font-semibold">Checkout</div>
-          <div className="mt-1 text-sm text-white/60">
-            Login / Create account to checkout.
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Link
-              href={`/auth/login?redirect=${encodeURIComponent(
-                checkoutRedirect
-              )}`}
-            >
-              <Button>Login</Button>
-            </Link>
-            <Link
-              href={`/auth/register?redirect=${encodeURIComponent(
-                checkoutRedirect
-              )}`}
-            >
-              <Button variant="secondary">Create account</Button>
-            </Link>
+      <main className="mx-auto max-w-6xl px-4 py-8">
+        <div className="space-y-2 text-white/50">
+          <div className="text-2xl font-semibold text-white">Checkout</div>
+          <div className="text-sm">
+            Log in or create an account to continue.
           </div>
         </div>
+        <CheckoutAuthModal open checkoutRedirect={checkoutRedirect} />
       </main>
     );
   }

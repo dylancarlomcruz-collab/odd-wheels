@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Select } from "@/components/ui/Select";
 import { Badge } from "@/components/ui/Badge";
+import { formatTitle } from "@/lib/text";
 import {
   TradeInventoryPicker,
   type TradePick,
@@ -340,7 +341,9 @@ export default function SellTradePage() {
       {mode === "SELL" ? (
         <Card>
           <CardHeader>
-            <div className="text-lg font-semibold">Selling policy</div>
+            <div className="text-lg font-semibold">
+              {formatTitle("Selling policy")}
+            </div>
             <div className="text-sm text-white/60">How we arrive at offers.</div>
           </CardHeader>
           <CardBody className="space-y-3 text-sm text-white/70">
@@ -355,7 +358,9 @@ export default function SellTradePage() {
       ) : (
         <Card>
           <CardHeader>
-            <div className="text-lg font-semibold">Trade policy</div>
+            <div className="text-lg font-semibold">
+              {formatTitle("Trade policy")}
+            </div>
             <div className="text-sm text-white/60">Set expectations for trades.</div>
           </CardHeader>
           <CardBody className="space-y-3 text-sm text-white/70">
@@ -377,7 +382,9 @@ export default function SellTradePage() {
       <Card>
         <CardHeader className="flex items-center justify-between">
           <div>
-            <div className="text-lg font-semibold">Items + Photos</div>
+            <div className="text-lg font-semibold">
+              {formatTitle("Items + Photos")}
+            </div>
             <div className="text-sm text-white/60">
               List brands and condition. You can group multiple items in one entry.
             </div>
@@ -391,7 +398,9 @@ export default function SellTradePage() {
               className="rounded-2xl border border-white/10 bg-paper/5 p-4 space-y-3"
             >
               <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold">Item {idx + 1}</div>
+                <div className="text-sm font-semibold">
+                  {formatTitle(`Item ${idx + 1}`)}
+                </div>
                 {items.length > 1 ? (
                   <Button variant="ghost" size="sm" onClick={() => removeItem(item.id)}>
                     Remove
@@ -448,14 +457,18 @@ export default function SellTradePage() {
 
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-4">
             <div>
-              <div className="text-sm font-semibold">Photos (items + issues)</div>
+              <div className="text-sm font-semibold">
+                {formatTitle("Photos (items + issues)")}
+              </div>
               <div className="text-xs text-white/50">
                 You can upload one group photo. Add issue close-ups if any.
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <div className="text-sm font-semibold">Item photos</div>
+                <div className="text-sm font-semibold">
+                  {formatTitle("Item photos")}
+                </div>
                 <input
                   type="file"
                   accept="image/*"

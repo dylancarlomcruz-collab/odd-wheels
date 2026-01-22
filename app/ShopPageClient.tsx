@@ -17,6 +17,7 @@ import { useShopSort } from "@/hooks/useShopSort";
 
 const BRAND_ALL_KEY = "__all__";
 const MAX_PRIMARY_BRAND_TABS = 9;
+const BRAND_COLUMN_DEFAULT = 5;
 const LIMITED_SECTION_COUNTS: Record<string, number> = {
   trending: 4,
   "for-you": 4,
@@ -39,9 +40,9 @@ const PREFERRED_BRAND_KEYS: Array<{ label: string; keys: string[] }> = [
 ];
 const BRAND_BUTTON_STYLES = {
   active:
-    "bg-bg-950/70 text-white border-white/30 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]",
+    "bg-sky-500/20 text-sky-100 border-sky-400/50 shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]",
   idle:
-    "bg-bg-950/40 text-white/80 border-white/10 hover:bg-bg-950/60 hover:text-white",
+    "bg-bg-950/40 text-white/70 border-white/10 hover:bg-sky-500/10 hover:text-sky-100",
 };
 
 function normalizeBrandKey(value: string | null | undefined) {
@@ -53,16 +54,20 @@ function normalizeBrandKey(value: string | null | undefined) {
 function getBrandButtonClasses(active: boolean, joined: boolean) {
   const toneClasses = active ? BRAND_BUTTON_STYLES.active : BRAND_BUTTON_STYLES.idle;
   return [
-    "inline-flex h-8 items-center justify-center whitespace-nowrap border px-3 text-xs font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 sm:h-9 sm:px-4 sm:text-sm",
-    joined ? "rounded-none -ml-px first:ml-0" : "rounded-none",
+    "inline-flex h-7 min-w-0 items-center justify-center truncate border px-1.5 text-[9px] font-semibold leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 sm:h-8 sm:px-2 sm:text-[10px]",
+    joined
+      ? "rounded-none -ml-px first:ml-0 first:rounded-l-lg last:rounded-r-lg"
+      : "rounded-lg",
     toneClasses,
   ].join(" ");
 }
 
 function getMoreButtonClasses(joined: boolean) {
   return [
-    "inline-flex h-8 items-center justify-center whitespace-nowrap border border-white/10 bg-bg-950/40 px-3 text-xs font-medium leading-none text-white/80 transition hover:bg-bg-950/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 sm:h-9 sm:px-4 sm:text-sm",
-    joined ? "rounded-none -ml-px first:ml-0" : "rounded-none",
+    "inline-flex h-7 min-w-0 items-center justify-center truncate border border-white/10 bg-bg-950/40 px-1.5 text-[9px] font-semibold leading-none text-white/80 transition hover:bg-bg-950/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 sm:h-8 sm:px-2 sm:text-[10px]",
+    joined
+      ? "rounded-none -ml-px first:ml-0 first:rounded-l-lg last:rounded-r-lg"
+      : "rounded-lg",
   ].join(" ");
 }
 
@@ -101,7 +106,7 @@ export default function ShopPageClient() {
     React.useState<AdminProduct | null>(null);
   const [brandTab, setBrandTab] = React.useState<string>(BRAND_ALL_KEY);
   const [showAllBrands, setShowAllBrands] = React.useState(false);
-  const [visibleBrandCount, setVisibleBrandCount] = React.useState(0);
+  const [brandColumns, setBrandColumns] = React.useState(BRAND_COLUMN_DEFAULT);
   const [expandedSections, setExpandedSections] = React.useState<
     Record<string, boolean>
   >({});
@@ -118,8 +123,6 @@ export default function ShopPageClient() {
   const [showBackToTop, setShowBackToTop] = React.useState(false);
   const { sortBy, priceDir } = useShopSort();
   const resultsRef = React.useRef<HTMLDivElement | null>(null);
-  const brandRowRef = React.useRef<HTMLDivElement | null>(null);
-  const brandMeasureRef = React.useRef<HTMLDivElement | null>(null);
   const lastScrolledQuery = React.useRef<string>("");
   const lastRecentRefresh = React.useRef<number>(0);
 
@@ -272,6 +275,21 @@ export default function ShopPageClient() {
   }, []);
 
   React.useEffect(() => {
+    const computeColumns = () => {
+      const width = window.innerWidth;
+      let next = BRAND_COLUMN_DEFAULT;
+      if (width >= 1100) next = 8;
+      else if (width >= 900) next = 7;
+      else if (width >= 680) next = 6;
+      else next = 5;
+      setBrandColumns((prev) => (prev === next ? prev : next));
+    };
+    computeColumns();
+    window.addEventListener("resize", computeColumns, { passive: true });
+    return () => window.removeEventListener("resize", computeColumns);
+  }, []);
+
+  React.useEffect(() => {
     if (!searchQuery || loading) {
       lastScrolledQuery.current = "";
       return;
@@ -367,77 +385,20 @@ export default function ShopPageClient() {
     return [{ key: BRAND_ALL_KEY, label: "All" }, ...list];
   }, [brandStats]);
 
-  const resolvedVisibleCount = visibleBrandCount || brandTabs.length;
+  const maxVisibleBrands = React.useMemo(() => {
+    const reserveMore = allBrandTabs.length > brandColumns;
+    return Math.max(1, brandColumns - (reserveMore ? 1 : 0));
+  }, [allBrandTabs.length, brandColumns]);
   const visibleBrandTabs = React.useMemo(
-    () => brandTabs.slice(0, Math.max(1, resolvedVisibleCount)),
-    [brandTabs, resolvedVisibleCount]
+    () =>
+      brandTabs.slice(
+        0,
+        Math.max(1, Math.min(brandTabs.length, maxVisibleBrands))
+      ),
+    [brandTabs, maxVisibleBrands]
   );
   const canExpandBrands = allBrandTabs.length > visibleBrandTabs.length;
   const moreLabel = showAllBrands ? "Show less" : "Show more";
-
-  React.useLayoutEffect(() => {
-    if (!brandRowRef.current || !brandMeasureRef.current) return;
-    let frame = 0;
-    const row = brandRowRef.current;
-    const measure = brandMeasureRef.current;
-
-    const compute = () => {
-      frame = 0;
-      const rowWidth = row.getBoundingClientRect().width;
-      if (!rowWidth) return;
-      const widths = new Map<string, number>();
-      const buttons = Array.from(
-        measure.querySelectorAll<HTMLButtonElement>("[data-brand-tab]")
-      );
-      for (const button of buttons) {
-        const key = button.dataset.brandTab ?? "";
-        widths.set(key, button.getBoundingClientRect().width);
-      }
-      const moreWidth = widths.get("__more__") ?? 0;
-
-      const computeCount = (reserveMore: boolean) => {
-        let used = 0;
-        let count = 0;
-        for (const tab of brandTabs) {
-          const width = widths.get(tab.key) ?? 0;
-          const reserve = reserveMore ? moreWidth : 0;
-          if (used + width + reserve <= rowWidth || count === 0) {
-            used += width;
-            count += 1;
-          } else {
-            break;
-          }
-        }
-        return count;
-      };
-
-      const reserveMoreInitial = allBrandTabs.length > brandTabs.length;
-      let count = computeCount(reserveMoreInitial);
-      if (count < brandTabs.length) {
-        count = computeCount(true);
-      }
-
-      setVisibleBrandCount((prev) => {
-        const next = Math.max(1, count);
-        return prev === next ? prev : next;
-      });
-    };
-
-    const observer = new ResizeObserver(() => {
-      if (frame) window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(compute);
-    });
-    observer.observe(row);
-    compute();
-    return () => {
-      if (frame) window.cancelAnimationFrame(frame);
-      observer.disconnect();
-    };
-  }, [
-    brandTabs,
-    allBrandTabs.length,
-    showAllBrands,
-  ]);
 
   const sortedProducts = React.useMemo(() => {
     const withIndex = shopProducts.map((p, index) => {
@@ -863,10 +824,21 @@ export default function ShopPageClient() {
           className="sticky z-30"
           style={{ top: "var(--shop-header-height, 0px)" }}
         >
-          <div className="relative -mx-2 border-y border-white/10 bg-bg-900/80 backdrop-blur sm:-mx-4">
+          <div className="relative -mx-2 overflow-hidden border-y border-sky-500/20 bg-bg-950/80 backdrop-blur sm:-mx-4">
             <div className="mx-auto flex max-w-6xl items-center px-2 py-2 sm:px-4">
-              <div ref={brandRowRef} className="flex w-full items-center overflow-hidden">
-                <div className="inline-flex flex-nowrap items-center">
+              <div className="w-full">
+                <div
+                  className={[
+                    "grid w-full gap-1 sm:gap-2",
+                    brandColumns >= 8
+                      ? "grid-cols-8"
+                      : brandColumns === 7
+                      ? "grid-cols-7"
+                      : brandColumns === 6
+                      ? "grid-cols-6"
+                      : "grid-cols-5",
+                  ].join(" ")}
+                >
                   {visibleBrandTabs.map((b) => (
                     <button
                       key={b.key}
@@ -874,7 +846,7 @@ export default function ShopPageClient() {
                       onClick={() => setBrandTab(b.key)}
                       className={getBrandButtonClasses(
                         b.key === brandTab,
-                        true
+                        false
                       )}
                     >
                       {b.label}
@@ -884,37 +856,12 @@ export default function ShopPageClient() {
                     <button
                       type="button"
                       onClick={() => setShowAllBrands((prev) => !prev)}
-                      className={getMoreButtonClasses(true)}
+                      className={getMoreButtonClasses(false)}
                     >
                       {moreLabel}
                     </button>
                   ) : null}
                 </div>
-              </div>
-            </div>
-            <div
-              ref={brandMeasureRef}
-              className="pointer-events-none absolute left-0 top-0 -z-10 opacity-0"
-              aria-hidden="true"
-            >
-              <div className="inline-flex flex-nowrap items-center">
-                {brandTabs.map((b) => (
-                  <button
-                    key={`measure-${b.key}`}
-                    type="button"
-                    data-brand-tab={b.key}
-                    className={getBrandButtonClasses(false, true)}
-                  >
-                    {b.label}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  data-brand-tab="__more__"
-                  className={getMoreButtonClasses(true)}
-                >
-                  {moreLabel}
-                </button>
               </div>
             </div>
           </div>

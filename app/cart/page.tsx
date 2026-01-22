@@ -16,6 +16,7 @@ import { formatConditionLabel } from "@/lib/conditions";
 import { useSettings } from "@/hooks/useSettings";
 import { toast } from "@/components/ui/toast";
 import { resolveEffectivePrice } from "@/lib/pricing";
+import { formatTitle } from "@/lib/text";
 
 function CartContent() {
   const { lines, loading, updateQty, remove, add } = useCart();
@@ -552,7 +553,9 @@ function CartContent() {
               >
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-xs text-white/50">Item preview</div>
+                    <div className="text-xs text-white/50">
+                      {formatTitle("Item preview")}
+                    </div>
                     <div className="text-lg font-semibold">
                       {previewLine.variant.product.title}
                     </div>
