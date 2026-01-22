@@ -3,7 +3,6 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
-import { RequireAuth } from "@/components/auth/RequireAuth";
 import { useCart, type CartLine } from "@/hooks/useCart";
 import ProductCard, { type ShopProduct } from "@/components/ProductCard";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
@@ -16,6 +15,7 @@ import { recommendSimilar } from "@/lib/recommendations";
 import { formatConditionLabel } from "@/lib/conditions";
 import { useSettings } from "@/hooks/useSettings";
 import { toast } from "@/components/ui/toast";
+import { resolveEffectivePrice } from "@/lib/pricing";
 
 function CartContent() {
   const { lines, loading, updateQty, remove, add } = useCart();
@@ -48,8 +48,17 @@ function CartContent() {
     };
     return selectedLines.some((line) => !isSealed(line.variant.condition));
   }, [selectedLines]);
+  const lineUnitPrice = React.useCallback(
+    (line: CartLine) =>
+      resolveEffectivePrice({
+        price: Number(line.variant.price),
+        sale_price: line.variant.sale_price ?? null,
+        discount_percent: line.variant.discount_percent ?? null,
+      }).effectivePrice,
+    []
+  );
   const selectedSubtotal = selectedLines.reduce(
-    (acc, l) => acc + Number(l.variant.price) * l.qty,
+    (acc, l) => acc + lineUnitPrice(l) * l.qty,
     0,
   );
   const allSelected = lines.length > 0 && selectedIds.length === lines.length;
@@ -78,7 +87,7 @@ function CartContent() {
         title: line.variant.product.title,
         brand: line.variant.product.brand,
         model: line.variant.product.model,
-        min_price: Number(line.variant.price),
+        min_price: lineUnitPrice(line),
       };
       const recs = recommendSimilar(candidates as any, target as any, 4);
       for (const rec of recs) {
@@ -89,7 +98,7 @@ function CartContent() {
       if (picked.length >= 6) break;
     }
     return picked.slice(0, 6);
-  }, [allProducts, cartProductIds, lines]);
+  }, [allProducts, cartProductIds, lines, lineUnitPrice]);
 
   const completeSetProducts = React.useMemo(() => {
     if (!completeSet.length || !shopProducts.length) return [];
@@ -143,11 +152,16 @@ function CartContent() {
   ) {
     try {
       const result = await add(option.id, 1);
+      const effectivePrice = resolveEffectivePrice({
+        price: Number(option.price),
+        sale_price: option.sale_price ?? null,
+        discount_percent: option.discount_percent ?? null,
+      }).effectivePrice;
       const baseToast = {
         title: product.title,
         image_url: product.image_url,
         variant: option.condition,
-        price: option.price,
+        price: effectivePrice,
         action: { label: "View cart", href: "/cart" },
       };
       toast(
@@ -172,8 +186,23 @@ function CartContent() {
     (img) => Boolean(img),
   );
   const previewPrice = previewLine
-    ? formatPHP(Number(previewLine.variant.price))
+    ? formatPHP(
+        resolveEffectivePrice({
+          price: Number(previewLine.variant.price),
+          sale_price: previewLine.variant.sale_price ?? null,
+          discount_percent: previewLine.variant.discount_percent ?? null,
+        }).effectivePrice
+      )
     : "";
+  const previewStrikePrice = previewLine
+    ? resolveEffectivePrice({
+        price: Number(previewLine.variant.price),
+        sale_price: previewLine.variant.sale_price ?? null,
+        discount_percent: previewLine.variant.discount_percent ?? null,
+      }).hasSale
+      ? formatPHP(Number(previewLine.variant.price))
+      : null
+    : null;
   const previewCondition = previewLine?.variant.condition ?? "";
   const previewIssue = previewLine?.variant.issue_notes ?? null;
   const previewNotes = previewLine?.variant.public_notes ?? null;
@@ -237,6 +266,15 @@ function CartContent() {
               </div>
               {lines.map((l) => {
                 const available = l.variant.qty;
+                const pricing = resolveEffectivePrice({
+                  price: Number(l.variant.price),
+                  sale_price: l.variant.sale_price ?? null,
+                  discount_percent: l.variant.discount_percent ?? null,
+                });
+                const displayPrice = formatPHP(pricing.effectivePrice);
+                const strikePrice = pricing.hasSale
+                  ? formatPHP(Number(l.variant.price))
+                  : null;
                 const invalid = available <= 0 || l.qty > available;
                 const canDec = l.qty > 1;
                 const canInc = available > 0 && l.qty < available;
@@ -292,7 +330,16 @@ function CartContent() {
                             })}{" "}
                             -{" "}
                             <span className="text-price">
-                              {formatPHP(Number(l.variant.price))}
+                              {strikePrice ? (
+                                <span className="flex items-baseline gap-2">
+                                  <span>{displayPrice}</span>
+                                  <span className="text-[11px] text-white/40 line-through">
+                                    {strikePrice}
+                                  </span>
+                                </span>
+                              ) : (
+                                displayPrice
+                              )}
                             </span>
                           </div>
                           {l.variant.public_notes ? (
@@ -374,7 +421,11 @@ function CartContent() {
                             title: l.variant.product.title,
                             brand: l.variant.product.brand,
                             model: l.variant.product.model,
-                            min_price: Number(l.variant.price),
+                            min_price: resolveEffectivePrice({
+                              price: Number(l.variant.price),
+                              sale_price: l.variant.sale_price ?? null,
+                              discount_percent: l.variant.discount_percent ?? null,
+                            }).effectivePrice,
                           };
                           const recs = recommendSimilar(
                             allProducts as any,
@@ -468,7 +519,7 @@ function CartContent() {
             </div>
           </CardHeader>
           <CardBody>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {completeSetProducts.map((item) => (
                 <ProductCard
                   key={item.key}
@@ -549,7 +600,18 @@ function CartContent() {
                       </div>
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-white/60">Price</span>
-                        <span className="text-price">{previewPrice}</span>
+                        <span className="text-price">
+                          {previewStrikePrice ? (
+                            <span className="flex items-baseline gap-2">
+                              <span>{previewPrice}</span>
+                              <span className="text-[11px] text-white/40 line-through">
+                                {previewStrikePrice}
+                              </span>
+                            </span>
+                          ) : (
+                            previewPrice
+                          )}
+                        </span>
                       </div>
                       {previewNotes ? (
                         <div className="text-sm text-white/70">
@@ -619,8 +681,6 @@ function CartContent() {
 
 export default function CartPage() {
   return (
-    <RequireAuth>
-      <CartContent />
-    </RequireAuth>
+    <CartContent />
   );
 }

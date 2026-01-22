@@ -2,6 +2,7 @@
 
 import { supabase } from "@/lib/supabase/browser";
 import type { CartLine } from "@/hooks/useCart";
+import { resolveEffectivePrice } from "@/lib/pricing";
 
 export type CreateOrderInput = {
   userId: string;
@@ -77,8 +78,15 @@ export async function createOrderFromCart(
   input: CreateOrderInput,
   cartLines: CartLine[]
 ) {
+  const lineUnitPrice = (line: CartLine) =>
+    resolveEffectivePrice({
+      price: Number(line.variant.price),
+      sale_price: line.variant.sale_price ?? null,
+      discount_percent: line.variant.discount_percent ?? null,
+    }).effectivePrice;
+
   const subtotal = cartLines.reduce(
-    (acc, l) => acc + Number(l.variant.price) * l.qty,
+    (acc, l) => acc + lineUnitPrice(l) * l.qty,
     0
   );
 
@@ -143,39 +151,48 @@ export async function createOrderFromCart(
   if (orderError) throw orderError;
 
   // ✅ Insert order items with schema fallbacks
-  const itemsV2 = cartLines.map((l) => ({
+  const itemsV2 = cartLines.map((l) => {
+    const unitPrice = lineUnitPrice(l);
+    return {
     order_id: order.id,
     item_id: l.variant.id,
     item_name: l.variant.product.title,
     variant_id: l.variant.id,
-    price_each: Number(l.variant.price),
+    price_each: unitPrice,
     qty: l.qty,
-    line_total: Number(l.variant.price) * l.qty,
+    line_total: unitPrice * l.qty,
     condition: l.variant.condition,
     issue_notes: l.variant.issue_notes,
-  }));
+    };
+  });
 
-  const itemsV1 = cartLines.map((l) => ({
+  const itemsV1 = cartLines.map((l) => {
+    const unitPrice = lineUnitPrice(l);
+    return {
     order_id: order.id,
     variant_id: l.variant.id,
-    unit_price: Number(l.variant.price),
+    unit_price: unitPrice,
     qty: l.qty,
-    line_total: Number(l.variant.price) * l.qty,
+    line_total: unitPrice * l.qty,
     condition: l.variant.condition,
     issue_notes: l.variant.issue_notes,
-  }));
+    };
+  });
 
-  const itemsLegacy = cartLines.map((l) => ({
+  const itemsLegacy = cartLines.map((l) => {
+    const unitPrice = lineUnitPrice(l);
+    return {
     order_id: order.id,
     product_id: l.variant.product.id,
     product_title: l.variant.product.title,
     variant_id: l.variant.id,
-    unit_price: Number(l.variant.price),
+    unit_price: unitPrice,
     qty: l.qty,
-    line_total: Number(l.variant.price) * l.qty,
+    line_total: unitPrice * l.qty,
     condition: l.variant.condition,
     issue_notes: l.variant.issue_notes,
-  }));
+    };
+  });
 
   let itemsError: any = null;
   {

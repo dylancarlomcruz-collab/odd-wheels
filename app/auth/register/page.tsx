@@ -6,12 +6,16 @@ import { supabase } from "@/lib/supabase/browser";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { isSupabaseConfigured } from "@/lib/env";
 import { PHONE_MAX_LENGTH, sanitizePhone, validatePhone11 } from "@/lib/phone";
 
 export default function RegisterPage() {
   const router = useRouter();
+  const sp = useSearchParams();
+  const redirectParam = sp.get("redirect");
+  const redirectTo =
+    redirectParam && redirectParam.startsWith("/") ? redirectParam : "/";
   const emailRedirectTo = "https://www.odd-wheels.com/";
   const [fullName, setFullName] = React.useState("");
   const [username, setUsername] = React.useState("");
@@ -103,7 +107,7 @@ export default function RegisterPage() {
     }
 
     // Profiles row will be created via DB trigger (see schema.sql).
-    if (data.user) router.replace("/");
+    if (data.user) router.replace(redirectTo);
   }
 
   return (
@@ -174,7 +178,7 @@ export default function RegisterPage() {
             <div className="text-sm text-white/60">
               Already have an account?{" "}
               <Link
-                href="/auth/login"
+                href={`/auth/login?redirect=${encodeURIComponent(redirectTo)}`}
                 className="text-accent-700 hover:underline dark:text-accent-200"
               >
                 Login

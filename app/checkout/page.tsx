@@ -2,7 +2,6 @@
 
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { RequireAuth } from "@/components/auth/RequireAuth";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { supabase } from "@/lib/supabase/browser";
 import { useCart } from "@/hooks/useCart";
@@ -13,6 +12,7 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Select } from "@/components/ui/Select";
 import { FeeBreakdown, type FeeLine } from "@/components/checkout/FeeBreakdown";
+import Link from "next/link";
 import {
   LalamoveTimeSlotPicker,
   LALAMOVE_WINDOWS,
@@ -43,6 +43,7 @@ import {
   shipCountsFromLines,
 } from "@/lib/shipping/logic";
 import { suggestedInsuranceFee } from "@/lib/shipping/config";
+import { resolveEffectivePrice } from "@/lib/pricing";
 
 type ShippingMethod = "LALAMOVE" | "JNT" | "LBC" | "PICKUP";
 const PHONE_LENGTH = PHONE_MAX_LENGTH;
@@ -199,7 +200,9 @@ function CheckoutContent() {
     if (!lines?.length) return [];
     if (!selectedIds) return lines;
     const idSet = new Set(selectedIds);
-    return lines.filter((line) => idSet.has(line.id));
+    return lines.filter(
+      (line) => idSet.has(line.id) || idSet.has(line.variant_id)
+    );
   }, [lines, selectedIds]);
   const selectionNote = selectedIds
     ? cartLoading
@@ -208,8 +211,40 @@ function CheckoutContent() {
       ? `${selectedLines.length} selected item(s) from your cart.`
       : "No selected items from your cart. Go back to cart to choose items."
     : null;
+  const checkoutRedirect = selectedParam
+    ? `/checkout?selected=${encodeURIComponent(selectedParam)}`
+    : "/checkout";
 
   const [msg, setMsg] = React.useState<string | null>(null);
+
+  if (!user) {
+    return (
+      <main className="mx-auto max-w-3xl px-4 py-10 space-y-6">
+        <div className="rounded-2xl border border-white/10 bg-bg-900/60 p-6 shadow-soft">
+          <div className="text-2xl font-semibold">Checkout</div>
+          <div className="mt-1 text-sm text-white/60">
+            Login / Create account to checkout.
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link
+              href={`/auth/login?redirect=${encodeURIComponent(
+                checkoutRedirect
+              )}`}
+            >
+              <Button>Login</Button>
+            </Link>
+            <Link
+              href={`/auth/register?redirect=${encodeURIComponent(
+                checkoutRedirect
+              )}`}
+            >
+              <Button variant="secondary">Create account</Button>
+            </Link>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   const [shippingMethod, setShippingMethod] =
     React.useState<ShippingMethod>("LALAMOVE");
@@ -311,7 +346,14 @@ function CheckoutContent() {
   const itemsSubtotal = React.useMemo(
     () =>
       (selectedLines ?? []).reduce(
-        (sum, l) => sum + Number(l.variant.price) * l.qty,
+        (sum, l) =>
+          sum +
+          resolveEffectivePrice({
+            price: Number(l.variant.price),
+            sale_price: l.variant.sale_price ?? null,
+            discount_percent: l.variant.discount_percent ?? null,
+          }).effectivePrice *
+            l.qty,
         0
       ),
     [selectedLines]
@@ -1252,11 +1294,7 @@ function CheckoutContent() {
 }
 
 export default function CheckoutPage() {
-  return (
-    <RequireAuth>
-      <CheckoutContent />
-    </RequireAuth>
-  );
+  return <CheckoutContent />;
 }
 
 

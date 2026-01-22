@@ -7,6 +7,7 @@ import { SiteHeader } from "@/components/SiteHeader";
 import { Suspense } from "react";
 import { ToastProvider } from "@/components/ui/ToastProvider";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
+import { ShopSortProvider } from "@/hooks/useShopSort";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -30,14 +31,15 @@ export default function RootLayout({
       <body className={inter.className}>
         <ThemeProvider>
           <AuthProvider>
-            <ToastProvider>
-              <Suspense
+            <ShopSortProvider>
+              <ToastProvider>
+                <Suspense
                 fallback={
                   <div className="h-14 border-b border-white/10 bg-bg-900/80" />
                 }
               >
                 <SiteHeader />
-              </Suspense>
+                </Suspense>
 
               {children}
 
@@ -61,7 +63,8 @@ export default function RootLayout({
                   </div>
                 </div>
               </footer>
-            </ToastProvider>
+              </ToastProvider>
+            </ShopSortProvider>
           </AuthProvider>
         </ThemeProvider>
       </body>

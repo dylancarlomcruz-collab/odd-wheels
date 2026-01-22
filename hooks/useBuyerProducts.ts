@@ -3,6 +3,7 @@
 import * as React from "react";
 import { supabase } from "@/lib/supabase/browser";
 import { isSupabaseConfigured } from "@/lib/env";
+import { resolveEffectivePrice } from "@/lib/pricing";
 
 export type BuyerProduct = {
   id: string;
@@ -14,8 +15,23 @@ export type BuyerProduct = {
   min_price: number;
 };
 
-function computeMinPrice(variants: Array<{ price: number; qty: number }>): number {
-  const prices = variants.filter((v) => (v.qty ?? 0) > 0).map((v) => Number(v.price));
+function computeMinPrice(
+  variants: Array<{
+    price: number;
+    qty: number;
+    sale_price?: number | null;
+    discount_percent?: number | null;
+  }>
+): number {
+  const prices = variants
+    .filter((v) => (v.qty ?? 0) > 0)
+    .map((v) =>
+      resolveEffectivePrice({
+        price: Number(v.price),
+        sale_price: v.sale_price ?? null,
+        discount_percent: v.discount_percent ?? null,
+      }).effectivePrice
+    );
   if (prices.length === 0) return 0;
   return Math.min(...prices);
 }
@@ -43,7 +59,9 @@ export function useBuyerProducts({ brand }: { brand: string }) {
       // Fetch products with variants, then filter to those with at least one in-stock variant.
       let q = supabase
         .from("products")
-        .select("id, title, brand, model, variation, image_urls, is_active, product_variants(price, qty)")
+        .select(
+          "id, title, brand, model, variation, image_urls, is_active, product_variants(price, sale_price, discount_percent, qty)"
+        )
         .eq("is_active", true);
 
       if (brand && brand !== "all") {
@@ -61,7 +79,12 @@ export function useBuyerProducts({ brand }: { brand: string }) {
       } else {
         const mapped: BuyerProduct[] = (data as any[] ?? [])
           .map((p) => {
-            const variants = (p.product_variants ?? []) as Array<{ price: number; qty: number }>;
+            const variants = (p.product_variants ?? []) as Array<{
+              price: number;
+              qty: number;
+              sale_price?: number | null;
+              discount_percent?: number | null;
+            }>;
             const inStock = variants.some((v) => (v.qty ?? 0) > 0);
             return inStock
               ? ({

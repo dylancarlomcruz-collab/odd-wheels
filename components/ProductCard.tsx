@@ -6,12 +6,16 @@ import { ChevronDown, ChevronLeft, X } from "lucide-react";
 import { recordRecentView } from "@/lib/recentViews";
 import { normalizeSearchTerm } from "@/lib/search";
 import { formatConditionLabel } from "@/lib/conditions";
+import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
+import { getOptionPricing, getProductEffectiveRange } from "@/lib/pricing";
 
 type ConditionOption = {
   id: string; // this is the PRODUCT ROW ID for that condition
   condition_raw?: string | null;
   condition: string;
   price: number;
+  sale_price?: number | null;
+  discount_percent?: number | null;
   qty: number;
   issue_notes?: string | null;
   issue_photo_urls?: string[] | null;
@@ -38,6 +42,9 @@ export type ShopProduct = {
   image_urls?: string[] | null;
   minPrice: number;
   maxPrice: number;
+  minEffectivePrice?: number;
+  maxEffectivePrice?: number;
+  hasSale?: boolean;
   options: ConditionOption[];
   created_at?: string | null;
   totalQty?: number;
@@ -62,6 +69,7 @@ function peso(n: number) {
 export default function ProductCard({
   product,
   onAddToCart,
+  onImageClick,
   onRelatedAddToCart,
   onProductClick,
   socialProof,
@@ -69,6 +77,7 @@ export default function ProductCard({
 }: {
   product: ShopProduct;
   onAddToCart: (option: ConditionOption) => void | Promise<void>;
+  onImageClick?: (product: ShopProduct, imageUrl: string | null) => void;
   onRelatedAddToCart?: (
     product: ShopProduct,
     option: ConditionOption,
@@ -109,6 +118,17 @@ export default function ProductCard({
       previewProduct.options[0],
     [previewProduct.options, previewSelectedId],
   );
+  const previewPricing = React.useMemo(
+    () => (previewSelected ? getOptionPricing(previewSelected) : null),
+    [previewSelected]
+  );
+  const previewDisplayPrice = previewPricing
+    ? previewPricing.hasSale
+      ? peso(previewPricing.effectivePrice)
+      : peso(previewSelected?.price ?? 0)
+    : "-";
+  const previewStrikePrice =
+    previewPricing?.hasSale ? peso(previewSelected?.price ?? 0) : null;
 
   const cardImages = React.useMemo(() => {
     const raw = (product.image_urls ?? []).filter(Boolean) as string[];
@@ -132,22 +152,49 @@ export default function ProductCard({
     () => (selected?.issue_photo_urls ?? []).filter(Boolean) as string[],
     [selected?.issue_photo_urls],
   );
+  const previewIsOut = !previewSelected || (previewSelected.qty ?? 0) <= 0;
 
-  const priceLabel =
+  const basePriceLabel =
     product.minPrice === product.maxPrice
       ? peso(product.minPrice)
       : `${peso(product.minPrice)} - ${peso(product.maxPrice)}`;
+  const effectiveRange = React.useMemo(
+    () => getProductEffectiveRange(product),
+    [product]
+  );
+  const effectiveMinPrice =
+    product.minEffectivePrice ?? effectiveRange.min ?? product.minPrice;
+  const effectiveMaxPrice =
+    product.maxEffectivePrice ?? effectiveRange.max ?? product.maxPrice;
+  const effectivePriceLabel =
+    effectiveMinPrice === effectiveMaxPrice
+      ? peso(effectiveMinPrice)
+      : `${peso(effectiveMinPrice)} - ${peso(effectiveMaxPrice)}`;
+  const hasSale = product.hasSale ?? effectiveRange.hasSale;
+  const rangeLabel = hasSale ? effectivePriceLabel : basePriceLabel;
   const hasMultiple = product.options.length > 1;
+  const selectedPricing = React.useMemo(
+    () => (selected ? getOptionPricing(selected) : null),
+    [selected]
+  );
   const displayPrice =
     hasPicked || !hasMultiple
       ? selected
-        ? peso(selected.price)
-        : priceLabel
-      : priceLabel;
+        ? selectedPricing?.hasSale
+          ? peso(selectedPricing.effectivePrice)
+          : peso(selected.price)
+        : rangeLabel
+      : rangeLabel;
+  const strikePrice =
+    selected && selectedPricing?.hasSale ? peso(selected.price) : null;
 
   const isOut = !selected || (selected.qty ?? 0) <= 0;
   const activeImage = previewImages[activeIndex] ?? "";
   const cardImage = product.image_url ?? cardImages[0] ?? null;
+  const parsedCardImage = React.useMemo(
+    () => (cardImage ? parseImageCrop(cardImage) : null),
+    [cardImage]
+  );
   const activeIssueImage = issueImages[issueIndex] ?? "";
   const hasIssuePhotos = issueImages.length > 0;
   const publicNotes = String(previewSelected?.public_notes ?? "").trim();
@@ -155,10 +202,6 @@ export default function ProductCard({
   const isNearMint = previewSelected?.condition === "near_mint";
   const lowStock = (selected?.qty ?? 0) > 0 && (selected?.qty ?? 0) <= 2;
   const onlyOneLeft = (selected?.qty ?? 0) === 1;
-  const qtyLabel =
-    (selected?.qty ?? 0) > 0 && (selected?.qty ?? 0) <= 3
-      ? `${selected?.qty ?? 0} left`
-      : null;
   const conditionLabel = formatConditionLabel(selected?.condition ?? "-", {
     upper: true,
   });
@@ -367,20 +410,34 @@ export default function ProductCard({
       <div className="rounded-xl sm:rounded-2xl overflow-hidden bg-bg-900/70 dark:bg-paper/5 border border-white/20 dark:border-white/10 shadow-sm">
         <button
           type="button"
-          onClick={openPreview}
-          className="aspect-[4/3] w-full bg-black/10 flex items-center justify-center"
+          onClick={() => {
+            if (onImageClick) {
+              onImageClick(product, cardImage);
+              return;
+            }
+            openPreview();
+          }}
+          className="relative aspect-[4/3] w-full overflow-hidden bg-black/10 flex items-center justify-center"
           aria-label={`Preview ${product.title}`}
         >
-          {cardImage ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={cardImage}
-              alt={product.title}
-              className="h-full w-full object-contain bg-neutral-50"
-            />
+          {parsedCardImage ? (
+            <div className="h-full w-full bg-neutral-50">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={parsedCardImage.src}
+                alt={product.title}
+                className="h-full w-full object-contain"
+                style={cropStyle(parsedCardImage.crop)}
+              />
+            </div>
           ) : (
             <div className="text-white/50 text-sm">No image</div>
           )}
+          {hasSale ? (
+            <span className="absolute left-2 top-2 rounded-full border border-rose-300/60 bg-rose-500/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow">
+              On Sale
+            </span>
+          ) : null}
         </button>
 
         <div className="p-3 sm:p-4">
@@ -392,12 +449,21 @@ export default function ProductCard({
             {product.title}
           </button>
 
-          <div className="mt-2 sm:mt-3 flex min-h-[1.4rem] items-center justify-between">
-            <div className="text-price text-sm sm:text-base">
-              {displayPrice}
+          <div className="mt-2 sm:mt-3 flex min-h-[1.4rem] items-center justify-between gap-2">
+            <div className="text-price text-sm sm:text-base whitespace-nowrap">
+              {strikePrice ? (
+                <div className="flex items-baseline gap-2">
+                  <span>{displayPrice}</span>
+                  <span className="text-[11px] text-white/40 line-through">
+                    {strikePrice}
+                  </span>
+                </div>
+              ) : (
+                displayPrice
+              )}
             </div>
-            <div className="text-[11px] sm:text-xs text-white/60">
-              {qtyLabel ? `${qtyLabel} (${conditionLabel})` : conditionLabel}
+            <div className="min-w-0 text-right text-[11px] sm:text-xs text-white/60 truncate">
+              {conditionLabel}
             </div>
           </div>
 
@@ -447,7 +513,7 @@ export default function ProductCard({
             </div>
 
             <button
-              className="w-full rounded-xl px-3 py-1.5 text-sm sm:px-4 sm:py-2 bg-amber-600 hover:bg-amber-500 text-black font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full rounded-xl px-3 py-2.5 text-sm sm:px-4 sm:py-2 bg-amber-600 hover:bg-amber-500 text-black font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
               disabled={isOut}
               onClick={() => selected && onAddToCart(selected)}
             >
@@ -525,7 +591,7 @@ export default function ProductCard({
                     </div>
                   </div>
 
-                  <div className="p-4 sm:p-5">
+                  <div className="p-4 pb-20 sm:p-5 sm:pb-5">
                     <div className="mb-3 flex items-center gap-2 text-[11px] text-white/50 sm:hidden">
                       <ChevronDown className="h-4 w-4 text-white/40" />
                       <span>Scroll down for details and suggestions</span>
@@ -586,9 +652,16 @@ export default function ProductCard({
                           <div className="flex items-center justify-between text-sm">
                             <span className="text-white/60">Price</span>
                             <span className="text-price">
-                              {previewSelected
-                                ? peso(previewSelected.price)
-                                : "-"}
+                              {previewStrikePrice ? (
+                                <span className="flex items-baseline gap-2">
+                                  <span>{previewDisplayPrice}</span>
+                                  <span className="text-[11px] text-white/40 line-through">
+                                    {previewStrikePrice}
+                                  </span>
+                                </span>
+                              ) : (
+                                previewDisplayPrice
+                              )}
                             </span>
                           </div>
                           <div className="flex items-center justify-between text-sm">
@@ -606,6 +679,11 @@ export default function ProductCard({
                           <div className="mt-2 space-y-2 text-sm">
                             {previewProduct.options.map((o) => {
                               const isSelected = o.id === previewSelected?.id;
+                              const pricing = getOptionPricing(o);
+                              const displayPrice = peso(pricing.effectivePrice);
+                              const strikePrice = pricing.hasSale
+                                ? peso(o.price)
+                                : null;
                               return (
                                 <div
                                   key={o.id}
@@ -627,7 +705,17 @@ export default function ProductCard({
                                         : "text-white/60"
                                     }
                                   >
-                                    {peso(o.price)} - {o.qty} left
+                                    {strikePrice ? (
+                                      <span className="flex items-baseline gap-2">
+                                        <span>{displayPrice}</span>
+                                        <span className="text-[10px] text-white/40 line-through">
+                                          {strikePrice}
+                                        </span>
+                                      </span>
+                                    ) : (
+                                      displayPrice
+                                    )}{" "}
+                                    - {o.qty} left
                                   </span>
                                 </div>
                               );
@@ -743,6 +831,39 @@ export default function ProductCard({
                         </div>
                       </div>
                     ) : null}
+                  </div>
+
+                  <div className="sticky bottom-0 z-10 border-t border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:hidden">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[11px] text-white/50">
+                          Selected
+                        </div>
+                        <div className="text-sm text-white/80 line-clamp-1">
+                          {previewSelected?.condition ?? "-"}
+                        </div>
+                      </div>
+                      <div className="text-price text-sm whitespace-nowrap">
+                        {previewStrikePrice ? (
+                          <span className="flex items-baseline gap-2">
+                            <span>{previewDisplayPrice}</span>
+                            <span className="text-[10px] text-white/40 line-through">
+                              {previewStrikePrice}
+                            </span>
+                          </span>
+                        ) : (
+                          previewDisplayPrice
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-black disabled:opacity-50"
+                        disabled={previewIsOut}
+                        onClick={() => previewSelected && onAddToCart(previewSelected)}
+                      >
+                        Add to cart
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>

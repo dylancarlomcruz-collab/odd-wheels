@@ -6,13 +6,17 @@ import { supabase } from "@/lib/supabase/browser";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { isSupabaseConfigured } from "@/lib/env";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { REMEMBER_ME_KEY, SUPABASE_AUTH_STORAGE_KEY } from "@/lib/supabase/browser";
 
 export default function LoginPage() {
   const router = useRouter();
+  const sp = useSearchParams();
+  const redirectParam = sp.get("redirect");
+  const redirectTo =
+    redirectParam && redirectParam.startsWith("/") ? redirectParam : "/";
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [rememberMe, setRememberMe] = React.useState(true);
@@ -63,7 +67,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.replace("/");
+    router.replace(redirectTo);
   }
 
   return (
@@ -71,7 +75,7 @@ export default function LoginPage() {
       <Card>
         <CardHeader>
           <div className="text-xl font-semibold">Login</div>
-          <div className="text-sm text-white/60">Login to add to cart and checkout.</div>
+          <div className="text-sm text-white/60">Login to checkout.</div>
         </CardHeader>
         <CardBody>
           <form onSubmit={onSubmit} className="space-y-4">
@@ -101,7 +105,9 @@ export default function LoginPage() {
             <div className="text-sm text-white/60">
               No account?{" "}
               <Link
-                href="/auth/register"
+                href={`/auth/register?redirect=${encodeURIComponent(
+                  redirectTo
+                )}`}
                 className="text-accent-700 hover:underline dark:text-accent-200"
               >
                 Create one

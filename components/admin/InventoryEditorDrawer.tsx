@@ -16,6 +16,13 @@ import {
   isDioramaCondition,
   isBlisterCondition,
 } from "@/lib/conditions";
+import {
+  applyImageCrop,
+  cropStyle,
+  normalizeCrop,
+  parseImageCrop,
+  type ImageCrop,
+} from "@/lib/imageCrop";
 import type { AdminProduct, AdminVariant } from "./InventoryBrowseGrid";
 
 type VariantDraft = AdminVariant & {
@@ -80,6 +87,18 @@ export function InventoryEditorDrawer({
     null
   );
   const [deletingProduct, setDeletingProduct] = React.useState(false);
+  const [cropEditor, setCropEditor] = React.useState<{
+    index: number;
+    baseUrl: string;
+    crop: ImageCrop;
+  } | null>(null);
+  const cropFrameRef = React.useRef<HTMLDivElement | null>(null);
+  const cropDragRef = React.useRef<{
+    startX: number;
+    startY: number;
+    crop: ImageCrop;
+    rect: DOMRect;
+  } | null>(null);
 
   React.useEffect(() => {
     if (!product) return;
@@ -99,6 +118,7 @@ export function InventoryEditorDrawer({
       }))
     );
     setNewImage("");
+    setCropEditor(null);
   }, [product]);
 
   if (!product) return null;
@@ -185,6 +205,61 @@ export function InventoryEditorDrawer({
 
   function removeImage(url: string) {
     setImages((prev) => prev.filter((u) => u !== url));
+  }
+
+  function updateImageUrlAtIndex(index: number, nextUrl: string) {
+    setImages((prev) => {
+      if (!prev[index] || prev[index] === nextUrl) return prev;
+      const next = [...prev];
+      next[index] = nextUrl;
+      return next;
+    });
+  }
+
+  function openCropEditor(url: string, index: number) {
+    const parsed = parseImageCrop(url);
+    setCropEditor({
+      index,
+      baseUrl: parsed.src,
+      crop: parsed.crop ?? { zoom: 1, x: 0, y: 0 },
+    });
+  }
+
+  function beginCropDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (!cropEditor || !cropFrameRef.current) return;
+    const rect = cropFrameRef.current.getBoundingClientRect();
+    cropDragRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      crop: cropEditor.crop,
+      rect,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function updateCropDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (!cropDragRef.current) return;
+    const { startX, startY, crop, rect } = cropDragRef.current;
+    const dx = ((event.clientX - startX) / rect.width) * 100;
+    const dy = ((event.clientY - startY) / rect.height) * 100;
+    setCropEditor((prev) =>
+      prev
+        ? {
+            ...prev,
+            crop: normalizeCrop({
+              ...crop,
+              x: crop.x + dx,
+              y: crop.y + dy,
+            }),
+          }
+        : prev
+    );
+  }
+
+  function endCropDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (!cropDragRef.current) return;
+    cropDragRef.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
   }
 
   async function uploadIssueFiles(v: VariantDraft, files: File[]) {
@@ -684,31 +759,65 @@ export function InventoryEditorDrawer({
             {images.length ? (
               <>
                 <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
-                  {images.map((u, idx) => (
-                    <div
-                      key={u}
-                      draggable
-                      className="rounded-xl border border-white/10 bg-bg-800/60 overflow-hidden"
-                      onDragStart={(e) => {
-                        e.dataTransfer.setData("text/plain", String(idx));
-                        e.dataTransfer.effectAllowed = "move";
-                      }}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        handleImageDrop(e, idx);
-                      }}
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={u} alt="" className="h-32 w-full object-cover" />
-                      <div className="flex items-center justify-between px-3 py-2 text-xs text-white/70">
-                        <span className="truncate">{u}</span>
-                        <Button variant="ghost" onClick={() => removeImage(u)}>
-                          Remove
-                        </Button>
+                  {images.map((u, idx) => {
+                    const preview = parseImageCrop(u);
+                    return (
+                      <div
+                        key={`${u}-${idx}`}
+                        draggable
+                        className="rounded-xl border border-white/10 bg-bg-800/60 overflow-hidden"
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData("text/plain", String(idx));
+                          e.dataTransfer.effectAllowed = "move";
+                        }}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          handleImageDrop(e, idx);
+                        }}
+                      >
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          className="aspect-[4/3] w-full overflow-hidden bg-neutral-50 cursor-pointer"
+                          onClick={() => openCropEditor(u, idx)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              openCropEditor(u, idx);
+                            }
+                          }}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={preview.src}
+                            alt=""
+                            className="h-full w-full object-contain"
+                            style={cropStyle(preview.crop)}
+                          />
+                        </div>
+                        <div className="px-3 py-2 text-xs text-white/70 space-y-2">
+                          <div className="truncate">{preview.src}</div>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => openCropEditor(u, idx)}
+                            >
+                              Adjust crop
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeImage(u)}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 <div className="text-xs text-white/50">
                   Drag images to reorder.
@@ -957,6 +1066,162 @@ export function InventoryEditorDrawer({
             )}
           </div>
         </div>
+
+        {cropEditor ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setCropEditor(null)}
+              aria-label="Close crop editor"
+            />
+            <div className="relative w-full max-w-2xl rounded-2xl border border-white/10 bg-bg-900/95 p-5 shadow-soft">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs text-white/50">Product card preview</div>
+                  <div className="text-lg font-semibold">Adjust image crop</div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setCropEditor(null)}
+                >
+                  Close
+                </Button>
+              </div>
+
+              <div className="mt-4 grid gap-4 md:grid-cols-[1.2fr_1fr]">
+                <div
+                  ref={cropFrameRef}
+                  className="relative aspect-[4/3] overflow-hidden rounded-xl border border-white/10 bg-neutral-50 cursor-move select-none touch-none"
+                  onPointerDown={beginCropDrag}
+                  onPointerMove={updateCropDrag}
+                  onPointerUp={endCropDrag}
+                  onPointerCancel={endCropDrag}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={cropEditor.baseUrl}
+                    alt="Card preview"
+                    className="h-full w-full object-contain"
+                    style={cropStyle(cropEditor.crop)}
+                  />
+                  <div className="pointer-events-none absolute inset-0 border border-white/70 shadow-[0_0_0_9999px_rgba(255,255,255,0.6)] dark:border-white/40 dark:shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]" />
+                </div>
+
+                <div className="space-y-4">
+                  <div className="text-xs text-white/60">
+                    Drag the image to position it inside the visible frame.
+                  </div>
+                  <div>
+                    <div className="text-xs text-white/60">Zoom</div>
+                    <input
+                      type="range"
+                      min={1}
+                      max={2.5}
+                      step={0.05}
+                      value={cropEditor.crop.zoom}
+                      onChange={(e) =>
+                        setCropEditor((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                crop: normalizeCrop({
+                                  ...prev.crop,
+                                  zoom: Number(e.target.value),
+                                }),
+                              }
+                            : prev
+                        )
+                      }
+                      className="mt-2 w-full"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="text-xs text-white/60">Horizontal</div>
+                    <input
+                      type="range"
+                      min={-50}
+                      max={50}
+                      step={1}
+                      value={cropEditor.crop.x}
+                      onChange={(e) =>
+                        setCropEditor((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                crop: normalizeCrop({
+                                  ...prev.crop,
+                                  x: Number(e.target.value),
+                                }),
+                              }
+                            : prev
+                        )
+                      }
+                      className="mt-2 w-full"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="text-xs text-white/60">Vertical</div>
+                    <input
+                      type="range"
+                      min={-50}
+                      max={50}
+                      step={1}
+                      value={cropEditor.crop.y}
+                      onChange={(e) =>
+                        setCropEditor((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                crop: normalizeCrop({
+                                  ...prev.crop,
+                                  y: Number(e.target.value),
+                                }),
+                              }
+                            : prev
+                        )
+                      }
+                      className="mt-2 w-full"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    setCropEditor((prev) =>
+                      prev ? { ...prev, crop: { zoom: 1, x: 0, y: 0 } } : prev
+                    )
+                  }
+                >
+                  Reset
+                </Button>
+                <div className="flex gap-2">
+                  <Button variant="ghost" onClick={() => setCropEditor(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      const nextUrl = applyImageCrop(
+                        cropEditor.baseUrl,
+                        cropEditor.crop
+                      );
+                      updateImageUrlAtIndex(cropEditor.index, nextUrl);
+                      setCropEditor(null);
+                    }}
+                  >
+                    Apply
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

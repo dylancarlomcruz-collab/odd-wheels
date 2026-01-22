@@ -1,4 +1,5 @@
 import { conditionSortOrder, formatConditionLabel } from "@/lib/conditions";
+import { resolveEffectivePrice } from "@/lib/pricing";
 import type { ShopProduct } from "@/components/ProductCard";
 
 export type VariantRow = {
@@ -8,6 +9,8 @@ export type VariantRow = {
   issue_photo_urls: string[] | null;
   public_notes: string | null;
   price: number | null;
+  sale_price?: number | null;
+  discount_percent?: number | null;
   qty: number | null;
   product: {
     id: string;
@@ -35,6 +38,8 @@ export type ProductRow = {
     issue_photo_urls: string[] | null;
     public_notes: string | null;
     price: number | null;
+    sale_price?: number | null;
+    discount_percent?: number | null;
     qty: number | null;
   }>;
 };
@@ -56,6 +61,19 @@ export function collapseVariants(rows: VariantRow[]): ShopProduct[] {
     const conditionRaw = String(v.condition ?? "sealed").toLowerCase();
     const condition = formatConditionLabel(conditionRaw, { upper: true });
     const price = pickNumber(v.price, 0);
+    const sale_price =
+      Number.isFinite(Number((v as any)?.sale_price)) &&
+      Number((v as any)?.sale_price) > 0
+        ? Number((v as any)?.sale_price)
+        : null;
+    const discount_percent = Number.isFinite(Number((v as any)?.discount_percent))
+      ? Number((v as any)?.discount_percent)
+      : null;
+    const pricing = resolveEffectivePrice({
+      price,
+      sale_price,
+      discount_percent,
+    });
     const qty = pickNumber(v.qty, 0);
 
     if (qty <= 0) continue;
@@ -69,6 +87,8 @@ export function collapseVariants(rows: VariantRow[]): ShopProduct[] {
       id: v.id,
       condition,
       price,
+      sale_price,
+      discount_percent,
       qty,
       issue_notes: v.issue_notes ?? null,
       issue_photo_urls: Array.isArray(v.issue_photo_urls)
@@ -89,6 +109,9 @@ export function collapseVariants(rows: VariantRow[]): ShopProduct[] {
         image_urls: image_urls.length ? image_urls : image_url ? [image_url] : [],
         minPrice: price,
         maxPrice: price,
+        minEffectivePrice: pricing.effectivePrice,
+        maxEffectivePrice: pricing.effectivePrice,
+        hasSale: pricing.hasSale,
         options: [option],
         created_at: p.created_at ?? null,
         totalQty: qty,
@@ -97,6 +120,15 @@ export function collapseVariants(rows: VariantRow[]): ShopProduct[] {
     } else {
       existing.minPrice = Math.min(existing.minPrice, price);
       existing.maxPrice = Math.max(existing.maxPrice, price);
+      existing.minEffectivePrice = Math.min(
+        existing.minEffectivePrice ?? pricing.effectivePrice,
+        pricing.effectivePrice
+      );
+      existing.maxEffectivePrice = Math.max(
+        existing.maxEffectivePrice ?? pricing.effectivePrice,
+        pricing.effectivePrice
+      );
+      existing.hasSale = Boolean(existing.hasSale || pricing.hasSale);
       existing.image_url = existing.image_url || image_url || null;
       if (image_urls.length) {
         const merged = new Set([...(existing.image_urls ?? []), ...image_urls]);
@@ -133,10 +165,23 @@ export function mapProductsToShopProducts(rows: ProductRow[]): ShopProduct[] {
         const qty = pickNumber(v.qty, 0);
         if (qty <= 0) return null;
         const conditionRaw = String(v.condition ?? "sealed").toLowerCase();
+        const price = pickNumber(v.price, 0);
+        const sale_price =
+          Number.isFinite(Number((v as any)?.sale_price)) &&
+          Number((v as any)?.sale_price) > 0
+            ? Number((v as any)?.sale_price)
+            : null;
+        const discount_percent = Number.isFinite(
+          Number((v as any)?.discount_percent)
+        )
+          ? Number((v as any)?.discount_percent)
+          : null;
         return {
           id: v.id,
           condition: formatConditionLabel(conditionRaw, { upper: true }),
-          price: pickNumber(v.price, 0),
+          price,
+          sale_price,
+          discount_percent,
           qty,
           issue_notes: v.issue_notes ?? null,
           issue_photo_urls: Array.isArray(v.issue_photo_urls)
@@ -157,6 +202,23 @@ export function mapProductsToShopProducts(rows: ProductRow[]): ShopProduct[] {
     const prices = options.map((o) => o.price);
     const minPrice = Math.min(...prices);
     const maxPrice = Math.max(...prices);
+    const effectivePrices = options.map(
+      (o) =>
+        resolveEffectivePrice({
+          price: o.price,
+          sale_price: (o as any).sale_price ?? null,
+          discount_percent: (o as any).discount_percent ?? null,
+        }).effectivePrice
+    );
+    const minEffectivePrice = Math.min(...effectivePrices);
+    const maxEffectivePrice = Math.max(...effectivePrices);
+    const hasSale = options.some((o) =>
+      resolveEffectivePrice({
+        price: o.price,
+        sale_price: (o as any).sale_price ?? null,
+        discount_percent: (o as any).discount_percent ?? null,
+      }).hasSale
+    );
     const totalQty = options.reduce((sum, o) => sum + o.qty, 0);
     const minQty = options.reduce(
       (min, o) => Math.min(min, o.qty),
@@ -172,6 +234,9 @@ export function mapProductsToShopProducts(rows: ProductRow[]): ShopProduct[] {
       image_urls: image_urls.length ? image_urls : image_url ? [image_url] : [],
       minPrice,
       maxPrice,
+      minEffectivePrice,
+      maxEffectivePrice,
+      hasSale,
       options: options
         .slice()
         .sort(

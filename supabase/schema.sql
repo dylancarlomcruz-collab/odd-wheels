@@ -160,6 +160,8 @@ create table if not exists public.product_variants (
   issue_notes text,
   cost numeric,
   price numeric not null,
+  sale_price numeric,
+  discount_percent numeric,
   qty int not null default 0 check (qty >= 0),
   ship_class text default 'MINI_GT' check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','BLISTER','TOMICA','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE')),
   created_at timestamptz not null default now()
@@ -756,5 +758,4 @@ as $$
 $$;
 
 grant execute on function public.get_frequently_bought_together(uuid, int) to anon, authenticated;
-
 

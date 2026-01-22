@@ -9,9 +9,14 @@ import { toast } from "@/components/ui/toast";
 import { collapseVariants, type VariantRow } from "@/lib/shopProducts";
 import { readRecentViewEntries } from "@/lib/recentViews";
 import { expandSearchTerms, getLastSearchTerm, normalizeSearchTerm } from "@/lib/search";
+import { useProfile } from "@/hooks/useProfile";
+import { InventoryEditorDrawer } from "@/components/admin/InventoryEditorDrawer";
+import type { AdminProduct } from "@/components/admin/InventoryBrowseGrid";
+import { resolveEffectivePrice } from "@/lib/pricing";
+import { useShopSort } from "@/hooks/useShopSort";
 
 const BRAND_ALL_KEY = "__all__";
-const MAX_PRIMARY_BRAND_TABS = 8;
+const MAX_PRIMARY_BRAND_TABS = 9;
 const LIMITED_SECTION_COUNTS: Record<string, number> = {
   trending: 4,
   "for-you": 4,
@@ -86,9 +91,14 @@ export default function ShopPageClient() {
   const searchQuery = (searchParams.get("q") ?? "").trim();
   const hasSearch = Boolean(searchQuery);
   const cart = useCart();
+  const { profile } = useProfile();
+  const isAdmin = profile?.role === "admin";
   const [loading, setLoading] = React.useState(true);
   const [err, setErr] = React.useState<string | null>(null);
   const [rows, setRows] = React.useState<VariantRow[]>([]);
+  const [reloadToken, setReloadToken] = React.useState(0);
+  const [adminEditProduct, setAdminEditProduct] =
+    React.useState<AdminProduct | null>(null);
   const [brandTab, setBrandTab] = React.useState<string>(BRAND_ALL_KEY);
   const [showAllBrands, setShowAllBrands] = React.useState(false);
   const [visibleBrandCount, setVisibleBrandCount] = React.useState(0);
@@ -106,6 +116,7 @@ export default function ShopPageClient() {
   >([]);
   const [lastSearch, setLastSearch] = React.useState<string | null>(null);
   const [showBackToTop, setShowBackToTop] = React.useState(false);
+  const { sortBy, priceDir } = useShopSort();
   const resultsRef = React.useRef<HTMLDivElement | null>(null);
   const brandRowRef = React.useRef<HTMLDivElement | null>(null);
   const brandMeasureRef = React.useRef<HTMLDivElement | null>(null);
@@ -122,7 +133,7 @@ export default function ShopPageClient() {
       const { data, error } = await supabase
         .from("product_variants")
         .select(
-          "id,condition,issue_notes,issue_photo_urls,public_notes,price,qty, product:products(id,title,brand,model,image_urls,is_active,created_at)"
+          "id,condition,issue_notes,issue_photo_urls,public_notes,price,sale_price,discount_percent,qty, product:products(id,title,brand,model,image_urls,is_active,created_at)"
         )
         .gt("qty", 0)
         .order("created_at", { ascending: false });
@@ -141,7 +152,7 @@ export default function ShopPageClient() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [reloadToken]);
 
   const shopProducts = React.useMemo(() => collapseVariants(rows), [rows]);
 
@@ -474,6 +485,33 @@ export default function ShopPageClient() {
     );
   }, [searchFiltered, brandTab]);
 
+  const sortedFiltered = React.useMemo(() => {
+    if (sortBy === "relevance") return filtered;
+    const list = filtered.slice();
+    const getMinPrice = (p: ShopProduct) =>
+      p.minEffectivePrice ?? p.minPrice ?? 0;
+    if (sortBy === "newest") {
+      list.sort(
+        (a, b) =>
+          new Date(b.created_at ?? 0).getTime() -
+          new Date(a.created_at ?? 0).getTime()
+      );
+    } else if (sortBy === "price") {
+      list.sort((a, b) =>
+        priceDir === "asc"
+          ? getMinPrice(a) - getMinPrice(b)
+          : getMinPrice(b) - getMinPrice(a)
+      );
+    } else if (sortBy === "popular") {
+      list.sort((a, b) => {
+        const aScore = (clickMap[a.key] ?? 0) + (addMap[a.key] ?? 0) * 2;
+        const bScore = (clickMap[b.key] ?? 0) + (addMap[b.key] ?? 0) * 2;
+        return bScore - aScore;
+      });
+    }
+    return list;
+  }, [filtered, sortBy, priceDir, clickMap, addMap]);
+
   const newArrivals = React.useMemo(() => {
     const now = Date.now();
     return shopProducts
@@ -634,15 +672,22 @@ export default function ShopPageClient() {
     id: string;
     condition: string;
     price: number;
+    sale_price?: number | null;
+    discount_percent?: number | null;
     qty: number;
   }) {
     try {
       const result = await cart.add(option.id, 1);
+      const effectivePrice = resolveEffectivePrice({
+        price: Number(option.price),
+        sale_price: option.sale_price ?? null,
+        discount_percent: option.discount_percent ?? null,
+      }).effectivePrice;
       const baseToast = {
         title: product.title,
         image_url: product.image_url,
         variant: option.condition,
-        price: option.price,
+        price: effectivePrice,
         action: { label: "View cart", href: "/cart" },
       };
       toast(
@@ -663,6 +708,31 @@ export default function ShopPageClient() {
     }
   }
 
+  async function openAdminEditor(
+    product: ShopProduct,
+    _imageUrl: string | null
+  ) {
+    if (!isAdmin) return;
+    const { data, error } = await supabase
+      .from("products")
+      .select(
+        "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)"
+      )
+      .eq("id", product.key)
+      .maybeSingle();
+
+    if (error || !data) {
+      toast({
+        intent: "error",
+        title: "Unable to open editor",
+        message: error?.message ?? "Product not found.",
+      });
+      return;
+    }
+
+    setAdminEditProduct(data as AdminProduct);
+  }
+
   const buildSocialProof = React.useCallback(
     (p: ShopProduct) => ({
       inCarts: cartMap[p.key] ?? null,
@@ -676,14 +746,14 @@ export default function ShopPageClient() {
     const sections: Array<{ key: string; title: string; items: ShopProduct[] }> = [];
     let shownProductIds = new Set<string>();
 
-    const filterByBrand = (items: ShopProduct[]) => {
+    const applyBrandFilter = (items: ShopProduct[]) => {
       if (brandTab === BRAND_ALL_KEY) return items;
       return items.filter((p) => normalizeBrandKey(p.brand) === brandTab);
     };
 
     const pushSection = (key: string, title: string, items: ShopProduct[]) => {
       const { list, updatedSet } = dedupeList(
-        filterByBrand(items),
+        applyBrandFilter(items),
         shownProductIds
       );
       const minCount = LIMITED_SECTION_COUNTS[key] ?? 0;
@@ -692,27 +762,36 @@ export default function ShopPageClient() {
       sections.push({ key, title, items: list });
       shownProductIds = updatedSet;
     };
+    const pushSectionNoDedupe = (
+      key: string,
+      title: string,
+      items: ShopProduct[]
+    ) => {
+      const list = applyBrandFilter(items);
+      if (!list.length) return;
+      sections.push({ key, title, items: list });
+    };
 
     if (hasSearch) {
-      const { list, updatedSet } = dedupeList(filterByBrand(filtered), shownProductIds);
+      const { list, updatedSet } = dedupeList(sortedFiltered, shownProductIds);
       shownProductIds = updatedSet;
       if (list.length) sections.push({ key: "search", title: "Search results", items: list });
       pushSection("also-like", "You may also like", takeN(sortedProducts, 12));
       return sections;
     }
 
+    pushSectionNoDedupe("all", "All items", sortedFiltered);
     pushSection("trending", "Trending", trendingNow);
     pushSection("new-arrivals", "New arrivals", newArrivals);
     pushSection("for-you", "For you", forYou);
     pushSection("because", "Because you searched", becauseYouSearched);
     pushSection("almost", "Almost sold out", almostSoldOut);
     pushSection("back", "Back in stock", backInStock);
-    pushSection("all", "All items", sortedProducts);
     return sections;
   }, [
     brandTab,
     hasSearch,
-    filtered,
+    sortedFiltered,
     sortedProducts,
     trendingNow,
     newArrivals,
@@ -726,9 +805,25 @@ export default function ShopPageClient() {
     () => feedSections.reduce((sum, section) => sum + section.items.length, 0),
     [feedSections]
   );
+  const allowSuggestions = sortBy === "relevance";
+  const mainSection = React.useMemo(() => {
+    return (
+      feedSections.find((section) => section.key === "all") ??
+      feedSections.find((section) => section.key === "search") ??
+      null
+    );
+  }, [feedSections]);
+  const suggestionSections = React.useMemo(
+    () =>
+      feedSections.filter(
+        (section) => section.key !== "all" && section.key !== "search"
+      ),
+    [feedSections]
+  );
 
   return (
-    <main className="px-3 py-5 sm:px-4 sm:py-6">
+    <>
+      <main className="px-3 py-5 sm:px-4 sm:py-6">
       {loading ? <div className="text-white/60">Loading...</div> : null}
       {err ? <div className="text-red-300">{err}</div> : null}
 
@@ -757,10 +852,19 @@ export default function ShopPageClient() {
         </div>
       ) : null}
 
-      <div ref={resultsRef} className="scroll-mt-32 md:scroll-mt-24">
-        <div className="sticky top-28 z-30 md:top-16">
+      <div
+        ref={resultsRef}
+        className="scroll-mt-32 md:scroll-mt-24"
+        style={{
+          scrollMarginTop: "calc(var(--shop-header-height, 0px) + 1rem)",
+        }}
+      >
+        <div
+          className="sticky z-30"
+          style={{ top: "var(--shop-header-height, 0px)" }}
+        >
           <div className="relative -mx-3 border-y border-white/10 bg-bg-900/80 backdrop-blur sm:-mx-4">
-            <div className="mx-auto flex max-w-6xl items-center px-0 py-2 sm:px-4">
+            <div className="mx-auto flex max-w-6xl items-center px-4 py-2">
               <div ref={brandRowRef} className="flex w-full items-center overflow-hidden">
                 <div className="inline-flex flex-nowrap items-center">
                   {visibleBrandTabs.map((b) => (
@@ -842,52 +946,108 @@ export default function ShopPageClient() {
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
-        {feedSections.map((section) => (
-          <React.Fragment key={section.title}>
+        {mainSection ? (
+          <>
             <div className="col-span-full flex flex-col gap-2 pt-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="text-xs font-semibold uppercase tracking-wide text-white/60">
-                {section.title}
+                {mainSection.title}
               </div>
               <div className="flex flex-wrap items-center gap-2 text-[11px] text-white/30">
-                <span>{section.items.length} items</span>
-                {LIMITED_SECTION_COUNTS[section.key] &&
-                section.items.length >
-                  LIMITED_SECTION_COUNTS[section.key] ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setExpandedSections((prev) => ({
-                        ...prev,
-                        [section.key]: !prev[section.key],
-                      }))
-                    }
-                    className="rounded-full border border-white/10 bg-bg-950/40 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/70 hover:bg-bg-950/60"
-                  >
-                    {expandedSections[section.key] ? "Show less" : "Show more"}
-                  </button>
-                ) : null}
+                <span>{mainSection.items.length} items</span>
               </div>
             </div>
-            {(LIMITED_SECTION_COUNTS[section.key] &&
-            !expandedSections[section.key]
-              ? section.items.slice(
-                  0,
-                  LIMITED_SECTION_COUNTS[section.key]
-                )
-              : section.items
-            ).map((p) => (
-              <ProductCard
-                key={p.key}
-                product={p}
-                onAddToCart={(opt) => onAdd(p, opt)}
-                onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
-                onProductClick={(item) => recordProductClick(item.key)}
-                socialProof={buildSocialProof(p)}
-                relatedPool={sortedProducts}
-              />
-            ))}
-          </React.Fragment>
-        ))}
+            {(() => {
+              const nodes: React.ReactNode[] = [];
+              const suggestionQueue = allowSuggestions
+                ? suggestionSections.slice()
+                : [];
+              const insertAfter = [8, 20, 32, 44];
+              const resolvedInsertAfter = insertAfter.length
+                ? insertAfter
+                : [8];
+              const shouldInsert = (index: number) =>
+                resolvedInsertAfter.includes(index + 1) && suggestionQueue.length;
+              const renderSectionBlock = (
+                section: (typeof suggestionSections)[number]
+              ) => {
+                const cap = LIMITED_SECTION_COUNTS[section.key] ?? 4;
+                const expanded = Boolean(expandedSections[section.key]);
+                const items = expanded ? section.items : section.items.slice(0, cap);
+                nodes.push(
+                  <div
+                    key={`section-${section.key}`}
+                    className="col-span-full mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="text-xs font-semibold uppercase tracking-wide text-white/60">
+                      {section.title}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-white/30">
+                      <span>{section.items.length} items</span>
+                      {section.items.length > cap ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedSections((prev) => ({
+                              ...prev,
+                              [section.key]: !prev[section.key],
+                            }))
+                          }
+                          className="rounded-full border border-white/10 bg-bg-950/40 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/70 hover:bg-bg-950/60"
+                        >
+                          {expanded ? "Show less" : "Show more"}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+                items.forEach((p) => {
+                  nodes.push(
+                    <ProductCard
+                      key={`${section.key}-${p.key}`}
+                      product={p}
+                      onAddToCart={(opt) => onAdd(p, opt)}
+                      onImageClick={
+                        isAdmin
+                          ? (item, imageUrl) => openAdminEditor(item, imageUrl)
+                          : undefined
+                      }
+                      onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
+                      onProductClick={(item) => recordProductClick(item.key)}
+                      socialProof={buildSocialProof(p)}
+                      relatedPool={sortedProducts}
+                    />
+                  );
+                });
+              };
+              mainSection.items.forEach((p, index) => {
+                nodes.push(
+                  <ProductCard
+                    key={`all-${p.key}`}
+                    product={p}
+                    onAddToCart={(opt) => onAdd(p, opt)}
+                    onImageClick={
+                      isAdmin
+                        ? (item, imageUrl) => openAdminEditor(item, imageUrl)
+                        : undefined
+                    }
+                    onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
+                    onProductClick={(item) => recordProductClick(item.key)}
+                    socialProof={buildSocialProof(p)}
+                    relatedPool={sortedProducts}
+                  />
+                );
+                if (shouldInsert(index)) {
+                  const section = suggestionQueue.shift();
+                  if (section) renderSectionBlock(section);
+                }
+              });
+              while (suggestionQueue.length) {
+                renderSectionBlock(suggestionQueue.shift()!);
+              }
+              return nodes;
+            })()}
+          </>
+        ) : null}
       </div>
 
       {!loading && !err && feedItemCount === 0 ? (
@@ -905,9 +1065,24 @@ export default function ShopPageClient() {
           Back to top
         </button>
       ) : null}
-    </main>
+      </main>
+
+      {adminEditProduct ? (
+        <InventoryEditorDrawer
+          product={adminEditProduct}
+          onClose={() => {
+            setAdminEditProduct(null);
+          }}
+          onSaved={() => {
+            setReloadToken((prev) => prev + 1);
+            setAdminEditProduct(null);
+          }}
+        />
+      ) : null}
+    </>
   );
 }
+
 
 
 

@@ -11,6 +11,7 @@ import { toast } from "@/components/ui/toast";
 import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 import { normalizeBarcode } from "@/lib/barcode";
 import { conditionSortOrder, formatConditionLabel } from "@/lib/conditions";
+import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
 
 export type AdminVariant = {
   id: string;
@@ -143,14 +144,20 @@ function AdminProductCard({
       }}
       className="group h-full rounded-xl sm:rounded-2xl overflow-hidden bg-paper/5 border border-white/10 text-left shadow-sm hover:border-accent-500/40 hover:shadow-accent-500/10 transition"
     >
-      <div className="aspect-[4/3] bg-black/10 flex items-center justify-center">
+      <div className="aspect-[4/3] bg-black/10 flex items-center justify-center overflow-hidden">
         {product.image_urls?.[0] ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={product.image_urls[0]}
-            alt={product.title}
-            className="h-full w-full object-contain bg-neutral-50"
-          />
+          (() => {
+            const preview = parseImageCrop(product.image_urls?.[0] ?? "");
+            return (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={preview.src}
+                alt={product.title}
+                className="h-full w-full object-contain bg-neutral-50"
+                style={cropStyle(preview.crop)}
+              />
+            );
+          })()
         ) : (
           <div className="text-white/60 text-sm">No image</div>
         )}

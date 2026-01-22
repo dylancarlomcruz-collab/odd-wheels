@@ -704,6 +704,11 @@ alter table public.product_variants
   add column if not exists issue_photo_urls text[] null,
   add column if not exists public_notes text null;
 
+-- Sale pricing support for variants
+alter table public.product_variants
+  add column if not exists sale_price numeric,
+  add column if not exists discount_percent numeric;
+
 alter table public.product_variants
   drop constraint if exists product_variants_condition_check;
 

@@ -12,6 +12,7 @@ import { mapProductsToShopProducts } from "@/lib/shopProducts";
 import { readRecentViews } from "@/lib/recentViews";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import { resolveEffectivePrice } from "@/lib/pricing";
 
 export default function SearchContent() {
   const sp = useSearchParams();
@@ -92,11 +93,13 @@ export default function SearchContent() {
         return scale === scaleFilter.toUpperCase();
       });
     }
+    const minEffective = (p: typeof products[number]) =>
+      p.minEffectivePrice ?? p.minPrice;
     if (minOk) {
-      list = list.filter((p) => p.minPrice >= min);
+      list = list.filter((p) => minEffective(p) >= min);
     }
     if (maxOk) {
-      list = list.filter((p) => p.minPrice <= max);
+      list = list.filter((p) => minEffective(p) <= max);
     }
 
     if (sortBy === "newest") {
@@ -106,17 +109,19 @@ export default function SearchContent() {
           new Date(a.created_at ?? 0).getTime()
       );
     } else if (sortBy === "price_low") {
-      list.sort((a, b) => a.minPrice - b.minPrice);
+      list.sort((a, b) => minEffective(a) - minEffective(b));
     } else if (sortBy === "price_high") {
-      list.sort((a, b) => b.minPrice - a.minPrice);
+      list.sort((a, b) => minEffective(b) - minEffective(a));
     } else if (sortBy === "popular") {
       list.sort(
         (a, b) => (b.popularityScore ?? 0) - (a.popularityScore ?? 0)
       );
     } else if (sortBy === "best_value") {
       list.sort((a, b) => {
-        const aValue = (a.popularityScore ?? 0) / Math.max(a.minPrice, 1);
-        const bValue = (b.popularityScore ?? 0) / Math.max(b.minPrice, 1);
+        const aValue =
+          (a.popularityScore ?? 0) / Math.max(minEffective(a), 1);
+        const bValue =
+          (b.popularityScore ?? 0) / Math.max(minEffective(b), 1);
         return bValue - aValue;
       });
     }
@@ -152,7 +157,7 @@ export default function SearchContent() {
           const { data } = await supabase
             .from("products")
             .select(
-              "id, title, brand, model, variation, image_urls, is_active, created_at, product_variants(id, condition, issue_notes, issue_photo_urls, public_notes, price, qty)"
+              "id, title, brand, model, variation, image_urls, is_active, created_at, product_variants(id, condition, issue_notes, issue_photo_urls, public_notes, price, sale_price, discount_percent, qty)"
             )
             .eq("is_active", true)
             .or(orClause)
@@ -173,7 +178,7 @@ export default function SearchContent() {
           const { data: sellerProducts } = await supabase
             .from("products")
             .select(
-              "id, title, brand, model, variation, image_urls, is_active, created_at, product_variants(id, condition, issue_notes, issue_photo_urls, public_notes, price, qty)"
+              "id, title, brand, model, variation, image_urls, is_active, created_at, product_variants(id, condition, issue_notes, issue_photo_urls, public_notes, price, sale_price, discount_percent, qty)"
             )
             .in("id", sellerIds);
           sellers = mapProductsToShopProducts((sellerProducts as any[]) ?? []);
@@ -189,7 +194,7 @@ export default function SearchContent() {
           const { data: recentProducts } = await supabase
             .from("products")
             .select(
-              "id, title, brand, model, variation, image_urls, is_active, created_at, product_variants(id, condition, issue_notes, issue_photo_urls, public_notes, price, qty)"
+              "id, title, brand, model, variation, image_urls, is_active, created_at, product_variants(id, condition, issue_notes, issue_photo_urls, public_notes, price, sale_price, discount_percent, qty)"
             )
             .in("id", recentIds);
           recents = mapProductsToShopProducts((recentProducts as any[]) ?? []);
@@ -216,11 +221,16 @@ export default function SearchContent() {
   async function onAdd(product: any, option: any) {
     try {
       const result = await cart.add(option.id, 1);
+      const effectivePrice = resolveEffectivePrice({
+        price: Number(option.price),
+        sale_price: option.sale_price ?? null,
+        discount_percent: option.discount_percent ?? null,
+      }).effectivePrice;
       const baseToast = {
         title: product.title,
         image_url: product.image_url,
         variant: option.condition,
-        price: option.price,
+        price: effectivePrice,
         action: { label: "View cart", href: "/cart" },
       };
       toast(
@@ -357,7 +367,7 @@ export default function SearchContent() {
           {closestMatches.length ? (
             <section className="space-y-3">
               <div className="text-lg font-semibold">Closest matches</div>
-              <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4">
                 {closestMatches.map((p) => (
                   <ProductCard
                     key={p.key}
@@ -374,7 +384,7 @@ export default function SearchContent() {
           {topSellers.length ? (
             <section className="space-y-3">
               <div className="text-lg font-semibold">Top sellers</div>
-              <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4">
                 {topSellers.map((p) => (
                   <ProductCard
                     key={p.key}
@@ -391,7 +401,7 @@ export default function SearchContent() {
           {recentlyViewed.length ? (
             <section className="space-y-3">
               <div className="text-lg font-semibold">Recently viewed</div>
-              <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4">
                 {recentlyViewed.map((p) => (
                   <ProductCard
                     key={p.key}
@@ -410,7 +420,7 @@ export default function SearchContent() {
           No items match your filters. Try clearing some filters.
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4">
           {filteredProducts.map((p) => (
             <ProductCard
               key={p.key}

@@ -12,6 +12,8 @@ export type Variant = {
   issue_photo_urls: string[] | null;
   public_notes: string | null;
   price: number;
+  sale_price?: number | null;
+  discount_percent?: number | null;
   cost: number | null;
   qty: number;
   ship_class: string | null;
@@ -38,7 +40,9 @@ export function useProductDetail(productId: string) {
       setLoading(true);
       const { data, error } = await supabase
         .from("products")
-        .select("id,title,brand,model,variation,image_urls,is_active, product_variants(id,product_id,condition,issue_notes,issue_photo_urls,public_notes,price,cost,qty,ship_class)")
+        .select(
+          "id,title,brand,model,variation,image_urls,is_active, product_variants(id,product_id,condition,issue_notes,issue_photo_urls,public_notes,price,sale_price,discount_percent,cost,qty,ship_class)"
+        )
         .eq("id", productId)
         .maybeSingle();
 
