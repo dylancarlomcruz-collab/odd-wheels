@@ -387,12 +387,12 @@ export default function ProductCard({
           <button
             type="button"
             onClick={openPreview}
-            className="min-h-[2.6rem] text-left text-sm sm:min-h-[3rem] sm:text-base text-white font-semibold line-clamp-2"
+            className="min-h-[2.8rem] text-left text-sm leading-snug sm:min-h-[3.2rem] sm:text-base text-white font-semibold line-clamp-2"
           >
             {product.title}
           </button>
 
-          <div className="mt-2 sm:mt-3 flex items-center justify-between">
+          <div className="mt-2 sm:mt-3 flex min-h-[1.4rem] items-center justify-between">
             <div className="text-price text-sm sm:text-base">
               {displayPrice}
             </div>
@@ -422,7 +422,7 @@ export default function ProductCard({
           </div>
 
           <div className="mt-2 sm:mt-3 space-y-2">
-            <div className="flex flex-wrap gap-2">
+            <div className="flex min-h-[2rem] flex-nowrap gap-2 overflow-x-auto pb-0.5">
               {product.options.map((o) => {
                 const isSelected = o.id === selectedId;
                 return (
