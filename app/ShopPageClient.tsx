@@ -40,9 +40,9 @@ const PREFERRED_BRAND_KEYS: Array<{ label: string; keys: string[] }> = [
 ];
 const BRAND_BUTTON_STYLES = {
   active:
-    "bg-sky-500/20 text-sky-100 border-sky-400/50 shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]",
+    "bg-sky-500/20 text-sky-900 dark:text-sky-100 border-sky-400/50 shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]",
   idle:
-    "bg-bg-950/40 text-white/70 border-white/10 hover:bg-sky-500/10 hover:text-sky-100",
+    "bg-bg-950/40 text-white/70 border-white/10 hover:bg-sky-500/10 hover:text-sky-900 dark:hover:text-sky-100",
 };
 
 function normalizeBrandKey(value: string | null | undefined) {

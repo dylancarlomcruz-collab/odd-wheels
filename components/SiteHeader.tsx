@@ -450,7 +450,7 @@ export function SiteHeader() {
                     <button
                       type="button"
                       onClick={() => runSearch(q, "shop")}
-                      className="flex w-full items-center justify-between rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-left text-sm text-amber-100 hover:bg-amber-500/20"
+                      className="flex w-full items-center justify-between rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-left text-sm text-amber-900 dark:text-amber-100 hover:bg-amber-500/20"
                     >
                       <span className="font-medium">
                         Search for "{q.trim()}"
@@ -539,19 +539,19 @@ export function SiteHeader() {
           {isStaff && staffTotal > 0 ? (
             <div className="hidden items-center gap-2 md:flex">
               {staffCounts.pendingApproval > 0 ? (
-                <div className="inline-flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs text-amber-100">
+                <div className="inline-flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-100">
                   <ClipboardList className="h-3.5 w-3.5" />
                   {staffCounts.pendingApproval}
                 </div>
               ) : null}
               {profile?.role === "admin" && staffCounts.sellTradePending > 0 ? (
-                <div className="inline-flex items-center gap-2 rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-1 text-xs text-sky-100">
+                <div className="inline-flex items-center gap-2 rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-1 text-xs text-sky-900 dark:text-sky-100">
                   <ArrowLeftRight className="h-3.5 w-3.5" />
                   {staffCounts.sellTradePending}
                 </div>
               ) : null}
               {staffCounts.pendingShipping > 0 ? (
-                <div className="inline-flex items-center gap-2 rounded-full border border-indigo-500/40 bg-indigo-500/10 px-3 py-1 text-xs text-indigo-100">
+                <div className="inline-flex items-center gap-2 rounded-full border border-indigo-500/40 bg-indigo-500/10 px-3 py-1 text-xs text-indigo-900 dark:text-indigo-100">
                   <Truck className="h-3.5 w-3.5" />
                   {staffCounts.pendingShipping}
                 </div>
@@ -628,7 +628,7 @@ export function SiteHeader() {
                   <button
                     type="button"
                     onClick={() => runSearch(q, "shop")}
-                    className="flex w-full items-center justify-between rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-left text-sm text-amber-100 hover:bg-amber-500/20"
+                    className="flex w-full items-center justify-between rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-left text-sm text-amber-900 dark:text-amber-100 hover:bg-amber-500/20"
                   >
                     <span className="font-medium">
                       Search for "{q.trim()}"
@@ -728,7 +728,7 @@ export function SiteHeader() {
                       className={[
                         "inline-flex h-8 w-full items-center justify-center rounded-lg border px-2 text-[10px] font-semibold uppercase tracking-wide transition sm:h-9 sm:px-3 sm:text-[11px]",
                         active
-                          ? "border-amber-400/60 bg-amber-500/20 text-amber-100"
+                          ? "border-amber-400/60 bg-amber-500/20 text-amber-900 dark:text-amber-100"
                           : "border-white/10 bg-bg-950/20 text-white/70 hover:bg-bg-950/40",
                       ].join(" ")}
                     >
@@ -753,7 +753,7 @@ export function SiteHeader() {
                       className={[
                         "inline-flex h-8 w-full items-center justify-center rounded-lg border px-2 text-[10px] font-semibold uppercase tracking-wide transition sm:h-9 sm:px-3 sm:text-[11px]",
                         active
-                          ? "border-amber-400/60 bg-amber-500/20 text-amber-100"
+                          ? "border-amber-400/60 bg-amber-500/20 text-amber-900 dark:text-amber-100"
                           : "border-white/10 bg-bg-950/20 text-white/70 hover:bg-bg-950/40",
                       ].join(" ")}
                     >

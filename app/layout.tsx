@@ -11,6 +11,20 @@ import { ShopSortProvider } from "@/hooks/useShopSort";
 
 const inter = Inter({ subsets: ["latin"] });
 
+const themeScript = `
+(() => {
+  try {
+    const stored = window.localStorage.getItem("theme");
+    const theme = stored || "dark";
+    if (theme === "dark") {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+  } catch {}
+})();
+`;
+
 export const metadata: Metadata = {
   title: "Odd Wheels PH",
   description: "Odd Wheels PH",
@@ -33,6 +47,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className={inter.className}>
         <ThemeProvider>
           <AuthProvider>
