@@ -35,7 +35,8 @@
   --glow-2: 255 190 140;
 }
 
-html.dark {
+html.dark,
+body.dark {
   color-scheme: dark;
   --fg: 255 255 255;
   --paper: 255 255 255;
