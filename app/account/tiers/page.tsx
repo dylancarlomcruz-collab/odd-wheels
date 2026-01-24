@@ -13,7 +13,7 @@ import {
   TIER_THRESHOLDS,
   type Tier,
 } from "@/lib/tier";
-import { type VoucherWallet } from "@/lib/vouchers";
+import { type Voucher, type VoucherWallet } from "@/lib/vouchers";
 
 function formatDateShort(value: string | null | undefined) {
   if (!value) return "-";
@@ -52,6 +52,10 @@ const SPEND_CYCLE_MILESTONES = [
 ];
 
 type TierPerks = (typeof TIER_PERKS)[Tier];
+
+type VoucherWalletRow = Omit<VoucherWallet, "voucher"> & {
+  voucher: Voucher | Voucher[] | null;
+};
 
 function tierAccentClass(tier: Tier) {
   if (tier === "PLATINUM") return "border-sky-500/40 bg-sky-500/10 text-sky-100";
@@ -171,8 +175,15 @@ export default function AccountTierPage() {
         setVoucherError(error.message || "Failed to load vouchers.");
         setVoucherWallet([]);
       } else {
-        const rows = (data as VoucherWallet[]) ?? [];
-        setVoucherWallet(rows.filter((row) => Boolean((row as any)?.voucher)));
+        const rows = (data ?? []) as VoucherWalletRow[];
+        const normalized = rows
+          .map((row) => {
+            const voucher = Array.isArray(row.voucher) ? row.voucher[0] : row.voucher;
+            if (!voucher) return null;
+            return { ...row, voucher } as VoucherWallet;
+          })
+          .filter((row): row is VoucherWallet => Boolean(row));
+        setVoucherWallet(normalized);
       }
       setVoucherLoading(false);
     }

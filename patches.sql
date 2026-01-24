@@ -1917,3 +1917,20 @@ on conflict (code) do update
       min_subtotal = excluded.min_subtotal,
       shipping_cap = excluded.shipping_cap,
       is_active = excluded.is_active;
+
+create or replace function public.fn_tier_from_spend(p_spend numeric)
+returns text
+language plpgsql
+as $$
+begin
+  if coalesce(p_spend, 0) >= 10000 then
+    return 'PLATINUM';
+  elsif coalesce(p_spend, 0) >= 5000 then
+    return 'GOLD';
+  elsif coalesce(p_spend, 0) >= 2000 then
+    return 'SILVER';
+  else
+    return 'CLASSIC';
+  end if;
+end;
+$$;

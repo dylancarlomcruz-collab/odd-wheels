@@ -46,10 +46,14 @@ import {
 import { suggestedInsuranceFee } from "@/lib/shipping/config";
 import { resolveEffectivePrice } from "@/lib/pricing";
 import { protectorUnitFee } from "@/lib/addons";
-import { getVoucherEligibility, type VoucherWallet } from "@/lib/vouchers";
+import { getVoucherEligibility, type Voucher, type VoucherWallet } from "@/lib/vouchers";
 
 type ShippingMethod = "LALAMOVE" | "JNT" | "LBC" | "PICKUP";
 const PHONE_LENGTH = PHONE_MAX_LENGTH;
+
+type VoucherWalletRow = Omit<VoucherWallet, "voucher"> & {
+  voucher: Voucher | Voucher[] | null;
+};
 
 const LALAMOVE_WINDOW_LABELS = new Map<LalamoveWindowKey, string>(
   LALAMOVE_WINDOWS.map((window) => [window.key, window.label] as const)
@@ -636,8 +640,15 @@ function CheckoutContent() {
         setVoucherError(error.message || "Failed to load vouchers.");
         setVoucherWallet([]);
       } else {
-        const rows = (data as VoucherWallet[]) ?? [];
-        setVoucherWallet(rows.filter((row) => Boolean((row as any)?.voucher)));
+        const rows = (data ?? []) as VoucherWalletRow[];
+        const normalized = rows
+          .map((row) => {
+            const voucher = Array.isArray(row.voucher) ? row.voucher[0] : row.voucher;
+            if (!voucher) return null;
+            return { ...row, voucher } as VoucherWallet;
+          })
+          .filter((row): row is VoucherWallet => Boolean(row));
+        setVoucherWallet(normalized);
       }
       setVoucherLoading(false);
     }
