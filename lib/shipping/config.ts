@@ -11,7 +11,8 @@ export type ShipClass =
   | "HOT_WHEELS_MAINLINE"
   | "HOT_WHEELS_PREMIUM"
   | "LOOSE_NO_BOX"
-  | "LALAMOVE";
+  | "LALAMOVE"
+  | "DIORAMA";
 
 export type JntPouch = "SMALL" | "MEDIUM"; // Large not available per SRS
 export type LbcPackage = "N_SAKTO" | "MINIBOX" | "SMALL_BOX"; // Medium requires approval (not auto)
@@ -48,6 +49,7 @@ export const JNT_CAPACITY: Record<JntPouch, Record<ShipClass, number>> = {
     HOT_WHEELS_PREMIUM: 0,
     LOOSE_NO_BOX: 10,
     LALAMOVE: 0,
+    DIORAMA: 0,
   },
   MEDIUM: {
     MINI_GT: 8,
@@ -60,6 +62,7 @@ export const JNT_CAPACITY: Record<JntPouch, Record<ShipClass, number>> = {
     HOT_WHEELS_PREMIUM: 6,
     LOOSE_NO_BOX: 30,
     LALAMOVE: 0,
+    DIORAMA: 0,
   }, // x4 of small
 };
 
@@ -75,6 +78,7 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     HOT_WHEELS_PREMIUM: 0,
     LOOSE_NO_BOX: 4,
     LALAMOVE: 0,
+    DIORAMA: 0,
   },
   MINIBOX: {
     MINI_GT: 9,
@@ -87,6 +91,7 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     HOT_WHEELS_PREMIUM: 6,
     LOOSE_NO_BOX: 20,
     LALAMOVE: 0,
+    DIORAMA: 0,
   },
   SMALL_BOX: {
     MINI_GT: Math.floor(9 * 3.5),
@@ -99,6 +104,7 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     HOT_WHEELS_PREMIUM: 16,
     LOOSE_NO_BOX: 20,
     LALAMOVE: 0,
+    DIORAMA: 0,
   },
 };
 

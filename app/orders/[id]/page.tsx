@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
 import { RequireAuth } from "@/components/auth/RequireAuth";
+import { useAuth } from "@/components/auth/AuthProvider";
 import { useOrder } from "@/hooks/useOrders";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -18,6 +19,7 @@ import {
   getBadges,
   normalizeShippingStatus,
 } from "@/lib/orderBadges";
+import { isPlatinumTier } from "@/lib/tier";
 
 type PaymentMethod = {
   id: string;
@@ -268,6 +270,7 @@ async function uploadReceipt(file: File, orderId: string) {
 function OrderDetailContent() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const { user } = useAuth();
   const id = params.id;
   const { order, items, loading } = useOrder(id);
 
@@ -288,6 +291,9 @@ function OrderDetailContent() {
     null
   );
   const [copyMsg, setCopyMsg] = React.useState<string | null>(null);
+  const [tier, setTier] = React.useState<string | null>(null);
+  const [events, setEvents] = React.useState<any[]>([]);
+  const [eventsLoading, setEventsLoading] = React.useState(false);
 
   const deadline =
     order?.expires_at ?? order?.payment_deadline ?? order?.reserved_expires_at ?? null;
@@ -398,6 +404,67 @@ function OrderDetailContent() {
       mounted = false;
     };
   }, [order?.id, order?.payment_method, order?.payment_status, order?.status]);
+
+  React.useEffect(() => {
+    let mounted = true;
+    async function loadTier() {
+      if (!user) {
+        setTier(null);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("tier")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (!mounted) return;
+      if (error) {
+        console.error("Failed to load tier:", error);
+        setTier(null);
+        return;
+      }
+      setTier((data as any)?.tier ?? "SILVER");
+    }
+
+    loadTier();
+    return () => {
+      mounted = false;
+    };
+  }, [user?.id]);
+
+  React.useEffect(() => {
+    let mounted = true;
+    async function loadEvents() {
+      if (!order || !isPlatinumTier(tier as any)) {
+        setEvents([]);
+        setEventsLoading(false);
+        return;
+      }
+
+      setEventsLoading(true);
+      const { data, error } = await supabase
+        .from("order_events")
+        .select("id,event_type,message,created_at")
+        .eq("order_id", order.id)
+        .order("created_at", { ascending: true });
+
+      if (!mounted) return;
+      if (error) {
+        console.error("Failed to load order events:", error);
+        setEvents([]);
+      } else {
+        setEvents((data as any[]) ?? []);
+      }
+      setEventsLoading(false);
+    }
+
+    loadEvents();
+    return () => {
+      mounted = false;
+    };
+  }, [order?.id, tier]);
 
   const left = React.useMemo(() => msLeft(deadline), [deadline, tick]);
   const showTimer =
@@ -958,17 +1025,36 @@ function OrderDetailContent() {
                         <div className="text-xs text-white/60">
                           {formatConditionLabel(it.condition, { upper: true })} x {qty}
                         </div>
-                        {it.issue_notes ? (
-                          String(it.condition) === "near_mint" ? (
-                            <div className="text-xs text-white/70 truncate">
-                              Condition note: {it.issue_notes}
+                        {(() => {
+                          const noteValue = String(
+                            it.public_notes ?? it.issue_notes ?? ""
+                          ).trim();
+                          if (!noteValue) return null;
+                          const noteTone =
+                            String(it.condition) === "with_issues"
+                              ? "text-red-200/80"
+                              : String(it.condition) === "near_mint"
+                                ? "text-amber-200/80"
+                                : "text-white/70";
+                          const indicatorTone =
+                            String(it.condition) === "with_issues"
+                              ? "bg-red-400"
+                              : String(it.condition) === "near_mint"
+                                ? "bg-amber-400"
+                                : "";
+                          const showIndicator = indicatorTone.length > 0;
+                          return (
+                            <div className={`text-xs ${noteTone} flex items-center gap-2 truncate`}>
+                              {showIndicator ? (
+                                <span
+                                  className={`h-2 w-2 rounded-full ${indicatorTone}`}
+                                  aria-hidden="true"
+                                />
+                              ) : null}
+                              <span>Notes: {noteValue}</span>
                             </div>
-                          ) : String(it.condition) === "with_issues" ? (
-                            <div className="text-xs text-red-200/80 truncate">
-                              Issue: {it.issue_notes}
-                            </div>
-                          ) : null
-                        ) : null}
+                          );
+                        })()}
                       </div>
                     </div>
                     <div className="text-sm text-white/80">
@@ -1049,6 +1135,12 @@ function OrderDetailContent() {
                 label="Shipping fee"
                 value={formatPHP(Number(order.shipping_fee ?? 0))}
               />
+              {Number(order.shipping_discount ?? 0) > 0 ? (
+                <Row
+                  label="Shipping discount"
+                  value={`-${formatPHP(Number(order.shipping_discount ?? 0))}`}
+                />
+              ) : null}
               <Row
                 label="COP fee"
                 value={formatPHP(Number(order.cop_fee ?? 0))}
@@ -1166,6 +1258,52 @@ function OrderDetailContent() {
               ) : null}
             </CardBody>
           </Card>
+
+          {isPlatinumTier(tier as any) ? (
+            <Card>
+              <CardHeader>
+                <div className="font-semibold">Tracking timeline</div>
+              </CardHeader>
+              <CardBody className="space-y-3 text-sm text-white/70">
+                {eventsLoading ? (
+                  <div className="text-white/60">Loading timeline...</div>
+                ) : events.length === 0 ? (
+                  <div className="text-white/60">No tracking events yet.</div>
+                ) : (
+                  <div className="space-y-3">
+                    {events.map((event) => {
+                      const label = formatStatusLabel(event.event_type);
+                      const when = event.created_at
+                        ? new Date(event.created_at).toLocaleString("en-PH", {
+                            month: "short",
+                            day: "numeric",
+                            year: "numeric",
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })
+                        : "-";
+                      return (
+                        <div
+                          key={event.id}
+                          className="rounded-xl border border-white/10 bg-bg-900/30 p-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="font-semibold text-white/90">{label}</div>
+                            <div className="text-xs text-white/50">{when}</div>
+                          </div>
+                          {event.message ? (
+                            <div className="mt-1 text-xs text-white/60">
+                              {event.message}
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+          ) : null}
         </>
       )}
     </main>

@@ -83,12 +83,18 @@ function normalizeBarcodeResponse(raw: any) {
     raw?.items?.[0] ??
     raw?.data?.[0] ??
     raw;
-  const title =
+  const rawTitle =
     product?.title ??
     product?.product_name ??
     raw?.title ??
     raw?.product_name ??
     "";
+  let title = String(rawTitle ?? "").trim();
+  if (/\btomica\b/i.test(title) && /\btakara\s+tomy\b/i.test(title)) {
+    title = title.replace(/\btakara\s+tomy\b/gi, "").replace(/\s{2,}/g, " ").trim();
+  } else if (/\btakara\s+tomy\b/i.test(title)) {
+    title = title.replace(/\btakara\s+tomy\b/gi, "Takara").replace(/\s{2,}/g, " ").trim();
+  }
   const brand =
     product?.brand ??
     product?.manufacturer ??
@@ -110,8 +116,20 @@ function normalizeBarcodeResponse(raw: any) {
     (product?.image ? [product.image] : raw?.image ? [raw.image] : []);
 
   const inferred = inferFieldsFromTitle(title);
-  const normalizedBrand = normalizeBrandAlias(brand) ?? inferred.brand ?? brand;
-  const normalizedTitle = normalizeLookupTitle(title, normalizedBrand ?? inferred.brand ?? null);
+  let normalizedBrand = normalizeBrandAlias(brand);
+  if (/\btakara\s+tomy\b/i.test(String(brand ?? ""))) {
+    normalizedBrand = "Takara";
+  }
+  if (inferred.brand === "Tomica") {
+    normalizedBrand = "Tomica";
+  }
+  if (!normalizedBrand) {
+    normalizedBrand = inferred.brand ?? brand;
+  }
+  const normalizedTitle = normalizeLookupTitle(
+    title,
+    normalizedBrand ?? inferred.brand ?? null
+  );
 
   return {
     title: normalizedTitle || title,

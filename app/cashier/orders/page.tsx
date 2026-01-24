@@ -228,7 +228,14 @@ export default function CashierOrdersPage() {
                               it?.condition ?? it?.product_variant?.condition ?? ""
                             ).toLowerCase();
                             const isNearMint = itemCondition === "near_mint";
-                            const notes = String(it?.issue_notes ?? it?.product_variant?.issue_notes ?? "").trim();
+                            const isWithIssues = itemCondition === "with_issues";
+                            const notes = String(
+                              it?.public_notes ??
+                                it?.issue_notes ??
+                                it?.product_variant?.public_notes ??
+                                it?.product_variant?.issue_notes ??
+                                ""
+                            ).trim();
                             const price = getItemPrice(it);
                             const qty = Number(it?.qty ?? 1);
                             const line = Number(it?.line_total ?? price * qty);
@@ -248,11 +255,23 @@ export default function CashierOrdersPage() {
                                   </div>
                                   {notes ? (
                                     <div
-                                      className={`mt-1 text-xs ${
-                                        isNearMint ? "text-white/60" : "text-yellow-200"
+                                      className={`mt-1 text-xs flex items-center gap-2 ${
+                                        isWithIssues
+                                          ? "text-red-200/80"
+                                          : isNearMint
+                                            ? "text-amber-200/80"
+                                            : "text-white/60"
                                       }`}
                                     >
-                                      {isNearMint ? "Condition note" : "Notes"}: {notes}
+                                      {isWithIssues || isNearMint ? (
+                                        <span
+                                          className={`h-2 w-2 rounded-full ${
+                                            isWithIssues ? "bg-red-400" : "bg-amber-400"
+                                          }`}
+                                          aria-hidden="true"
+                                        />
+                                      ) : null}
+                                      <span>Notes: {notes}</span>
                                     </div>
                                   ) : null}
                                 </div>

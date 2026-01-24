@@ -21,7 +21,6 @@ export type AdminVariant = {
     | "near_mint"
     | "unsealed"
     | "with_issues"
-    | "diorama"
     | "blistered"
     | "sealed_blister"
     | "unsealed_blister";
@@ -213,7 +212,10 @@ function AdminProductCard({
                         : "border-white/10 bg-paper/5 text-white/70 hover:bg-paper/10",
                     ].join(" ")}
                   >
-                    {formatConditionLabel(v.condition, { upper: true })}
+                    {formatConditionLabel(v.condition, {
+                      upper: true,
+                      shipClass: v.ship_class,
+                    })}
                   </button>
                 );
               })}
@@ -272,6 +274,7 @@ export function InventoryBrowseGrid({
   const [brandTab, setBrandTab] = React.useState("All");
   const [inStockOnly, setInStockOnly] = React.useState(true);
   const [showSoldOut, setShowSoldOut] = React.useState(false);
+  const [noPhotoOnly, setNoPhotoOnly] = React.useState(false);
   const [scannerOpen, setScannerOpen] = React.useState(false);
   const searchTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
     null
@@ -283,7 +286,7 @@ export function InventoryBrowseGrid({
   const scanActiveRef = React.useRef(false);
 
   const effectiveTerm = scanTerm || searchTerm;
-  const filtersKey = `${effectiveTerm}|${brandTab}|${inStockOnly}|${showSoldOut}|${refreshToken}`;
+  const filtersKey = `${effectiveTerm}|${brandTab}|${inStockOnly}|${showSoldOut}|${noPhotoOnly}|${refreshToken}`;
 
   const brands = React.useMemo(() => {
     const set = new Set<string>();
@@ -297,14 +300,16 @@ export function InventoryBrowseGrid({
     return rows.filter((p) => {
       const { totalQty } = derivedTotals(p);
       const isSoldOut = totalQty <= 0 || !p.is_active;
+      const hasPhoto = Array.isArray(p.image_urls) && p.image_urls.length > 0;
       if (brandTab !== "All" && p.brand !== brandTab) return false;
       if (showSoldOut && !isSoldOut) return false;
       if (inStockOnly && !showSoldOut && isSoldOut) {
         return false;
       }
+      if (noPhotoOnly && hasPhoto) return false;
       return true;
     });
-  }, [rows, brandTab, inStockOnly, showSoldOut]);
+  }, [rows, brandTab, inStockOnly, showSoldOut, noPhotoOnly]);
 
   const loadPage = React.useCallback(
     async (pageIndex: number, replace = false) => {
@@ -364,6 +369,9 @@ export function InventoryBrowseGrid({
         if (applyStockFilter) {
           pQuery = pQuery.gt("product_variants.qty", 0);
         }
+        if (noPhotoOnly) {
+          pQuery = pQuery.or("image_urls.is.null,image_urls.eq.{}");
+        }
         if (!allowArchived) {
           pQuery = pQuery.eq("is_active", true);
         }
@@ -400,6 +408,9 @@ export function InventoryBrowseGrid({
         if (applyStockFilter) {
           query = query.gt("product_variants.qty", 0);
         }
+        if (noPhotoOnly) {
+          query = query.or("image_urls.is.null,image_urls.eq.{}");
+        }
         if (!allowArchived) {
           query = query.eq("is_active", true);
         }
@@ -418,7 +429,7 @@ export function InventoryBrowseGrid({
       setRows((prev) => (replace ? batch : [...prev, ...batch]));
       setPage(pageIndex);
     },
-    [effectiveTerm, brandTab, inStockOnly, showSoldOut]
+    [effectiveTerm, brandTab, inStockOnly, showSoldOut, noPhotoOnly]
   );
 
   const adjustVariantQty = React.useCallback(
@@ -696,6 +707,11 @@ export function InventoryBrowseGrid({
               if (next) setInStockOnly(false);
             }}
             label="Show sold out"
+          />
+          <Checkbox
+            checked={noPhotoOnly}
+            onChange={(next) => setNoPhotoOnly(next)}
+            label="No photos"
           />
         </div>
 

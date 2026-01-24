@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/browser";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
@@ -23,9 +24,9 @@ import { formatPHP } from "@/lib/money";
 import { toast } from "@/components/ui/toast";
 import {
   formatConditionLabel,
-  isDioramaCondition,
   isBlisterCondition,
 } from "@/lib/conditions";
+import { isLalamoveOnlyShipClass } from "@/lib/shipping/shipClass";
 import {
   applyImageCrop,
   cropStyle,
@@ -54,7 +55,6 @@ type Variant = {
     | "near_mint"
     | "unsealed"
     | "with_issues"
-    | "diorama"
     | "blistered"
     | "sealed_blister"
     | "unsealed_blister";
@@ -80,7 +80,19 @@ type ShipClass =
   | "HOT_WHEELS_MAINLINE"
   | "HOT_WHEELS_PREMIUM"
   | "LOOSE_NO_BOX"
-  | "LALAMOVE";
+  | "LALAMOVE"
+  | "DIORAMA";
+type VariantDraft = {
+  id: string;
+  condition: VariantCondition;
+  publicNotes: string;
+  issuePhotos: string[];
+  cost: string;
+  price: string;
+  qty: string;
+  shipClass: ShipClass;
+  variantBarcode: string;
+};
 type LookupData = {
   title: string | null;
   brand: string | null;
@@ -106,10 +118,138 @@ type BarcodeLog = {
   description: string | null;
   barcode: string;
 };
+type HotWheelsBulkItem = {
+  line: number;
+  title: string;
+  model: string;
+  variation: string;
+  price: number;
+  qty: number;
+  condition: VariantCondition;
+};
+
+const BULK_CONDITIONS: VariantCondition[] = [
+  "sealed",
+  "resealed",
+  "near_mint",
+  "unsealed",
+  "with_issues",
+  "blistered",
+  "sealed_blister",
+  "unsealed_blister",
+];
 
 function n(v: any, fallback = 0) {
   const x = Number(v);
   return Number.isFinite(x) ? x : fallback;
+}
+
+function parseBulkNumber(raw: string | undefined, fallback = NaN) {
+  const cleaned = String(raw ?? "").replace(/[^0-9.]/g, "");
+  const value = Number(cleaned);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function titleCase(value: string) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/\b([a-z])/g, (match) => match.toUpperCase());
+}
+
+function normalizeBulkCondition(
+  raw: string | undefined,
+  fallback: VariantCondition
+): VariantCondition {
+  const cleaned = String(raw ?? "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!cleaned) return fallback;
+  const match = BULK_CONDITIONS.find((value) => value === cleaned);
+  return match ?? fallback;
+}
+
+function splitBulkLine(line: string) {
+  if (line.includes("\t")) {
+    return line.split("\t").map((part) => part.trim());
+  }
+  return line.split(",").map((part) => part.trim());
+}
+
+function parseHotWheelsBulkLines(
+  raw: string,
+  fallbackCondition: VariantCondition
+) {
+  const items: HotWheelsBulkItem[] = [];
+  const errors: string[] = [];
+  const rows = raw.split(/\r?\n/);
+  rows.forEach((row, index) => {
+    const trimmed = row.trim();
+    if (!trimmed) return;
+    const parts = splitBulkLine(trimmed);
+    const lineNo = index + 1;
+    const hasPrice = (value: string | undefined) =>
+      Number.isFinite(parseBulkNumber(value));
+
+    let title = parts[0] ?? "";
+    let model = "";
+    let variation = "";
+    let priceValue = "";
+    let qtyValue = "1";
+    let conditionValue = "";
+
+    if (parts.length >= 3 && hasPrice(parts[2])) {
+      model = parts[0] ?? "";
+      variation = parts[1] ?? "";
+      priceValue = parts[2] ?? "";
+      qtyValue = parts[3] ?? "1";
+      conditionValue = parts[4] ?? "";
+    } else if (parts.length >= 4 && hasPrice(parts[3])) {
+      title = parts[0] ?? "";
+      model = parts[1] ?? "";
+      variation = parts[2] ?? "";
+      priceValue = parts[3] ?? "";
+      qtyValue = parts[4] ?? "1";
+      conditionValue = parts[5] ?? "";
+    } else if (parts.length >= 2 && hasPrice(parts[1])) {
+      title = parts[0] ?? "";
+      priceValue = parts[1] ?? "";
+      qtyValue = parts[2] ?? "1";
+      conditionValue = parts[3] ?? "";
+    } else {
+      errors.push(
+        `Line ${lineNo}: include model + color + price (use commas to separate fields).`
+      );
+      return;
+    }
+
+    if (!title.trim() && !model.trim()) {
+      errors.push(`Line ${lineNo}: title is required.`);
+      return;
+    }
+
+    const price = parseBulkNumber(priceValue);
+    if (!Number.isFinite(price) || price <= 0) {
+      errors.push(`Line ${lineNo}: price must be a number.`);
+      return;
+    }
+
+    const qtyRaw = parseBulkNumber(qtyValue, 1);
+    const qty = Math.max(1, Math.trunc(qtyRaw));
+    const condition = normalizeBulkCondition(conditionValue, fallbackCondition);
+    items.push({
+      line: lineNo,
+      title: title.trim(),
+      model: model.trim(),
+      variation: variation.trim(),
+      price,
+      qty,
+      condition,
+    });
+  });
+
+  return { items, errors };
 }
 
 function uniq(arr: string[]) {
@@ -138,6 +278,108 @@ function parseValuation(raw: any): InventoryValuation | null {
 function formatCount(value: number) {
   const num = Number.isFinite(value) ? value : 0;
   return new Intl.NumberFormat("en-PH").format(num);
+}
+
+function VariantDraftPanel({
+  draft,
+  index,
+}: {
+  draft: VariantDraft;
+  index: number;
+}) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-4">
+      <div className="font-semibold">Variant draft {index + 1}</div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Select
+          label="Condition"
+          value={draft.condition}
+          onChange={() => {}}
+          disabled
+        >
+          <option value="sealed">Sealed</option>
+          <option value="resealed">Resealed</option>
+          <option value="near_mint">Near Mint</option>
+          <option value="sealed_blister">Sealed blister</option>
+          <option value="unsealed">Unsealed</option>
+          <option value="unsealed_blister">Unsealed blister</option>
+          <option value="blistered">Blistered</option>
+          <option value="with_issues">With Issues</option>
+        </Select>
+
+        <Select
+          label="Shipping Class"
+          value={draft.shipClass}
+          onChange={() => {}}
+          disabled
+        >
+          <option value="MINI_GT">Mini GT</option>
+          <option value="KAIDO">Kaido</option>
+          <option value="POPRACE">Pop Race</option>
+          <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
+          <option value="BLISTER">Blister</option>
+          <option value="TOMICA">Tomica</option>
+          <option value="HOT_WHEELS_MAINLINE">Hot Wheels Mainline</option>
+          <option value="HOT_WHEELS_PREMIUM">Hot Wheels Premium</option>
+          <option value="LOOSE_NO_BOX">Loose (No Box)</option>
+          <option value="LALAMOVE">Lalamove</option>
+          <option value="DIORAMA">Diorama (Lalamove)</option>
+        </Select>
+
+        <Input
+          label="Variant Barcode (optional)"
+          value={draft.variantBarcode}
+          readOnly
+          disabled
+        />
+        <div />
+
+        <Input label="Cost (₱)" value={draft.cost} placeholder="(empty)" readOnly disabled />
+        <Input
+          label="Selling Price (₱)"
+          value={draft.price}
+          placeholder="(empty)"
+          readOnly
+          disabled
+        />
+        <div className="space-y-1">
+          <div className="text-sm text-white/80">Quantity</div>
+          <Input value={draft.qty} placeholder="(empty)" readOnly disabled />
+        </div>
+
+        <Textarea
+          label="Notes (visible to customers)"
+          value={draft.publicNotes}
+          className="md:col-span-2"
+          readOnly
+          disabled
+        />
+
+        {draft.condition === "with_issues" ? (
+          <div className="space-y-3 md:col-span-2">
+            <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3">
+              <div className="text-sm font-medium">Issue Photos (optional)</div>
+              {draft.issuePhotos.length ? (
+                <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+                  {draft.issuePhotos.map((u) => (
+                    <div
+                      key={u}
+                      className="rounded-xl border border-white/10 bg-bg-900/40 overflow-hidden"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={u} alt="" className="h-32 w-full object-cover" />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-white/50">No issue photos yet.</div>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function resolveNormalizedBrand(
@@ -176,6 +418,7 @@ export default function AdminInventoryPage() {
   // Inventory valuation
   const [includeArchived, setIncludeArchived] = React.useState(false);
   const [assumeZeroCost, setAssumeZeroCost] = React.useState(true);
+  const router = useRouter();
   const [valuationActive, setValuationActive] =
     React.useState<InventoryValuation | null>(null);
   const [valuationAll, setValuationAll] =
@@ -200,6 +443,16 @@ export default function AdminInventoryPage() {
   const barcodeLookupTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastAutoLookupRef = React.useRef("");
   const barcodeInputRef = React.useRef<HTMLInputElement | null>(null);
+  const focusAfterSaveRef = React.useRef(false);
+  const conditionTouchedRef = React.useRef(false);
+  const titleEditedRef = React.useRef(false);
+  const lastAutoTitleRef = React.useRef("");
+  const titleCommaStageRef = React.useRef(0);
+  const lastAutoIdentityRef = React.useRef({
+    brand: "",
+    model: "",
+    variation: "",
+  });
 
   // Product URL lookup
   const [productUrl, setProductUrl] = React.useState("");
@@ -221,6 +474,82 @@ export default function AdminInventoryPage() {
     Record<string, boolean>
   >({});
 
+  function syncTitleFromIdentity(
+    nextBrand: string,
+    nextModel: string,
+    nextVariation: string
+  ) {
+    const next = [nextBrand, nextModel, nextVariation]
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .join(" ");
+    const currentTitle = title.trim();
+    const lastAuto = lastAutoTitleRef.current.trim();
+    const canAuto =
+      !titleEditedRef.current || (lastAuto && currentTitle === lastAuto);
+    if (!canAuto) return;
+    if (!next && !currentTitle) return;
+    if (next === currentTitle) return;
+    setTitle(next);
+    lastAutoTitleRef.current = next;
+  }
+
+  function syncIdentityFromTitle(nextTitle: string) {
+    const stage = titleCommaStageRef.current;
+    if (stage <= 0) return;
+
+    const normalized = nextTitle.replace(/\s+/g, " ").trim();
+    const lastAuto = lastAutoIdentityRef.current;
+    const brandPart = (lastAuto.brand || brand).trim();
+    const modelPart = (lastAuto.model || model).trim();
+
+    if (!brandPart) return;
+
+    let remainder = normalized;
+    if (remainder.toLowerCase().startsWith(brandPart.toLowerCase())) {
+      remainder = remainder.slice(brandPart.length).trim();
+    }
+
+    let nextModel = "";
+    let nextVariation = "";
+    if (stage === 1) {
+      nextModel = remainder;
+    } else {
+      let variationPart = remainder;
+      if (
+        modelPart &&
+        variationPart.toLowerCase().startsWith(modelPart.toLowerCase())
+      ) {
+        variationPart = variationPart.slice(modelPart.length).trim();
+      } else if (!modelPart) {
+        nextModel = remainder;
+      }
+      nextVariation = variationPart;
+    }
+
+    const currentBrand = brand.trim();
+    const currentModel = model.trim();
+    const currentVariation = variation.trim();
+
+    const canSetBrand =
+      titleEditedRef.current || !currentBrand || currentBrand === lastAuto.brand;
+    const canSetModel =
+      titleEditedRef.current || !currentModel || currentModel === lastAuto.model;
+    const canSetVariation =
+      titleEditedRef.current ||
+      !currentVariation ||
+      currentVariation === lastAuto.variation;
+
+    if (canSetModel && nextModel !== currentModel) {
+      setModel(nextModel);
+      lastAuto.model = nextModel;
+    }
+    if (canSetVariation && nextVariation !== currentVariation) {
+      setVariation(nextVariation);
+      lastAuto.variation = nextVariation;
+    }
+  }
+
   // Manual image
   const [manualImageUrl, setManualImageUrl] = React.useState("");
   const [manualUploadLoading, setManualUploadLoading] = React.useState(false);
@@ -240,7 +569,6 @@ export default function AdminInventoryPage() {
   // New variant fields
   const [condition, setCondition] = React.useState<VariantCondition>("unsealed");
   const [publicNotes, setPublicNotes] = React.useState("");
-  const [issueNotes, setIssueNotes] = React.useState("");
   const [issuePhotos, setIssuePhotos] = React.useState<string[]>([]);
   const [issuePhotosUploading, setIssuePhotosUploading] = React.useState(false);
   const [issuePhotosUploadingId, setIssuePhotosUploadingId] =
@@ -252,6 +580,7 @@ export default function AdminInventoryPage() {
     "ACRYLIC_TRUE_SCALE"
   );
   const [variantBarcode, setVariantBarcode] = React.useState("");
+  const [queuedVariants, setQueuedVariants] = React.useState<VariantDraft[]>([]);
 
   const [saving, setSaving] = React.useState(false);
   const [barcodeLogs, setBarcodeLogs] = React.useState<BarcodeLog[]>([]);
@@ -259,23 +588,69 @@ export default function AdminInventoryPage() {
   const [barcodeLogsError, setBarcodeLogsError] = React.useState<string | null>(
     null
   );
-  const [showBarcodeLogs, setShowBarcodeLogs] = React.useState(true);
+  const [showBarcodeLogs, setShowBarcodeLogs] = React.useState(false);
   const [addQtyByVariant, setAddQtyByVariant] = React.useState<
     Record<string, string>
   >({});
+  const [bulkBrand, setBulkBrand] = React.useState("");
+  const [bulkShipClass, setBulkShipClass] =
+    React.useState<ShipClass>("HOT_WHEELS_MAINLINE");
+  const [bulkHotWheelsCost, setBulkHotWheelsCost] = React.useState("");
+  const [bulkHotWheelsCondition, setBulkHotWheelsCondition] =
+    React.useState<VariantCondition>("sealed");
+  const [bulkHotWheelsLines, setBulkHotWheelsLines] = React.useState("");
+  const [bulkHotWheelsIssueNotes, setBulkHotWheelsIssueNotes] =
+    React.useState("");
+  const [bulkHotWheelsErrors, setBulkHotWheelsErrors] = React.useState<
+    string[]
+  >([]);
+  const [bulkHotWheelsSaving, setBulkHotWheelsSaving] = React.useState(false);
+  const [protectorStockMainline, setProtectorStockMainline] = React.useState("");
+  const [protectorStockPremium, setProtectorStockPremium] = React.useState("");
+  const [protectorStockLoading, setProtectorStockLoading] = React.useState(false);
+  const [protectorStockSaving, setProtectorStockSaving] = React.useState(false);
+  const [protectorStockMsg, setProtectorStockMsg] = React.useState<
+    string | null
+  >(null);
+  function isHotWheelsShipClass(value: ShipClass) {
+    return value === "HOT_WHEELS_MAINLINE" || value === "HOT_WHEELS_PREMIUM";
+  }
+
+  function defaultConditionForBrand(
+    value: string | null | undefined
+  ): VariantCondition {
+    return isHotWheelsShipClass(shipClassFromBrand(value)) ? "sealed" : "unsealed";
+  }
+
   React.useEffect(() => {
-    if (isDioramaCondition(condition)) {
-      setShipClass("LALAMOVE");
-      return;
-    }
     if (isBlisterCondition(condition)) return;
+    if (isLalamoveOnlyShipClass(shipClass)) return;
     setShipClass(shipClassFromBrand(brand));
-  }, [brand, condition]);
+  }, [brand, condition, shipClass]);
+
+  React.useEffect(() => {
+    if (conditionTouchedRef.current) return;
+    if (variants.length || queuedVariants.length) return;
+    if (
+      isHotWheelsShipClass(shipClassFromBrand(brand)) &&
+      condition === "unsealed"
+    ) {
+      setCondition("sealed");
+    }
+  }, [brand, condition, queuedVariants.length, variants.length]);
 
   React.useEffect(() => {
     void loadValuations();
     void loadBarcodeLogs();
+    void loadProtectorStock();
   }, []);
+
+  React.useEffect(() => {
+    if (!focusAfterSaveRef.current) return;
+    focusAfterSaveRef.current = false;
+    window.scrollTo({ top: 0, behavior: "auto" });
+    focusBarcodeInput({ preventScroll: false });
+  });
 
   async function loadValuations() {
     setValuationLoading(true);
@@ -325,6 +700,76 @@ export default function AdminInventoryPage() {
     }
 
     setBarcodeLogsLoading(false);
+  }
+
+  async function loadProtectorStock() {
+    setProtectorStockLoading(true);
+    setProtectorStockMsg(null);
+    const { data, error } = await supabase
+      .from("settings")
+      .select("protector_stock, protector_stock_mainline, protector_stock_premium")
+      .eq("id", 1)
+      .maybeSingle();
+
+    if (error) {
+      toast({
+        intent: "error",
+        message: error.message || "Failed to load protector stock.",
+      });
+      setProtectorStockLoading(false);
+      return;
+    }
+
+    const fallback = Number((data as any)?.protector_stock ?? 0);
+    const mainline = Number(
+      (data as any)?.protector_stock_mainline ?? fallback
+    );
+    const premium = Number(
+      (data as any)?.protector_stock_premium ?? fallback
+    );
+
+    setProtectorStockMainline(
+      Number.isFinite(mainline) ? String(Math.max(0, Math.trunc(mainline))) : "0"
+    );
+    setProtectorStockPremium(
+      Number.isFinite(premium) ? String(Math.max(0, Math.trunc(premium))) : "0"
+    );
+    setProtectorStockLoading(false);
+  }
+
+  async function saveProtectorStock() {
+    if (protectorStockSaving) return;
+    setProtectorStockSaving(true);
+    setProtectorStockMsg(null);
+    const mainlineRaw = Number(protectorStockMainline);
+    const premiumRaw = Number(protectorStockPremium);
+    const mainlineValue = Number.isFinite(mainlineRaw)
+      ? Math.max(0, Math.trunc(mainlineRaw))
+      : 0;
+    const premiumValue = Number.isFinite(premiumRaw)
+      ? Math.max(0, Math.trunc(premiumRaw))
+      : 0;
+
+    const { error } = await supabase
+      .from("settings")
+      .update({
+        protector_stock_mainline: mainlineValue,
+        protector_stock_premium: premiumValue,
+        protector_stock: mainlineValue + premiumValue,
+      })
+      .eq("id", 1);
+
+    if (error) {
+      toast({
+        intent: "error",
+        message: error.message || "Failed to save protector stock.",
+      });
+    } else {
+      setProtectorStockMsg("Protector stock updated.");
+      setProtectorStockMainline(String(mainlineValue));
+      setProtectorStockPremium(String(premiumValue));
+    }
+    setProtectorStockSaving(false);
   }
 
   async function runSearch() {
@@ -379,6 +824,10 @@ export default function AdminInventoryPage() {
   }
 
   async function loadProduct(p: Product) {
+    conditionTouchedRef.current = false;
+    titleEditedRef.current = false;
+    lastAutoTitleRef.current = "";
+    lastAutoIdentityRef.current = { brand: "", model: "", variation: "" };
     setSelectedProduct(p);
     setTitle(p.title ?? "");
     setBrand(p.brand ?? "");
@@ -387,6 +836,7 @@ export default function AdminInventoryPage() {
     setImages(Array.isArray(p.image_urls) ? p.image_urls : []);
     setSelectedImages({});
     setLookupMsg(null);
+    setQueuedVariants([]);
 
     setLoadingVariants(true);
     const { data, error } = await supabase
@@ -411,6 +861,10 @@ export default function AdminInventoryPage() {
   }
 
   function clearProduct() {
+    conditionTouchedRef.current = false;
+    titleEditedRef.current = false;
+    lastAutoTitleRef.current = "";
+    lastAutoIdentityRef.current = { brand: "", model: "", variation: "" };
     setSelectedProduct(null);
     setTitle("");
     setBrand("");
@@ -418,19 +872,18 @@ export default function AdminInventoryPage() {
     setVariation("");
     setImages([]);
     setSelectedImages({});
-    setLookupMsg(null);
     setVariants([]);
     setProductUrl("");
     setProductUrlMsg(null);
     setProductUrlResult(null);
     setProductUrlSelectedImages({});
-    setBarcodeLookup("");
+    resetBarcodeLookup();
     setManualImageUrl("");
+    setQueuedVariants([]);
 
     // also clear variant draft
-    setCondition("unsealed");
+    setCondition(defaultConditionForBrand(""));
     setPublicNotes("");
-    setIssueNotes("");
     setIssuePhotos([]);
     setIssuePhotosUploading(false);
     setIssuePhotosUploadingId(null);
@@ -439,6 +892,99 @@ export default function AdminInventoryPage() {
     setQty("1");
     setShipClass(shipClassFromBrand(brand));
     setVariantBarcode("");
+  }
+
+  function buildVariantDraft(): VariantDraft {
+    return {
+      id: crypto.randomUUID(),
+      condition,
+      publicNotes,
+      issuePhotos: [...issuePhotos],
+      cost,
+      price,
+      qty,
+      shipClass,
+      variantBarcode,
+    };
+  }
+
+  function isDraftEmpty(draft: VariantDraft) {
+    return (
+      !draft.cost &&
+      !draft.price &&
+      !draft.variantBarcode &&
+      !draft.publicNotes.trim() &&
+      draft.issuePhotos.length === 0
+    );
+  }
+
+  function resetVariantDraft() {
+    conditionTouchedRef.current = false;
+    setCondition(defaultConditionForBrand(brand));
+    setPublicNotes("");
+    setIssuePhotos([]);
+    setIssuePhotosUploading(false);
+    setIssuePhotosUploadingId(null);
+    setCost("");
+    setPrice("");
+    setQty("1");
+    setShipClass(shipClassFromBrand(brand));
+    setVariantBarcode("");
+  }
+
+  function resetBarcodeLookup() {
+    setBarcodeLookup("");
+    setLookupMsg(null);
+    lastAutoLookupRef.current = "";
+    if (barcodeLookupTimerRef.current) {
+      clearTimeout(barcodeLookupTimerRef.current);
+      barcodeLookupTimerRef.current = null;
+    }
+  }
+
+  const conditionCycle: VariantCondition[] = [
+    "unsealed",
+    "sealed",
+    "with_issues",
+    "resealed",
+    "near_mint",
+    "sealed_blister",
+    "unsealed_blister",
+    "blistered",
+  ];
+
+  function nextCondition(current: VariantCondition) {
+    const idx = conditionCycle.indexOf(current);
+    if (idx === -1) return conditionCycle[0];
+    return conditionCycle[(idx + 1) % conditionCycle.length];
+  }
+
+  function queueVariantDraft() {
+    if (saving) return;
+    if (!cost || !price || !qty) {
+      toast({
+        intent: "error",
+        message: "Complete cost, price, and quantity first.",
+      });
+      return;
+    }
+    setQueuedVariants((prev) => [...prev, buildVariantDraft()]);
+    setCondition(nextCondition(condition));
+    setPrice("");
+    setQty("1");
+  }
+
+  function saveQueuedVariants() {
+    if (saving) return;
+    const currentDraft = buildVariantDraft();
+    const drafts = isDraftEmpty(currentDraft)
+      ? queuedVariants
+      : [...queuedVariants, currentDraft];
+    if (!drafts.length) {
+      toast({ intent: "error", message: "Add a variant before saving." });
+      return;
+    }
+    saveNewVariant({ keepProduct: true, drafts, reloadAfterSave: true });
   }
 
   async function lookupBarcode(override?: string) {
@@ -536,9 +1082,16 @@ export default function AdminInventoryPage() {
     };
   }, []);
 
-  function focusBarcodeInput() {
+  function focusBarcodeInput(options?: { preventScroll?: boolean }) {
+    const preventScroll = options?.preventScroll ?? true;
     requestAnimationFrame(() => {
-      barcodeInputRef.current?.focus();
+      const el = barcodeInputRef.current;
+      if (!el) return;
+      try {
+        el.focus({ preventScroll });
+      } catch {
+        el.focus();
+      }
     });
   }
 
@@ -747,20 +1300,20 @@ export default function AdminInventoryPage() {
     setCost(base.cost != null ? String(base.cost) : "");
     setPrice("");
     setQty(base.qty != null ? String(base.qty) : "1");
+    const baseShipClass =
+      (base.ship_class as ShipClass | null) ?? shipClassFromBrand(brand);
     setShipClass(
-      isDioramaCondition(nextCondition)
-        ? "LALAMOVE"
-        : isBlisterCondition(nextCondition)
-          ? "BLISTER"
-          : shipClassFromBrand(brand)
+      isBlisterCondition(nextCondition)
+        ? "BLISTER"
+        : baseShipClass && isLalamoveOnlyShipClass(baseShipClass)
+          ? baseShipClass
+          : baseShipClass ?? shipClassFromBrand(brand)
     );
-    setIssueNotes(base.issue_notes ?? "");
-    setPublicNotes(base.public_notes ?? "");
+    setPublicNotes(String(base.public_notes ?? base.issue_notes ?? ""));
     setIssuePhotos(Array.isArray(base.issue_photo_urls) ? base.issue_photo_urls : []);
   }
 
   function nextConditionFromExisting(list: Variant[]): VariantCondition {
-    const hasDiorama = list.some((v) => v.condition === "diorama");
     const hasNearMint = list.some((v) => v.condition === "near_mint");
     const hasResealed = list.some((v) => v.condition === "resealed");
     const hasSealed = list.some((v) => v.condition === "sealed");
@@ -772,7 +1325,6 @@ export default function AdminInventoryPage() {
       (v) => v.condition === "unsealed_blister"
     );
     const hasBlistered = list.some((v) => v.condition === "blistered");
-    if (hasDiorama) return "diorama";
     if (hasNearMint) return "near_mint";
     if (hasResealed) return "resealed";
     if (hasSealed && hasUnsealed) return "with_issues";
@@ -1038,16 +1590,16 @@ export default function AdminInventoryPage() {
 
     setSaving(true);
     try {
-      const normalizedTitle = normalizeTitleBrandAliases(title).trim();
-      const { error: uErr } = await supabase
-        .from("products")
-        .update({
-          title: normalizedTitle,
-          brand: brand || null,
-          model: model || null,
-          variation: variation || null,
-        })
-        .eq("id", selectedProduct.id);
+        const normalizedTitle = normalizeTitleBrandAliases(title).trim();
+        const { error: uErr } = await supabase
+          .from("products")
+          .update({
+            title: normalizedTitle,
+            brand: brand || null,
+            model: model || null,
+            variation: variation || null,
+          })
+          .eq("id", selectedProduct.id);
 
       if (uErr) throw uErr;
 
@@ -1109,32 +1661,31 @@ export default function AdminInventoryPage() {
     }
   }
 
-  async function saveNewVariant(options?: { keepProduct?: boolean }) {
+  async function saveNewVariant(options?: {
+    keepProduct?: boolean;
+    drafts?: VariantDraft[];
+    reloadAfterSave?: boolean;
+  }) {
     setSaving(true);
+    const reloadAfterSave = Boolean(options?.reloadAfterSave);
 
     try {
       const normalizedTitle = normalizeTitleBrandAliases(title).trim();
       if (!normalizedTitle) throw new Error("Title is required.");
-      if (!cost || !price || !qty)
-        throw new Error("Cost, Selling Price, and Quantity are required.");
 
-      const costN = n(cost);
-      const priceN = n(price);
-      const qtyN = Math.trunc(n(qty));
+      const draftList = (options?.drafts?.length
+        ? options?.drafts
+        : [buildVariantDraft()]
+      ).filter(Boolean) as VariantDraft[];
 
-      if (!Number.isFinite(costN) || !Number.isFinite(priceN))
-        throw new Error("Cost/Price must be valid numbers.");
-      if (!Number.isFinite(qtyN))
-        throw new Error("Qty must be a valid number.");
-      if (qtyN < 0) throw new Error("Qty cannot be negative.");
-      if (condition === "with_issues" && !issueNotes.trim()) {
-        throw new Error("Issue description is required for 'With Issues'.");
-      }
+      if (!draftList.length) throw new Error("No variants to save.");
 
       const keepProduct = Boolean(options?.keepProduct);
 
       // Create product if none selected
       let productId = selectedProduct?.id;
+      let createdProduct: Product | null = null;
+      let importedImages: string[] | null = null;
 
       if (!productId) {
         const { data: p, error: pErr } = await supabase
@@ -1155,10 +1706,12 @@ export default function AdminInventoryPage() {
         if (pErr) throw pErr;
         const createdProductId = String(p.id);
         productId = createdProductId;
+        createdProduct = p as Product;
 
         const hasSelected = Object.values(selectedImages).some(Boolean);
         if (hasSelected) {
           const imported = await importSelectedImages(createdProductId);
+          importedImages = imported;
           const { error: imgErr } = await supabase
             .from("products")
             .update({ image_urls: imported })
@@ -1179,72 +1732,130 @@ export default function AdminInventoryPage() {
         if (uErr) throw uErr;
       }
 
-      let generatedBarcode: string | null = null;
-      let barcodeValue = variantBarcode.trim() || null;
-      if (!barcodeValue) {
-        barcodeValue = await generateUniqueBarcode();
-        generatedBarcode = barcodeValue;
-      }
+      const createdVariants: Variant[] = [];
+      for (const [idx, draft] of draftList.entries()) {
+        if (!draft.cost || !draft.price || !draft.qty) {
+          throw new Error(`Variant ${idx + 1}: cost, price, and qty are required.`);
+        }
 
-      const { error: vErr } = await supabase.from("product_variants").insert({
-        product_id: productId!,
-        condition,
-        public_notes: publicNotes.trim() || null,
-        issue_notes:
-          condition === "with_issues"
-            ? issueNotes.trim()
-            : condition === "near_mint"
-              ? "Near Mint Condition"
-              : null,
-        issue_photo_urls:
-          condition === "with_issues" && issuePhotos.length
-            ? issuePhotos
-            : null,
-        cost: costN,
-        price: priceN,
-        qty: qtyN,
-        ship_class: isDioramaCondition(condition) ? "LALAMOVE" : shipClass,
-        barcode: barcodeValue,
-      });
+        const costN = n(draft.cost);
+        const priceN = n(draft.price);
+        const qtyN = Math.trunc(n(draft.qty));
 
-      if (vErr) throw vErr;
+        if (!Number.isFinite(costN) || !Number.isFinite(priceN)) {
+          throw new Error(`Variant ${idx + 1}: cost/price must be valid numbers.`);
+        }
+        if (!Number.isFinite(qtyN)) {
+          throw new Error(`Variant ${idx + 1}: qty must be a valid number.`);
+        }
+        if (qtyN < 0) {
+          throw new Error(`Variant ${idx + 1}: qty cannot be negative.`);
+        }
+        if (draft.condition === "with_issues" && !draft.publicNotes.trim()) {
+          throw new Error(`Variant ${idx + 1}: notes are required.`);
+        }
 
-      if (generatedBarcode) {
-        await recordGeneratedBarcode(
-          productId!,
-          generatedBarcode,
-          condition,
-          normalizedTitle
-        );
-      }
+        let generatedBarcode: string | null = null;
+        let barcodeValue = draft.variantBarcode.trim() || null;
+        if (!barcodeValue) {
+          barcodeValue = await generateUniqueBarcode();
+          generatedBarcode = barcodeValue;
+        }
 
-      toast({ intent: "success", message: "Saved product + variant." });
+        const notesValue = draft.publicNotes.trim();
+        const resolvedNotes =
+          draft.condition === "near_mint"
+            ? notesValue || "Near Mint Condition"
+            : notesValue || null;
 
-      if (keepProduct && productId) {
-        const { data: nextProduct, error: nextErr } = await supabase
-          .from("products")
+        const { data: createdVariant, error: vErr } = await supabase
+          .from("product_variants")
+          .insert({
+            product_id: productId!,
+            condition: draft.condition,
+            public_notes: resolvedNotes,
+            issue_notes: null,
+            issue_photo_urls:
+              draft.condition === "with_issues" && draft.issuePhotos.length
+                ? draft.issuePhotos
+                : null,
+            cost: costN,
+            price: priceN,
+            qty: qtyN,
+            ship_class: draft.shipClass,
+            barcode: barcodeValue,
+          })
           .select(
-            "id,title,brand,model,variation,image_urls,is_active,created_at"
+            "id,product_id,condition,issue_notes,issue_photo_urls,public_notes,cost,price,qty,ship_class,barcode,created_at"
           )
-          .eq("id", productId)
           .single();
 
-        if (nextErr) throw nextErr;
-        if (nextProduct) await loadProduct(nextProduct as any);
+        if (vErr) throw vErr;
+        createdVariants.push(createdVariant as Variant);
+
+        if (generatedBarcode) {
+          await recordGeneratedBarcode(
+            productId!,
+            generatedBarcode,
+            draft.condition,
+            normalizedTitle
+          );
+        }
+      }
+
+      toast({
+        intent: "success",
+        message:
+          createdVariants.length > 1
+            ? `Saved ${createdVariants.length} variants.`
+            : "Saved product + variant.",
+      });
+
+      if (reloadAfterSave) {
+        clearProduct();
+        setSearch("");
+        setResults([]);
+        window.scrollTo({ top: 0, behavior: "auto" });
+        focusAfterSaveRef.current = true;
+        router.refresh();
+        return;
+      }
+
+      if (keepProduct && productId) {
+        if (!selectedProduct && createdProduct) {
+          const nextImages = importedImages ?? createdProduct.image_urls ?? [];
+          const nextProduct = {
+            ...createdProduct,
+            title: normalizedTitle,
+            brand: brand || null,
+            model: model || null,
+            variation: variation || null,
+            image_urls: nextImages,
+          };
+          setSelectedProduct(nextProduct);
+          setImages(Array.isArray(nextImages) ? nextImages : []);
+        } else if (selectedProduct) {
+          setSelectedProduct({
+            ...selectedProduct,
+            title: normalizedTitle,
+            brand: brand || null,
+            model: model || null,
+            variation: variation || null,
+          });
+        }
+
+        if (createdVariants.length) {
+          setVariants((prev) => [...createdVariants, ...prev]);
+        }
+        setQueuedVariants([]);
+        resetVariantDraft();
+        resetBarcodeLookup();
         focusBarcodeInput();
         return;
       }
 
-      // Reset draft fields
-      setCondition("unsealed");
-      setPublicNotes("");
-      setIssueNotes("");
-      setIssuePhotos([]);
-      setCost("");
-      setPrice("");
-      setQty("1");
-      setShipClass(shipClassFromBrand(brand));
-      setVariantBarcode("");
+      setQueuedVariants([]);
+      resetVariantDraft();
 
       clearProduct();
       focusBarcodeInput();
@@ -1254,6 +1865,160 @@ export default function AdminInventoryPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function saveHotWheelsBulk() {
+    if (bulkHotWheelsSaving) return;
+    setBulkHotWheelsErrors([]);
+    const costValue = n(bulkHotWheelsCost, NaN);
+    if (!Number.isFinite(costValue) || costValue <= 0) {
+      toast({ intent: "error", message: "Enter a valid shared cost." });
+      return;
+    }
+
+    const parsed = parseHotWheelsBulkLines(
+      bulkHotWheelsLines,
+      bulkHotWheelsCondition
+    );
+    if (!parsed.items.length) {
+      const fallbackError = parsed.errors.length
+        ? parsed.errors
+        : ["Add at least one item line."];
+      setBulkHotWheelsErrors(fallbackError);
+      toast({ intent: "error", message: "No valid bulk lines found." });
+      return;
+    }
+    if (parsed.errors.length) {
+      setBulkHotWheelsErrors(parsed.errors);
+      toast({
+        intent: "error",
+        message: "Fix the highlighted bulk add lines first.",
+      });
+      return;
+    }
+
+    const issueNoteValue = bulkHotWheelsIssueNotes.trim();
+    if (
+      parsed.items.some((item) => item.condition === "with_issues") &&
+      !issueNoteValue
+    ) {
+      const noteError = "Notes are required for With Issues items.";
+      setBulkHotWheelsErrors([noteError]);
+      toast({ intent: "error", message: noteError });
+      return;
+    }
+
+    setBulkHotWheelsSaving(true);
+    const brandValue = bulkBrand.trim();
+    if (!brandValue) {
+      setBulkHotWheelsSaving(false);
+      toast({ intent: "error", message: "Brand is required for bulk add." });
+      return;
+    }
+    const shipClassValue: ShipClass = bulkShipClass;
+    let created = 0;
+    const errors: string[] = [];
+
+    for (const item of parsed.items) {
+      try {
+        const normalizedModel = titleCase(item.model);
+        const normalizedVariation = titleCase(item.variation);
+        const computedTitle = [
+          brandValue,
+          normalizedModel,
+          normalizedVariation,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+        const normalizedTitle = normalizeTitleBrandAliases(
+          computedTitle || item.title
+        ).trim();
+        if (!normalizedTitle) {
+          throw new Error("Title is required.");
+        }
+
+        const { data: product, error: pErr } = await supabase
+          .from("products")
+          .insert({
+            title: normalizedTitle,
+            brand: brandValue,
+            model: normalizedModel || null,
+            variation: normalizedVariation || null,
+            image_urls: [],
+            is_active: true,
+          })
+          .select(
+            "id,title,brand,model,variation,image_urls,is_active,created_at"
+          )
+          .single();
+
+        if (pErr) throw pErr;
+        const productId = String(product.id);
+        const barcodeValue = await generateUniqueBarcode();
+        const notesValue =
+          item.condition === "with_issues"
+            ? issueNoteValue
+            : item.condition === "near_mint"
+              ? "Near Mint Condition"
+              : null;
+
+        const { error: vErr } = await supabase
+          .from("product_variants")
+          .insert({
+            product_id: productId,
+            condition: item.condition,
+            public_notes: notesValue,
+            issue_notes: null,
+            issue_photo_urls: null,
+            cost: costValue,
+            price: item.price,
+            qty: item.qty,
+            ship_class: shipClassValue,
+            barcode: barcodeValue,
+          })
+          .select("id")
+          .single();
+
+        if (vErr) throw vErr;
+        const detailOverride = [
+          brandValue,
+          normalizedModel,
+          normalizedVariation,
+        ]
+          .filter(Boolean)
+          .join(" ");
+        await recordGeneratedBarcode(
+          productId,
+          barcodeValue,
+          item.condition,
+          normalizedTitle,
+          detailOverride
+        );
+        created += 1;
+      } catch (err: any) {
+        errors.push(
+          `Line ${item.line}: ${err?.message ?? "Failed to create item."}`
+        );
+      }
+    }
+
+    if (created > 0) {
+      toast({
+        intent: "success",
+        message: `Added ${created} bulk items.`,
+      });
+      setBulkHotWheelsLines("");
+      setBulkHotWheelsIssueNotes("");
+    }
+    if (errors.length) {
+      setBulkHotWheelsErrors(errors);
+      toast({
+        intent: "error",
+        message: `${errors.length} items failed to add.`,
+      });
+    }
+    setBulkHotWheelsSaving(false);
   }
 
   async function updateVariant(v: Variant, patch: Partial<Variant>) {
@@ -1296,9 +2061,11 @@ export default function AdminInventoryPage() {
     productId: string,
     barcode: string,
     variantCondition: string,
-    productTitle?: string
+    productTitle?: string,
+    detailOverride?: string
   ) {
-    const detail = [brand, model, variation].filter(Boolean).join(" ");
+    const detail =
+      detailOverride ?? [brand, model, variation].filter(Boolean).join(" ");
     const conditionLabel = variantCondition
       ? `Condition: ${formatConditionLabel(variantCondition, { upper: true })}`
       : "";
@@ -1426,6 +2193,10 @@ export default function AdminInventoryPage() {
     !assumeZeroCost && allValuation.missing_cost_variants > 0
       ? "N/A"
       : formatPHP(allValuation.cost_value);
+  const bulkHotWheelsPreview = React.useMemo(
+    () => parseHotWheelsBulkLines(bulkHotWheelsLines, bulkHotWheelsCondition),
+    [bulkHotWheelsCondition, bulkHotWheelsLines]
+  );
 
   return (
     <div className="space-y-6">
@@ -1788,27 +2559,84 @@ export default function AdminInventoryPage() {
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-              <Input
-                label="Title"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-              />
-              <Input
-                label="Diecast Brand"
-                value={brand}
-                onChange={(e) => setBrand(e.target.value)}
-              />
-              <Input
-                label="Car Model"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-              />
-              <Input
-                label="Color / Style (Variation)"
-                value={variation}
-                onChange={(e) => setVariation(e.target.value)}
-              />
-            </div>
+                <Input
+                  label="Title"
+                  value={title}
+                  onChange={(e) => {
+                    const rawTitle = e.target.value;
+                    const commaCount = (rawTitle.match(/,/g) || []).length;
+                    const nextTitle = rawTitle.replace(/,/g, " ");
+                    if (nextTitle.trim()) {
+                      titleEditedRef.current = true;
+                    } else {
+                      titleEditedRef.current = false;
+                      lastAutoTitleRef.current = "";
+                      titleCommaStageRef.current = 0;
+                      lastAutoIdentityRef.current = {
+                        brand: "",
+                        model: "",
+                        variation: "",
+                      };
+                    }
+                    if (commaCount) {
+                      const normalizedTitle = nextTitle.replace(/\s+/g, " ").trim();
+                      const previousStage = titleCommaStageRef.current;
+                      const nextStage = Math.min(previousStage + commaCount, 2);
+                      if (previousStage < 1 && nextStage >= 1) {
+                        const nextBrand = normalizedTitle;
+                        if (nextBrand) {
+                          setBrand(nextBrand);
+                          lastAutoIdentityRef.current.brand = nextBrand;
+                        }
+                      }
+                      if (previousStage < 2 && nextStage >= 2) {
+                        const brandPart = lastAutoIdentityRef.current.brand;
+                        let remainder = normalizedTitle;
+                        if (
+                          brandPart &&
+                          remainder.toLowerCase().startsWith(brandPart.toLowerCase())
+                        ) {
+                          remainder = remainder.slice(brandPart.length).trim();
+                        }
+                        if (remainder) {
+                          setModel(remainder);
+                          lastAutoIdentityRef.current.model = remainder;
+                        }
+                      }
+                      titleCommaStageRef.current = nextStage;
+                    }
+                    setTitle(nextTitle);
+                    syncIdentityFromTitle(nextTitle);
+                  }}
+                />
+                <Input
+                  label="Diecast Brand"
+                  value={brand}
+                  onChange={(e) => {
+                    const nextBrand = e.target.value;
+                    setBrand(nextBrand);
+                    syncTitleFromIdentity(nextBrand, model, variation);
+                  }}
+                />
+                <Input
+                  label="Car Model"
+                  value={model}
+                  onChange={(e) => {
+                    const nextModel = e.target.value;
+                    setModel(nextModel);
+                    syncTitleFromIdentity(brand, nextModel, variation);
+                  }}
+                />
+                <Input
+                  label="Color / Style (Variation)"
+                  value={variation}
+                  onChange={(e) => {
+                    const nextVariation = e.target.value;
+                    setVariation(nextVariation);
+                    syncTitleFromIdentity(brand, model, nextVariation);
+                  }}
+                />
+              </div>
 
             <div className="flex flex-wrap gap-2">
               <Button
@@ -1944,7 +2772,11 @@ export default function AdminInventoryPage() {
                           handleImageDrop(e, idx);
                         }}
                       >
-                        <div className="aspect-[4/3] w-full overflow-hidden bg-neutral-50">
+                        <div
+                          className="aspect-[4/3] w-full overflow-hidden bg-neutral-50 cursor-pointer"
+                          onClick={() => openCropEditor(u, idx)}
+                          title="Click to adjust crop"
+                        >
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
                             src={preview.src}
@@ -2006,30 +2838,55 @@ export default function AdminInventoryPage() {
               </div>
             ) : (
               <div className="space-y-3">
-                {variants.map((v) => (
-                  <div
-                    key={v.id}
-                    className="rounded-xl border border-white/10 bg-paper/5 p-3"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="font-medium">
-                        {formatConditionLabel(v.condition, { upper: true })}{" "}
-                        {v.issue_notes ? (
-                          v.condition === "near_mint" ? (
-                            <span className="text-white/60">
-                              • Note: {v.issue_notes}
-                            </span>
-                          ) : (
-                            <span className="text-white/50">
-                              • {v.issue_notes}
-                            </span>
-                          )
-                        ) : null}
+                {variants.map((v) => {
+                  const noteValue = String(
+                    v.public_notes ?? v.issue_notes ?? ""
+                  ).trim();
+                  const noteTone =
+                    v.condition === "with_issues"
+                      ? "text-red-200/80"
+                      : v.condition === "near_mint"
+                        ? "text-amber-200/80"
+                        : "text-white/60";
+                  const indicatorTone =
+                    v.condition === "with_issues"
+                      ? "bg-red-400"
+                      : v.condition === "near_mint"
+                        ? "bg-amber-400"
+                        : "";
+                  const showIndicator = indicatorTone.length > 0;
+
+                  return (
+                    <div
+                      key={v.id}
+                      className="rounded-xl border border-white/10 bg-paper/5 p-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="font-medium">
+                            {formatConditionLabel(v.condition, {
+                              upper: true,
+                              shipClass: v.ship_class,
+                            })}
+                          </div>
+                          {noteValue ? (
+                            <div
+                              className={`mt-1 flex items-center gap-2 text-xs ${noteTone}`}
+                            >
+                              {showIndicator ? (
+                                <span
+                                  className={`h-2 w-2 rounded-full ${indicatorTone}`}
+                                  aria-hidden="true"
+                                />
+                              ) : null}
+                              <span>{noteValue}</span>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="text-xs text-white/50">
+                          Variant #{v.id.slice(0, 8)}
+                        </div>
                       </div>
-                      <div className="text-xs text-white/50">
-                        Variant #{v.id.slice(0, 8)}
-                      </div>
-                    </div>
 
                     <div className="mt-3 grid gap-3 md:grid-cols-6">
                       <Input
@@ -2141,6 +2998,7 @@ export default function AdminInventoryPage() {
                         <option value="HOT_WHEELS_PREMIUM">HOT_WHEELS_PREMIUM</option>
                         <option value="LOOSE_NO_BOX">LOOSE_NO_BOX</option>
                         <option value="LALAMOVE">LALAMOVE</option>
+                        <option value="DIORAMA">DIORAMA</option>
                       </Select>
 
                       <div className="flex items-end">
@@ -2155,10 +3013,11 @@ export default function AdminInventoryPage() {
                       <div className="md:col-span-6">
                         <Textarea
                           label="Notes (visible to customers)"
-                          value={v.public_notes ?? ""}
+                          value={String(v.public_notes ?? v.issue_notes ?? "")}
                           onChange={(e) =>
                             updateVariant(v, {
                               public_notes: e.target.value || null,
+                              issue_notes: null,
                             })
                           }
                         />
@@ -2166,16 +3025,6 @@ export default function AdminInventoryPage() {
 
                       {v.condition === "with_issues" ? (
                         <div className="md:col-span-6 space-y-3">
-                          <Textarea
-                            label="Issue Notes"
-                            value={v.issue_notes ?? ""}
-                            onChange={(e) =>
-                              updateVariant(v, {
-                                issue_notes: e.target.value || null,
-                              })
-                            }
-                          />
-
                           <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3">
                             <div className="text-sm font-medium">
                               Issue Photos (optional)
@@ -2254,10 +3103,19 @@ export default function AdminInventoryPage() {
                       ) : null}
                     </div>
                   </div>
-                ))}
+                );
+              })}
               </div>
             )}
           </div>
+
+          {queuedVariants.length ? (
+            <div className="space-y-4">
+              {queuedVariants.map((draft, idx) => (
+                <VariantDraftPanel key={draft.id} draft={draft} index={idx} />
+              ))}
+            </div>
+          ) : null}
 
           {/* Add new variant */}
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-4">
@@ -2269,21 +3127,20 @@ export default function AdminInventoryPage() {
                 value={condition}
                 onChange={(e) => {
                   const next = e.target.value as VariantCondition;
+                  conditionTouchedRef.current = true;
                   const leavingNearMint =
                     condition === "near_mint" &&
-                    issueNotes.trim() === "Near Mint Condition" &&
+                    publicNotes.trim() === "Near Mint Condition" &&
                     next !== "near_mint";
                   setCondition(next);
-                  if (next === "near_mint") {
-                    setIssueNotes("Near Mint Condition");
+                  if (next === "near_mint" && !publicNotes.trim()) {
+                    setPublicNotes("Near Mint Condition");
                   } else if (leavingNearMint) {
-                    setIssueNotes("");
+                    setPublicNotes("");
                   }
-                  if (isDioramaCondition(next)) {
-                    setShipClass("LALAMOVE");
-                  } else if (isBlisterCondition(next)) {
+                  if (isBlisterCondition(next)) {
                     setShipClass("BLISTER");
-                  } else if (shipClass === "BLISTER" || shipClass === "LALAMOVE") {
+                  } else if (shipClass === "BLISTER") {
                     setShipClass(shipClassFromBrand(brand));
                   }
                 }}
@@ -2295,7 +3152,6 @@ export default function AdminInventoryPage() {
                 <option value="unsealed">Unsealed</option>
                 <option value="unsealed_blister">Unsealed blister</option>
                 <option value="blistered">Blistered</option>
-                <option value="diorama">Diorama</option>
                 <option value="with_issues">With Issues</option>
               </Select>
 
@@ -2314,6 +3170,7 @@ export default function AdminInventoryPage() {
                 <option value="HOT_WHEELS_PREMIUM">Hot Wheels Premium</option>
                 <option value="LOOSE_NO_BOX">Loose (No Box)</option>
                 <option value="LALAMOVE">Lalamove</option>
+                <option value="DIORAMA">Diorama (Lalamove)</option>
               </Select>
 
               <Input
@@ -2373,7 +3230,11 @@ export default function AdminInventoryPage() {
               </div>
 
               <Textarea
-                label="Notes (visible to customers)"
+                label={
+                  condition === "with_issues"
+                    ? "Notes (required)"
+                    : "Notes (visible to customers)"
+                }
                 value={publicNotes}
                 onChange={(e) => setPublicNotes(e.target.value)}
                 className="md:col-span-2"
@@ -2381,12 +3242,6 @@ export default function AdminInventoryPage() {
 
               {condition === "with_issues" ? (
                 <div className="space-y-3 md:col-span-2">
-                  <Textarea
-                    label="Issue Description (Required)"
-                    value={issueNotes}
-                    onChange={(e) => setIssueNotes(e.target.value)}
-                  />
-
                   <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3">
                     <div className="text-sm font-medium">
                       Issue Photos (optional)
@@ -2464,29 +3319,141 @@ export default function AdminInventoryPage() {
                     )}
                   </div>
                 </div>
-              ) : (
-                <div className="text-sm text-white/50 md:col-span-2">
-                  Issue description is required only for "With Issues".
-                </div>
-              )}
+              ) : null}
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <Button onClick={() => saveNewVariant()} disabled={saving}>
-                {saving ? "Saving..." : "Save Variant"}
+              <Button onClick={saveQueuedVariants} disabled={saving}>
+                {saving
+                  ? "Saving..."
+                  : queuedVariants.length
+                    ? "Save variants"
+                  : "Save"}
               </Button>
-              <Button
-                variant="secondary"
-                onClick={() => saveNewVariant({ keepProduct: true })}
-                disabled={saving}
-              >
-                {saving ? "Saving..." : "Save + Add Another"}
+              <Button variant="secondary" onClick={queueVariantDraft} disabled={saving}>
+                {saving ? "Saving..." : "+ Add another variant"}
               </Button>
             </div>
 
             <div className="text-xs text-white/50">
               Cost/Price are empty by default. Qty defaults to 1.
             </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div className="font-semibold">General Bulk Add</div>
+                <div className="text-sm text-white/60">
+                  Create multiple items without barcode lookup. One line equals
+                  one product + one variant.
+                </div>
+              </div>
+              <div className="text-xs text-white/50">
+                Format: Model, Color, Price, Qty, Condition
+              </div>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-4">
+              <Input
+                label="Brand"
+                value={bulkBrand}
+                onChange={(e) => setBulkBrand(e.target.value)}
+                placeholder="e.g. Hot Wheels"
+              />
+              <Select
+                label="Shipping class"
+                value={bulkShipClass}
+                onChange={(e) => setBulkShipClass(e.target.value as ShipClass)}
+              >
+                <option value="MINI_GT">Mini GT</option>
+                <option value="KAIDO">Kaido</option>
+                <option value="POPRACE">Pop Race</option>
+                <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
+                <option value="BLISTER">Blister</option>
+                <option value="TOMICA">Tomica</option>
+                <option value="HOT_WHEELS_MAINLINE">Hot Wheels Mainline</option>
+                <option value="HOT_WHEELS_PREMIUM">Hot Wheels Premium</option>
+                <option value="LOOSE_NO_BOX">Loose (No Box)</option>
+                <option value="LALAMOVE">Lalamove</option>
+                <option value="DIORAMA">Diorama (Lalamove)</option>
+              </Select>
+              <Input
+                label="Shared cost (PHP)"
+                value={bulkHotWheelsCost}
+                onChange={(e) =>
+                  setBulkHotWheelsCost(e.target.value.replace(/[^0-9.]/g, ""))
+                }
+                inputMode="decimal"
+                placeholder="e.g. 120"
+              />
+              <Select
+                label="Default condition"
+                value={bulkHotWheelsCondition}
+                onChange={(e) =>
+                  setBulkHotWheelsCondition(e.target.value as VariantCondition)
+                }
+              >
+                <option value="sealed">Sealed</option>
+                <option value="unsealed">Unsealed</option>
+                <option value="near_mint">Near Mint</option>
+                <option value="with_issues">With Issues</option>
+                <option value="resealed">Resealed</option>
+                <option value="sealed_blister">Sealed blister</option>
+                <option value="unsealed_blister">Unsealed blister</option>
+                <option value="blistered">Blistered</option>
+              </Select>
+            </div>
+
+            <div className="text-xs text-white/50">
+              Brand will be set to {bulkBrand.trim() || "your input"} and shipping
+              class will match the selection.
+            </div>
+
+            <Textarea
+              label="Notes (for With Issues items)"
+              value={bulkHotWheelsIssueNotes}
+              onChange={(e) => {
+                setBulkHotWheelsIssueNotes(e.target.value);
+                if (bulkHotWheelsErrors.length) {
+                  setBulkHotWheelsErrors([]);
+                }
+              }}
+              placeholder="e.g. Card crease on top right"
+            />
+
+            <Textarea
+              label="Items (one per line)"
+              value={bulkHotWheelsLines}
+              onChange={(e) => {
+                setBulkHotWheelsLines(e.target.value);
+                if (bulkHotWheelsErrors.length) {
+                  setBulkHotWheelsErrors([]);
+                }
+              }}
+              placeholder={`Civic Type R, Championship White, 399, 1\nNissan Skyline R34, Midnight Purple, 299, 2`}
+            />
+
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={saveHotWheelsBulk} disabled={bulkHotWheelsSaving}>
+                {bulkHotWheelsSaving ? "Adding..." : "Add bulk items"}
+              </Button>
+              <div className="text-xs text-white/60">
+                {bulkHotWheelsPreview.items.length} ready,{" "}
+                {bulkHotWheelsPreview.errors.length} errors
+              </div>
+            </div>
+
+            {bulkHotWheelsErrors.length ? (
+              <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200 space-y-1">
+                {bulkHotWheelsErrors.slice(0, 8).map((err) => (
+                  <div key={err}>{err}</div>
+                ))}
+                {bulkHotWheelsErrors.length > 8 ? (
+                  <div>...and {bulkHotWheelsErrors.length - 8} more.</div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           {/* Generated barcode log */}
@@ -2550,6 +3517,50 @@ export default function AdminInventoryPage() {
             ) : (
               <div className="text-sm text-white/50">Collapsed.</div>
             )}
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="font-semibold">Hot Wheels Protectors</div>
+                <div className="text-sm text-white/60">
+                  Control protector add-on stock for Mainline and Premium.
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                onClick={loadProtectorStock}
+                disabled={protectorStockLoading}
+              >
+                {protectorStockLoading ? "Refreshing..." : "Refresh"}
+              </Button>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <Input
+                label="Mainline protectors (pcs)"
+                value={protectorStockMainline}
+                onChange={(e) => setProtectorStockMainline(e.target.value)}
+                inputMode="numeric"
+                placeholder="e.g. 50"
+              />
+              <Input
+                label="Premium protectors (pcs)"
+                value={protectorStockPremium}
+                onChange={(e) => setProtectorStockPremium(e.target.value)}
+                inputMode="numeric"
+                placeholder="e.g. 50"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={saveProtectorStock} disabled={protectorStockSaving}>
+                {protectorStockSaving ? "Saving..." : "Save protector stock"}
+              </Button>
+              {protectorStockMsg ? (
+                <div className="text-xs text-white/60">{protectorStockMsg}</div>
+              ) : null}
+            </div>
           </div>
         </CardBody>
       </Card>

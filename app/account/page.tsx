@@ -318,15 +318,15 @@ export default function AccountPage() {
 
   if (loading) {
     return (
-      <div className="max-w-3xl mx-auto p-6">
-        <div className="text-sm text-neutral-300">Loading…</div>
+      <div className="max-w-3xl mx-auto px-4 py-6">
+        <div className="text-sm text-neutral-300">Loading...</div>
       </div>
     );
   }
 
   if (!user) {
     return (
-      <div className="max-w-3xl mx-auto p-6">
+      <div className="max-w-3xl mx-auto px-4 py-6">
         <Card>
           <CardHeader>
             <div className="text-lg font-semibold">Account Settings</div>
@@ -338,7 +338,7 @@ export default function AccountPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto p-6 space-y-6">
+    <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Account Settings</h1>
         <p className="text-sm text-neutral-400">Phone OTP verification is on standby for now.</p>

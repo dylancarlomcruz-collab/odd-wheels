@@ -4,7 +4,6 @@ export type VariantCondition =
   | "near_mint"
   | "unsealed"
   | "with_issues"
-  | "diorama"
   | "sealed_blister"
   | "unsealed_blister"
   | "blistered";
@@ -15,7 +14,6 @@ const CONDITION_LABELS: Record<VariantCondition, string> = {
   near_mint: "Near Mint",
   unsealed: "Unsealed",
   with_issues: "With issues",
-  diorama: "Diorama",
   sealed_blister: "Sealed blister",
   unsealed_blister: "Unsealed blister",
   blistered: "Blistered",
@@ -23,11 +21,16 @@ const CONDITION_LABELS: Record<VariantCondition, string> = {
 
 export function formatConditionLabel(
   value: string | null | undefined,
-  options?: { upper?: boolean }
+  options?: { upper?: boolean; shipClass?: string | null }
 ): string {
   const key = String(value ?? "").toLowerCase() as VariantCondition;
   const label = CONDITION_LABELS[key] ?? String(value ?? "-");
-  return options?.upper ? label.toUpperCase() : label;
+  const suffix =
+    String(options?.shipClass ?? "").toUpperCase() === "DIORAMA"
+      ? "Diorama"
+      : null;
+  const composed = suffix ? `${label} - ${suffix}` : label;
+  return options?.upper ? composed.toUpperCase() : composed;
 }
 
 export function isBlisterCondition(value: string | null | undefined): boolean {
@@ -36,10 +39,6 @@ export function isBlisterCondition(value: string | null | undefined): boolean {
     value === "unsealed_blister" ||
     value === "blistered"
   );
-}
-
-export function isDioramaCondition(value: string | null | undefined): boolean {
-  return value === "diorama";
 }
 
 export function conditionSortOrder(value: string | null | undefined): number {
@@ -57,11 +56,9 @@ export function conditionSortOrder(value: string | null | undefined): number {
     case "unsealed_blister":
     case "blistered":
       return 5;
-    case "diorama":
-      return 6;
     case "with_issues":
-      return 7;
+      return 6;
     default:
-      return 8;
+      return 7;
   }
 }

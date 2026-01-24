@@ -102,6 +102,8 @@ export default function AdminSettingsPage() {
   const [priorityAvailable, setPriorityAvailable] = React.useState(false);
   const [priorityNote, setPriorityNote] = React.useState("");
   const [freeShippingThreshold, setFreeShippingThreshold] = React.useState("");
+  const [protectorStockMainline, setProtectorStockMainline] = React.useState("");
+  const [protectorStockPremium, setProtectorStockPremium] = React.useState("");
   const [pickupSchedule, setPickupSchedule] = React.useState<PickupScheduleState>(
     () => buildEmptyPickupScheduleState()
   );
@@ -124,6 +126,26 @@ export default function AdminSettingsPage() {
         data.free_shipping_threshold !== null && data.free_shipping_threshold !== undefined
           ? String(data.free_shipping_threshold)
           : ""
+      );
+      const fallbackProtector =
+        data.protector_stock !== null && data.protector_stock !== undefined
+          ? Number(data.protector_stock)
+          : null;
+      setProtectorStockMainline(
+        data.protector_stock_mainline !== null &&
+          data.protector_stock_mainline !== undefined
+          ? String(data.protector_stock_mainline)
+          : fallbackProtector !== null
+            ? String(fallbackProtector)
+            : ""
+      );
+      setProtectorStockPremium(
+        data.protector_stock_premium !== null &&
+          data.protector_stock_premium !== undefined
+          ? String(data.protector_stock_premium)
+          : fallbackProtector !== null
+            ? String(fallbackProtector)
+            : ""
       );
       setPickupSchedule(
         buildPickupScheduleState(
@@ -153,12 +175,23 @@ export default function AdminSettingsPage() {
         : Number.isFinite(thresholdRaw)
         ? thresholdRaw
         : null;
+    const protectorMainlineRaw = Number(protectorStockMainline);
+    const protectorMainlineValue = Number.isFinite(protectorMainlineRaw)
+      ? Math.max(0, Math.trunc(protectorMainlineRaw))
+      : 0;
+    const protectorPremiumRaw = Number(protectorStockPremium);
+    const protectorPremiumValue = Number.isFinite(protectorPremiumRaw)
+      ? Math.max(0, Math.trunc(protectorPremiumRaw))
+      : 0;
     const { error } = await supabase.from("settings").update({
       shipping_schedule_text: schedule || null,
       shipping_cutoff_text: cutoff || null,
       priority_shipping_available: priorityAvailable,
       priority_shipping_note: priorityNote || null,
       free_shipping_threshold: threshold,
+      protector_stock_mainline: protectorMainlineValue,
+      protector_stock_premium: protectorPremiumValue,
+      protector_stock: protectorMainlineValue + protectorPremiumValue,
       pickup_schedule_text: pickupSummary || null,
       pickup_schedule: pickupPayload,
       pickup_unavailable: pickupUnavailable,
@@ -270,6 +303,22 @@ export default function AdminSettingsPage() {
             inputMode="decimal"
             placeholder="e.g. 2000"
           />
+          <div className="grid gap-3 md:grid-cols-2">
+            <Input
+              label="Protector stock (Hot Wheels Mainline)"
+              value={protectorStockMainline}
+              onChange={(e) => setProtectorStockMainline(e.target.value)}
+              inputMode="numeric"
+              placeholder="e.g. 100"
+            />
+            <Input
+              label="Protector stock (Hot Wheels Premium)"
+              value={protectorStockPremium}
+              onChange={(e) => setProtectorStockPremium(e.target.value)}
+              inputMode="numeric"
+              placeholder="e.g. 100"
+            />
+          </div>
 
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
             <div className="font-semibold">Priority Shipping</div>

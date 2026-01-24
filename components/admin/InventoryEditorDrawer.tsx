@@ -13,7 +13,6 @@ import { shipClassFromBrand } from "@/lib/shipping/shipClass";
 import {
   conditionSortOrder,
   formatConditionLabel,
-  isDioramaCondition,
   isBlisterCondition,
 } from "@/lib/conditions";
 import {
@@ -40,7 +39,6 @@ const CONDITION_OPTIONS: Array<VariantDraft["condition"]> = [
   "sealed",
   "resealed",
   "near_mint",
-  "diorama",
   "sealed_blister",
   "unsealed_blister",
   "blistered",
@@ -59,6 +57,7 @@ const SHIP_OPTIONS = [
   "HOT_WHEELS_PREMIUM",
   "LOOSE_NO_BOX",
   "LALAMOVE",
+  "DIORAMA",
 ];
 
 function safeNumber(v: any): number | null {
@@ -113,6 +112,7 @@ export function InventoryEditorDrawer({
       (product.product_variants ?? []).map((v) => ({
         ...v,
         issue_photo_urls: Array.isArray(v.issue_photo_urls) ? v.issue_photo_urls : [],
+        public_notes: v.public_notes ?? v.issue_notes ?? null,
         _isNew: false,
         _delete: false,
       }))
@@ -436,7 +436,6 @@ export function InventoryEditorDrawer({
   function addVariant() {
     const baseList = variants.filter((v) => !v._delete && !v._isNew);
     const base = [...baseList].reverse().find((v) => v) ?? null;
-    const hasDiorama = baseList.some((v) => v.condition === "diorama");
     const hasSealed = baseList.some((v) => v.condition === "sealed");
     const hasUnsealed = baseList.some((v) => v.condition === "unsealed");
     const hasSealedBlister = baseList.some(
@@ -447,28 +446,26 @@ export function InventoryEditorDrawer({
     );
     const hasBlistered = baseList.some((v) => v.condition === "blistered");
     const nextCondition: VariantDraft["condition"] =
-      hasDiorama
-        ? "diorama"
-        : hasSealed && hasUnsealed
-          ? "with_issues"
-          : hasSealed
-            ? "unsealed"
-            : hasUnsealed
-              ? "sealed"
-              : hasSealedBlister && hasUnsealedBlister
-                ? "with_issues"
-                : hasSealedBlister
-                  ? "unsealed_blister"
-                  : hasUnsealedBlister
-                    ? "sealed_blister"
-                    : hasBlistered
-                      ? "blistered"
-                      : "unsealed";
-    const nextShipClass = isDioramaCondition(nextCondition)
-      ? "LALAMOVE"
-      : isBlisterCondition(nextCondition)
-        ? "BLISTER"
-        : shipClassFromBrand(brand);
+      hasSealed && hasUnsealed
+        ? "with_issues"
+        : hasSealed
+          ? "unsealed"
+          : hasUnsealed
+            ? "sealed"
+            : hasSealedBlister && hasUnsealedBlister
+              ? "with_issues"
+              : hasSealedBlister
+                ? "unsealed_blister"
+                : hasUnsealedBlister
+                  ? "sealed_blister"
+                  : hasBlistered
+                    ? "blistered"
+                    : "unsealed";
+    const baseShipClass =
+      (base?.ship_class as string | null) ?? shipClassFromBrand(brand);
+    const nextShipClass = isBlisterCondition(nextCondition)
+      ? "BLISTER"
+      : baseShipClass;
     setVariants((prev) => [
         ...prev,
       {
@@ -479,8 +476,8 @@ export function InventoryEditorDrawer({
         price: 0,
         qty: base?.qty ?? 1,
         ship_class: nextShipClass ?? null,
-        issue_notes: base?.issue_notes ?? null,
-        public_notes: base?.public_notes ?? null,
+        issue_notes: null,
+        public_notes: base?.public_notes ?? base?.issue_notes ?? null,
         issue_photo_urls: Array.isArray(base?.issue_photo_urls)
           ? [...(base?.issue_photo_urls ?? [])]
           : [],
@@ -568,16 +565,12 @@ export function InventoryEditorDrawer({
                 cost: safeNumber(v.cost),
                 price: safeNumber(v.price) ?? 0,
                 qty: Math.max(0, Math.trunc(safeNumber(v.qty) ?? 0)),
-                ship_class: isDioramaCondition(v.condition)
-                  ? "LALAMOVE"
-                  : v.ship_class || null,
-                public_notes: v.public_notes || null,
-                issue_notes:
-                  v.condition === "with_issues"
-                    ? v.issue_notes || null
-                    : v.condition === "near_mint"
-                      ? v.issue_notes || "Near Mint Condition"
-                      : null,
+                ship_class: v.ship_class || null,
+                public_notes:
+                  v.condition === "near_mint"
+                    ? v.public_notes || "Near Mint Condition"
+                    : v.public_notes || null,
+                issue_notes: null,
                 issue_photo_urls:
                   v.condition === "with_issues"
                     ? (v.issue_photo_urls?.length ? v.issue_photo_urls : null)
@@ -615,16 +608,12 @@ export function InventoryEditorDrawer({
             cost: safeNumber(v.cost),
             price: safeNumber(v.price) ?? 0,
             qty: Math.max(0, Math.trunc(safeNumber(v.qty) ?? 0)),
-            ship_class: isDioramaCondition(v.condition)
-              ? "LALAMOVE"
-              : v.ship_class || null,
-            public_notes: v.public_notes || null,
-            issue_notes:
-              v.condition === "with_issues"
-                ? v.issue_notes || null
-                : v.condition === "near_mint"
-                  ? v.issue_notes || "Near Mint Condition"
-                  : null,
+            ship_class: v.ship_class || null,
+            public_notes:
+              v.condition === "near_mint"
+                ? v.public_notes || "Near Mint Condition"
+                : v.public_notes || null,
+            issue_notes: null,
             issue_photo_urls:
               v.condition === "with_issues"
                 ? (v.issue_photo_urls?.length ? v.issue_photo_urls : null)
@@ -852,30 +841,28 @@ export function InventoryEditorDrawer({
                           <Badge>{v._isNew ? "NEW" : v.id.slice(0, 8)}</Badge>
                           <Select
                             value={v.condition}
-                            onChange={(e) =>
+                              onChange={(e) =>
                               {
                                 const nextCondition = e.target
                                   .value as VariantDraft["condition"];
-                                const nextIssueNotes =
+                                const nextNotes =
                                   nextCondition === "near_mint"
-                                    ? "Near Mint Condition"
+                                    ? v.public_notes || "Near Mint Condition"
                                     : v.condition === "near_mint" &&
-                                        v.issue_notes === "Near Mint Condition"
+                                        v.public_notes === "Near Mint Condition"
                                       ? null
-                                      : v.issue_notes ?? null;
+                                      : v.public_notes ?? null;
                                 const nextShipClass =
-                                  isDioramaCondition(nextCondition)
-                                    ? "LALAMOVE"
-                                    : isBlisterCondition(nextCondition)
-                                      ? "BLISTER"
-                                      : v.ship_class === "BLISTER" ||
-                                          v.ship_class === "LALAMOVE"
-                                        ? shipClassFromBrand(brand)
-                                        : v.ship_class;
+                                  isBlisterCondition(nextCondition)
+                                    ? "BLISTER"
+                                    : v.ship_class === "BLISTER"
+                                      ? shipClassFromBrand(brand)
+                                      : v.ship_class;
                                 updateVariant(v.id, {
                                   condition: nextCondition,
                                   ship_class: nextShipClass ?? null,
-                                  issue_notes: nextIssueNotes,
+                                  public_notes: nextNotes,
+                                  issue_notes: null,
                                 });
                               }}
                           >
@@ -973,22 +960,17 @@ export function InventoryEditorDrawer({
                         </Select>
                         <Textarea
                           label="Notes (visible to customers)"
-                          value={v.public_notes ?? ""}
+                          value={v.public_notes ?? v.issue_notes ?? ""}
                           onChange={(e) =>
-                            updateVariant(v.id, { public_notes: e.target.value || null })
+                            updateVariant(v.id, {
+                              public_notes: e.target.value || null,
+                              issue_notes: null,
+                            })
                           }
                           className="md:col-span-3"
                         />
                         {v.condition === "with_issues" ? (
                           <div className="md:col-span-3 space-y-3">
-                            <Textarea
-                              label="Issue notes"
-                              value={v.issue_notes ?? ""}
-                              onChange={(e) =>
-                                updateVariant(v.id, { issue_notes: e.target.value || null })
-                              }
-                            />
-
                             <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3">
                               <div className="text-sm font-medium">Issue photos</div>
                               <input

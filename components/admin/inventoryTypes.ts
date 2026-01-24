@@ -18,6 +18,7 @@ export type InventoryProduct = {
   brand: string | null;
   model: string | null;
   variation: string | null;
+  description: string | null;
   image_urls: string[] | null;
   is_active: boolean | null;
   created_at: string | null;

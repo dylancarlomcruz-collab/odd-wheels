@@ -1,6 +1,9 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { ScrollText } from "lucide-react";
 import { useAllOrders } from "@/hooks/useAllOrders";
 import { useNotices } from "@/hooks/useNotices";
 import { supabase } from "@/lib/supabase/browser";
@@ -243,6 +246,7 @@ function pickShippingDays(notices: { title: string; body: string }[]) {
 }
 
 export default function CashierShipmentsPage() {
+  const pathname = usePathname();
   const { orders, itemsByOrderId, loading, reload } = useAllOrders();
   const { notices } = useNotices(10);
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
@@ -498,7 +502,21 @@ export default function CashierShipmentsPage() {
               Paid orders ready for shipping updates and tracking.
             </div>
           </div>
-          <Badge>{paidOrders.length}</Badge>
+          <div className="flex items-center gap-2">
+            <Badge>{paidOrders.length}</Badge>
+            <Link
+              href={
+                pathname.startsWith("/admin")
+                  ? "/admin/shipments/logs"
+                  : "/cashier/shipments/logs"
+              }
+              className="inline-flex h-9 items-center justify-center rounded-xl border border-white/10 px-3 text-sm text-white hover:bg-paper/5"
+              aria-label={`Shipping logs (${paidOrders.length})`}
+            >
+              <ScrollText className="h-4 w-4" />
+              <span className="ml-1 text-xs text-white/70">{paidOrders.length}</span>
+            </Link>
+          </div>
         </CardHeader>
 
         <CardBody className="space-y-4">
@@ -780,8 +798,13 @@ export default function CashierShipmentsPage() {
                                 it?.condition ?? it?.product_variant?.condition ?? ""
                               ).toLowerCase();
                               const isNearMint = itemCondition === "near_mint";
+                              const isWithIssues = itemCondition === "with_issues";
                               const notes = String(
-                                it?.issue_notes ?? it?.product_variant?.issue_notes ?? ""
+                                it?.public_notes ??
+                                  it?.issue_notes ??
+                                  it?.product_variant?.public_notes ??
+                                  it?.product_variant?.issue_notes ??
+                                  ""
                               ).trim();
                               const price = getItemPrice(it);
                               const qty = Number(it?.qty ?? 1);
@@ -810,11 +833,23 @@ export default function CashierShipmentsPage() {
                                     </div>
                                     {notes ? (
                                       <div
-                                        className={`mt-1 text-xs ${
-                                          isNearMint ? "text-white/60" : "text-yellow-200"
+                                        className={`mt-1 text-xs flex items-center gap-2 ${
+                                          isWithIssues
+                                            ? "text-red-200/80"
+                                            : isNearMint
+                                              ? "text-amber-200/80"
+                                              : "text-white/60"
                                         }`}
                                       >
-                                        {isNearMint ? "Condition note" : "Notes"}: {notes}
+                                        {isWithIssues || isNearMint ? (
+                                          <span
+                                            className={`h-2 w-2 rounded-full ${
+                                              isWithIssues ? "bg-red-400" : "bg-amber-400"
+                                            }`}
+                                            aria-hidden="true"
+                                          />
+                                        ) : null}
+                                        <span>Notes: {notes}</span>
                                       </div>
                                     ) : null}
                                   </div>

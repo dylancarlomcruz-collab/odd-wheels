@@ -8,17 +8,17 @@ import {
   ClipboardCopy,
   Clock,
   Receipt,
-  Truck,
+  ScrollText,
   User,
   Wallet,
   XCircle,
 } from "lucide-react";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase/browser";
 import { useAllOrders } from "@/hooks/useAllOrders";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
-import { formatConditionLabel } from "@/lib/conditions";
 import { Input } from "@/components/ui/Input";
 import { toast } from "@/components/ui/toast";
 
@@ -80,9 +80,9 @@ async function copyText(text: string) {
   }
 }
 
-function msLeft(deadline: string | null) {
+function msLeft(deadline: string | null, now: number) {
   if (!deadline) return null;
-  const t = new Date(deadline).getTime() - Date.now();
+  const t = new Date(deadline).getTime() - now;
   return Math.max(0, t);
 }
 function fmtCountdown(ms: number) {
@@ -91,22 +91,6 @@ function fmtCountdown(ms: number) {
   const m = Math.floor((s % 3600) / 60);
   const ss = s % 60;
   return `${h}h ${m}m ${ss}s`;
-}
-
-function cleanAddress(raw: any) {
-  if (!raw) return "";
-  const parsed = parseJsonMaybe(raw);
-  if (parsed && typeof parsed === "object") {
-    const candidate =
-      parsed.full_address ||
-      parsed.address ||
-      parsed.dropoff_address ||
-      parsed.location ||
-      parsed.branch ||
-      "";
-    return String(candidate ?? "").trim();
-  }
-  return String(raw).trim();
 }
 
 function buildCopyPayload(o: any) {
@@ -214,27 +198,6 @@ const STATUS_META: Record<
   },
 };
 
-const PAYMENT_META: Record<
-  string,
-  { label: string; badgeClass: string; icon: React.ElementType }
-> = {
-  PAID: {
-    label: "Paid",
-    badgeClass: "border-emerald-500/40 bg-emerald-500/15 text-emerald-200",
-    icon: CheckCircle2,
-  },
-  UNPAID: {
-    label: "Unpaid",
-    badgeClass: "border-amber-500/40 bg-amber-500/15 text-amber-200",
-    icon: Clock,
-  },
-  PENDING: {
-    label: "Pending",
-    badgeClass: "border-sky-500/40 bg-sky-500/15 text-sky-200",
-    icon: Receipt,
-  },
-};
-
 function getStatusMeta(status: string) {
   return (
     STATUS_META[status] ?? {
@@ -246,21 +209,19 @@ function getStatusMeta(status: string) {
   );
 }
 
-function getPaymentMeta(status: string) {
-  return (
-    PAYMENT_META[status] ?? {
-      label: status,
-      badgeClass: "border-white/20 bg-white/5 text-white/70",
-      icon: Receipt,
-    }
-  );
-}
-
 export default function AdminOrdersPage() {
   const { orders, itemsByOrderId, loading, reload } = useAllOrders();
   const [voidReason, setVoidReason] = React.useState<Record<string, string>>({});
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = React.useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = React.useState<string | null>(
+    "PENDING_APPROVAL"
+  );
+  const [now, setNow] = React.useState(() => Date.now());
+
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   async function approveOrder(orderId: string) {
     const { error } = await supabase.rpc("fn_staff_approve_order", {
@@ -307,6 +268,7 @@ export default function AdminOrdersPage() {
   const pendingApproval = orders.filter((o) => o.status === "PENDING_APPROVAL");
   const paymentSubmitted = orders.filter((o) => o.status === "PAYMENT_SUBMITTED");
   const awaitingPayment = orders.filter((o) => o.status === "AWAITING_PAYMENT");
+  const voidedOrders = orders.filter((o) => o.status === "VOIDED");
   const visibleOrders = React.useMemo(() => {
     if (!statusFilter) return orders;
     return orders.filter((o) => o.status === statusFilter);
@@ -336,11 +298,18 @@ export default function AdminOrdersPage() {
         <CardHeader className="flex items-center justify-between">
           <div>
             <div className="text-xl font-semibold">Orders / Approvals</div>
-            <div className="text-sm text-white/60">
-              Approve orders (reserve stock + start timer), approve receipts, void if needed. Includes POS + WEB.
-            </div>
           </div>
-          <Badge>{orders.length}</Badge>
+          <div className="flex items-center gap-2">
+            <Badge>{orders.length}</Badge>
+            <Link
+              href="/admin/orders/logs"
+              className="inline-flex h-9 items-center justify-center rounded-xl border border-white/10 px-3 text-sm text-white hover:bg-paper/5"
+              aria-label={`Order logs (${voidedOrders.length} voided)`}
+            >
+              <ScrollText className="h-4 w-4" />
+              <span className="ml-1 text-xs text-white/70">{voidedOrders.length}</span>
+            </Link>
+          </div>
         </CardHeader>
 
         <CardBody className="space-y-6">
@@ -370,9 +339,6 @@ export default function AdminOrdersPage() {
                   <div className={`text-2xl font-semibold ${card.countClass}`}>
                     {card.count}
                   </div>
-                  <Badge className={`mt-3 w-fit ${meta.badgeClass}`}>
-                    Status: {meta.label}
-                  </Badge>
                 </button>
               );
             })}
@@ -386,11 +352,11 @@ export default function AdminOrdersPage() {
             <div className="space-y-3">
               {visibleOrders.map((o: any) => {
                 const details = parseJsonMaybe(o.shipping_details) ?? {};
-                const method = String(details.method ?? o.shipping_method ?? "").toUpperCase();
-                const isCop = method === "LBC" && Boolean(details.cop);
                 const createdAt = new Date(o.created_at).toLocaleString("en-PH");
                 const statusMeta = getStatusMeta(o.status ?? "");
-                const paymentMeta = getPaymentMeta(o.payment_status ?? "");
+                const shippingMethod = String(
+                  o.shipping_method ?? details.method ?? "-"
+                ).toUpperCase();
                 const customerName =
                   details.receiver_name ||
                   [details.first_name, details.last_name].filter(Boolean).join(" ") ||
@@ -402,16 +368,8 @@ export default function AdminOrdersPage() {
                   o.contact ||
                   o.customer_phone ||
                   "";
-                const branch = [details.branch_name || details.branch, details.branch_city]
-                  .filter(Boolean)
-                  .join(", ");
-                const address = cleanAddress(
-                  details.full_address ?? details.dropoff_address ?? o.address ?? details.address
-                );
-                const shippingSummary = branch || address || "-";
-
                 const deadline = o.payment_deadline ?? o.reserved_expires_at ?? null;
-                const left = msLeft(deadline);
+                const left = msLeft(deadline, now);
                 const showTimer = o.status === "AWAITING_PAYMENT" && !o.payment_hold && left !== null;
 
                 const items = itemsByOrderId[o.id] ?? [];
@@ -434,26 +392,7 @@ export default function AdminOrdersPage() {
                       </div>
                     </div>
 
-                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                      <Badge className={`gap-1 ${statusMeta.badgeClass}`}>
-                        <statusMeta.icon className="h-3.5 w-3.5" />
-                        {statusMeta.label}
-                      </Badge>
-                      <Badge className={`gap-1 ${paymentMeta.badgeClass}`}>
-                        <paymentMeta.icon className="h-3.5 w-3.5" />
-                        Payment: {paymentMeta.label}
-                      </Badge>
-                      <Badge className="gap-1">
-                        Channel: {o.channel}
-                      </Badge>
-                      <Badge className="gap-1">
-                        <Truck className="h-3.5 w-3.5" />
-                        {o.shipping_method}
-                      </Badge>
-                      {isCop ? (
-                        <Badge className="border-yellow-500/40 text-yellow-200">COP</Badge>
-                      ) : null}
-                    </div>
+                    <div className="mt-2 text-xs text-white/50">{statusMeta.label}</div>
 
                     {showTimer ? (
                       <div className="mt-2 flex items-center gap-2 text-sm text-yellow-200">
@@ -477,7 +416,7 @@ export default function AdminOrdersPage() {
                         <ChevronDown className="h-4 w-4 text-white/60" />
                       </summary>
                       <div className="border-t border-white/10 p-3">
-                        <div className="grid gap-3 lg:grid-cols-[1.2fr_1.2fr_0.8fr]">
+                        <div className="grid gap-3 sm:grid-cols-2">
                           <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
                             <div className="text-xs uppercase tracking-wide text-white/50">Customer</div>
                             <div className="mt-1 font-medium">{customerName}</div>
@@ -486,33 +425,22 @@ export default function AdminOrdersPage() {
                             ) : null}
                           </div>
                           <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
-                            <div className="text-xs uppercase tracking-wide text-white/50">Shipping</div>
+                            <div className="text-xs uppercase tracking-wide text-white/50">Summary</div>
                             <div className="mt-1 text-sm text-white/80">
-                              Method: <span className="text-white">{o.shipping_method}</span>
-                            </div>
-                            <div className="mt-1 text-sm text-white/70">{shippingSummary}</div>
-                          </div>
-                          <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
-                            <div className="text-xs uppercase tracking-wide text-white/50">Totals</div>
-                            <div className="mt-1 text-sm text-white/80">
-                              Subtotal: <span className="text-white">{peso(Number(o.subtotal ?? 0))}</span>
-                            </div>
-                            <div className="text-sm text-white/80">
-                              Shipping: <span className="text-white">{peso(Number(o.shipping_fee ?? 0))}</span>
+                              Shipping: <span className="text-white">{shippingMethod}</span>
                             </div>
                             <div className="mt-1 font-semibold">Total: {peso(Number(o.total ?? 0))}</div>
                           </div>
                         </div>
 
-                        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-paper/5 p-3">
-                          <Button variant="secondary" onClick={() => onCopy(o)}>
-                            <ClipboardCopy className="mr-2 h-4 w-4" />
-                            {copiedId === o.id ? "Copied!" : "Copy details"}
-                          </Button>
-                          <div className="text-xs text-white/50">
-                            Copies: J&amp;T/Lalamove = Name + Contact + Address | LBC = First + Last + Contact + Branch
+                        {o.payment_status === "PAID" ? (
+                          <div className="mt-3">
+                            <Button variant="secondary" onClick={() => onCopy(o)}>
+                              <ClipboardCopy className="mr-2 h-4 w-4" />
+                              {copiedId === o.id ? "Copied!" : "Copy details"}
+                            </Button>
                           </div>
-                        </div>
+                        ) : null}
                       </div>
                     </details>
 
@@ -535,19 +463,9 @@ export default function AdminOrdersPage() {
                             {items.map((it: any, idx: number) => {
                               const thumb = getItemThumb(it);
                               const title = getItemTitle(it);
-                              const condition = formatConditionLabel(
-                                it?.condition ?? it?.product_variant?.condition,
-                                { upper: true }
-                              );
-                              const itemCondition = String(
-                                it?.condition ?? it?.product_variant?.condition ?? ""
-                              ).toLowerCase();
-                              const isNearMint = itemCondition === "near_mint";
-                              const notes = String(it?.issue_notes ?? it?.product_variant?.issue_notes ?? "").trim();
                               const price = getItemPrice(it);
                               const qty = Number(it?.qty ?? 1);
                               const line = Number(it?.line_total ?? price * qty);
-                              const barcode = it?.product_variant?.barcode ? String(it.product_variant.barcode) : "";
 
                               return (
                                 <div key={`${o.id}-${idx}`} className="rounded-xl border border-white/10 bg-paper/5 p-3">
@@ -561,24 +479,13 @@ export default function AdminOrdersPage() {
                                     <div className="min-w-0 flex-1">
                                       <div className="flex items-start justify-between gap-3">
                                         <div className="min-w-0">
-                                          <div className="font-medium truncate">{title}</div>
-                                          <div className="text-xs text-white/60">
-                                            {condition ? `${condition} ` : ""}x{qty}
-                                            {price ? ` @ ${peso(price)}` : ""}
-                                            {barcode ? ` | Barcode: ${barcode}` : ""}
+                                          <div className="font-medium truncate">
+                                            {title}
+                                            {qty > 1 ? ` x${qty}` : ""}
                                           </div>
                                         </div>
                                         <div className="text-sm text-white/80">{peso(line)}</div>
                                       </div>
-                                      {notes ? (
-                                        <div
-                                          className={`mt-1 text-xs ${
-                                            isNearMint ? "text-white/60" : "text-yellow-200"
-                                          }`}
-                                        >
-                                          {isNearMint ? "Condition note" : "Notes"}: {notes}
-                                        </div>
-                                      ) : null}
                                     </div>
                                   </div>
                                 </div>

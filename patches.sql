@@ -11,6 +11,10 @@ drop policy if exists "sell trade uploads insert" on storage.objects;
 create policy "sell trade uploads insert" on storage.objects
 for insert with check (bucket_id = 'sell-trade-uploads' and auth.role() = 'authenticated');
 
+-- Cart add-ons
+alter table public.cart_items
+  add column if not exists protector_selected boolean not null default false;
+
 -- Shipping workflow patches
 
 alter table public.settings
@@ -18,6 +22,13 @@ alter table public.settings
 
 alter table public.settings
   add column if not exists free_shipping_threshold numeric not null default 0;
+
+alter table public.settings
+  add column if not exists protector_stock int not null default 0;
+
+alter table public.settings
+  add column if not exists protector_stock_mainline int not null default 0,
+  add column if not exists protector_stock_premium int not null default 0;
 
 alter table public.orders
   add column if not exists shipping_status text not null default 'PREPARING TO SHIP';
@@ -713,6 +724,14 @@ alter table public.product_variants
   drop constraint if exists product_variants_condition_check;
 
 alter table public.product_variants
+  drop constraint if exists product_variants_ship_class_check;
+
+update public.product_variants
+  set condition = 'unsealed',
+      ship_class = 'DIORAMA'
+where condition = 'diorama';
+
+alter table public.product_variants
   add constraint product_variants_condition_check
   check (
     condition in (
@@ -721,7 +740,6 @@ alter table public.product_variants
       'near_mint',
       'unsealed',
       'with_issues',
-      'diorama',
       'blistered',
       'sealed_blister',
       'unsealed_blister'
@@ -729,11 +747,8 @@ alter table public.product_variants
   );
 
 alter table public.product_variants
-  drop constraint if exists product_variants_ship_class_check;
-
-alter table public.product_variants
   add constraint product_variants_ship_class_check
-  check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','BLISTER','TOMICA','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE'));
+  check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','BLISTER','TOMICA','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE','DIORAMA'));
 
 create table if not exists public.barcode_logs (
   id uuid primary key default gen_random_uuid(),
@@ -1319,3 +1334,586 @@ as $$
 $$;
 
 grant execute on function public.get_frequently_bought_together(uuid, int) to anon, authenticated;
+
+-- Tier + Shipping Voucher system
+
+alter table public.profiles
+  add column if not exists lifetime_spend numeric not null default 0,
+  add column if not exists tier text not null default 'CLASSIC',
+  add column if not exists tier_updated_at timestamptz not null default now();
+
+create table if not exists public.vouchers (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  title text,
+  kind text not null default 'FREE_SHIPPING',
+  min_subtotal numeric not null default 0,
+  shipping_cap numeric not null default 0,
+  starts_at timestamptz,
+  expires_at timestamptz,
+  is_active boolean not null default true,
+  max_per_user int,
+  max_redemptions int,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.voucher_wallet (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  voucher_id uuid not null references public.vouchers(id) on delete cascade,
+  status text not null default 'AVAILABLE',
+  claimed_at timestamptz not null default now(),
+  used_at timestamptz,
+  order_id uuid references public.orders(id) on delete set null,
+  expires_at timestamptz,
+  unique (user_id, voucher_id, expires_at)
+);
+
+create table if not exists public.order_events (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references public.orders(id) on delete cascade,
+  event_type text not null,
+  message text,
+  created_at timestamptz not null default now()
+);
+
+alter table public.orders
+  add column if not exists voucher_id uuid references public.vouchers(id),
+  add column if not exists shipping_discount numeric not null default 0,
+  add column if not exists discount_total numeric not null default 0,
+  add column if not exists priority_level text not null default 'NORMAL';
+
+alter table public.vouchers enable row level security;
+alter table public.voucher_wallet enable row level security;
+alter table public.order_events enable row level security;
+
+drop policy if exists "auth read active vouchers" on public.vouchers;
+create policy "auth read active vouchers" on public.vouchers
+for select using (auth.uid() is not null and (is_active = true or public.is_admin()));
+
+drop policy if exists "admin manage vouchers" on public.vouchers;
+create policy "admin manage vouchers" on public.vouchers
+for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "user read own voucher wallet" on public.voucher_wallet;
+create policy "user read own voucher wallet" on public.voucher_wallet
+for select using (auth.uid() = user_id);
+
+drop policy if exists "admin manage voucher wallet" on public.voucher_wallet;
+create policy "admin manage voucher wallet" on public.voucher_wallet
+for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "user read own order events" on public.order_events;
+create policy "user read own order events" on public.order_events
+for select using (
+  exists (
+    select 1 from public.orders o
+    where o.id = order_events.order_id
+      and o.user_id = auth.uid()
+  )
+);
+
+drop policy if exists "staff read order events" on public.order_events;
+create policy "staff read order events" on public.order_events
+for select using (public.is_staff());
+
+create or replace function public.fn_tier_from_spend(p_spend numeric)
+returns text
+language plpgsql
+as $$
+begin
+  if coalesce(p_spend, 0) >= 10000 then
+    return 'PLATINUM';
+  elsif coalesce(p_spend, 0) >= 5000 then
+    return 'GOLD';
+  elsif coalesce(p_spend, 0) >= 2000 then
+    return 'SILVER';
+  else
+    return 'CLASSIC';
+  end if;
+end;
+$$;
+
+create or replace function public.fn_recalculate_profile_tier(p_user_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_spend numeric;
+  v_tier text;
+begin
+  if p_user_id is null then
+    raise exception 'User id required';
+  end if;
+
+  select coalesce(sum(total), 0)
+  into v_spend
+  from public.orders
+  where user_id = p_user_id
+    and payment_status = 'PAID';
+
+  v_tier := public.fn_tier_from_spend(v_spend);
+
+  update public.profiles
+    set lifetime_spend = v_spend,
+        tier = v_tier,
+        tier_updated_at = now()
+  where id = p_user_id;
+
+  return jsonb_build_object('ok', true, 'lifetime_spend', v_spend, 'tier', v_tier);
+end;
+$$;
+
+alter table public.profiles
+  alter column tier set default 'CLASSIC';
+
+update public.profiles
+  set tier = public.fn_tier_from_spend(lifetime_spend),
+      tier_updated_at = now();
+
+create or replace function public.fn_sync_profile_tier_on_paid()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if (tg_op = 'INSERT' and new.payment_status = 'PAID')
+     or (tg_op = 'UPDATE' and new.payment_status = 'PAID' and old.payment_status is distinct from new.payment_status) then
+    perform public.fn_recalculate_profile_tier(new.user_id);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_orders_paid_sync on public.orders;
+create trigger trg_orders_paid_sync
+after insert or update of payment_status on public.orders
+for each row execute procedure public.fn_sync_profile_tier_on_paid();
+
+create or replace function public.fn_apply_order_voucher()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_voucher public.vouchers%rowtype;
+  v_discount numeric := 0;
+  v_now timestamptz := now();
+  v_tier text;
+begin
+  if new.id is null then
+    new.id := gen_random_uuid();
+  end if;
+
+  select p.tier into v_tier from public.profiles p where p.id = new.user_id;
+  if coalesce(v_tier, 'SILVER') = 'PLATINUM' then
+    new.priority_level := 'PRIORITY';
+  else
+    new.priority_level := 'NORMAL';
+  end if;
+
+  new.shipping_discount := 0;
+  new.discount_total := 0;
+
+  if new.voucher_id is null then
+    new.total := coalesce(new.subtotal, 0)
+      + coalesce(new.shipping_fee, 0)
+      + coalesce(new.cop_fee, 0)
+      + coalesce(new.lalamove_fee, 0)
+      + coalesce(new.priority_fee, 0)
+      + coalesce(new.insurance_fee, 0);
+    return new;
+  end if;
+
+  if coalesce(new.shipping_fee, 0) <= 0 then
+    raise exception 'Voucher not eligible for zero shipping fee.';
+  end if;
+
+  select * into v_voucher
+  from public.vouchers
+  where id = new.voucher_id
+    and is_active = true;
+
+  if not found then
+    raise exception 'Voucher unavailable.';
+  end if;
+
+  if coalesce(v_voucher.kind, '') <> 'FREE_SHIPPING' then
+    raise exception 'Voucher type not supported.';
+  end if;
+
+  if v_voucher.starts_at is not null and v_voucher.starts_at > v_now then
+    raise exception 'Voucher not active yet.';
+  end if;
+
+  if v_voucher.expires_at is not null and v_voucher.expires_at < v_now then
+    raise exception 'Voucher expired.';
+  end if;
+
+  if coalesce(new.subtotal, 0) < coalesce(v_voucher.min_subtotal, 0) then
+    raise exception 'Subtotal does not meet voucher minimum.';
+  end if;
+
+  v_discount := least(
+    coalesce(new.shipping_fee, 0),
+    coalesce(v_voucher.shipping_cap, 0)
+  );
+
+  new.shipping_discount := v_discount;
+  new.discount_total := v_discount;
+  new.total := coalesce(new.subtotal, 0)
+    + coalesce(new.shipping_fee, 0)
+    + coalesce(new.cop_fee, 0)
+    + coalesce(new.lalamove_fee, 0)
+    + coalesce(new.priority_fee, 0)
+    + coalesce(new.insurance_fee, 0)
+    - v_discount;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_orders_apply_voucher on public.orders;
+create trigger trg_orders_apply_voucher
+before insert on public.orders
+for each row execute procedure public.fn_apply_order_voucher();
+
+create or replace function public.fn_attach_voucher_wallet()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_now timestamptz := now();
+begin
+  if new.voucher_id is null then
+    return new;
+  end if;
+
+  update public.voucher_wallet
+    set status = 'USED',
+        used_at = v_now,
+        order_id = new.id
+  where id = (
+    select vw.id
+    from public.voucher_wallet vw
+    where vw.user_id = new.user_id
+      and vw.voucher_id = new.voucher_id
+      and vw.status = 'AVAILABLE'
+      and (vw.expires_at is null or vw.expires_at >= v_now)
+    order by vw.expires_at nulls last, vw.claimed_at
+    for update skip locked
+    limit 1
+  );
+
+  if not found then
+    raise exception 'Voucher not available.';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_orders_attach_voucher on public.orders;
+create trigger trg_orders_attach_voucher
+after insert on public.orders
+for each row execute procedure public.fn_attach_voucher_wallet();
+
+create or replace function public.fn_log_order_events()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+begin
+  if tg_op = 'INSERT' then
+    insert into public.order_events (order_id, event_type, message)
+    values (new.id, 'CREATED', 'Order placed');
+    return new;
+  end if;
+
+  if tg_op = 'UPDATE' then
+    if new.status is distinct from old.status and new.status = 'AWAITING_PAYMENT' then
+      insert into public.order_events (order_id, event_type, message)
+      values (new.id, 'APPROVED', 'Order approved');
+    end if;
+
+    if new.shipping_status is distinct from old.shipping_status then
+      if new.shipping_status in ('PREPARING', 'PREPARING TO SHIP', 'TO_SHIP', 'PENDING_SHIPMENT') then
+        insert into public.order_events (order_id, event_type, message)
+        values (new.id, 'PACKED', 'Order packed');
+      elsif new.shipping_status = 'SHIPPED' then
+        insert into public.order_events (order_id, event_type, message)
+        values (new.id, 'SHIPPED', 'Order shipped');
+      elsif new.shipping_status in ('COMPLETED', 'DELIVERED') then
+        insert into public.order_events (order_id, event_type, message)
+        values (new.id, 'DELIVERED', 'Order delivered');
+      end if;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_order_events_insert on public.orders;
+create trigger trg_order_events_insert
+after insert on public.orders
+for each row execute procedure public.fn_log_order_events();
+
+drop trigger if exists trg_order_events_update on public.orders;
+create trigger trg_order_events_update
+after update on public.orders
+for each row execute procedure public.fn_log_order_events();
+
+create or replace function public.fn_auto_approve_order(p_order_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order public.orders%rowtype;
+  v_item record;
+  v_deadline timestamptz;
+  v_sold_out uuid[] := '{}';
+  v_remaining int;
+  v_tier text;
+begin
+  select * into v_order from public.orders where id = p_order_id for update;
+  if not found then
+    raise exception 'Order not found: %', p_order_id;
+  end if;
+
+  if v_order.user_id <> auth.uid() then
+    raise exception 'Not authorized';
+  end if;
+
+  select p.tier into v_tier from public.profiles p where p.id = v_order.user_id;
+  if coalesce(v_tier, 'SILVER') not in ('GOLD', 'PLATINUM') then
+    return jsonb_build_object('ok', true, 'eligible', false, 'order_id', p_order_id);
+  end if;
+
+  if v_order.status <> 'PENDING_APPROVAL' then
+    return jsonb_build_object('ok', true, 'already_processed', true, 'order_id', p_order_id);
+  end if;
+
+  if coalesce(v_order.inventory_deducted, false) then
+    return jsonb_build_object('ok', true, 'already_deducted', true, 'order_id', p_order_id);
+  end if;
+
+  for v_item in
+    select variant_id, qty from public.order_items where order_id = p_order_id
+  loop
+    update public.product_variants
+      set qty = qty - v_item.qty
+    where id = v_item.variant_id
+      and qty >= v_item.qty
+    returning qty into v_remaining;
+
+    if not found then
+      raise exception 'Insufficient stock for variant %', v_item.variant_id;
+    end if;
+
+    if v_remaining <= 0 then
+      v_sold_out := array_append(v_sold_out, v_item.variant_id);
+    end if;
+  end loop;
+
+  v_deadline := now() + interval '12 hours';
+
+  update public.orders
+    set status = 'AWAITING_PAYMENT',
+        reserved_expires_at = v_deadline,
+        payment_deadline = v_deadline,
+        expires_at = v_deadline,
+        inventory_deducted = true
+  where id = p_order_id;
+
+  if array_length(v_sold_out, 1) is not null then
+    perform public.fn_cleanup_sold_out_variants(v_sold_out);
+  end if;
+
+  insert into public.audit_logs(actor_user_id, action, meta)
+  values (auth.uid(), 'ORDER_AUTO_APPROVED', jsonb_build_object('order_id', p_order_id));
+
+  return jsonb_build_object('ok', true, 'eligible', true, 'order_id', p_order_id);
+end;
+$$;
+
+revoke execute on function public.fn_auto_approve_order(uuid) from public;
+grant execute on function public.fn_auto_approve_order(uuid) to authenticated;
+
+create or replace function public.fn_expire_voucher_wallet()
+  returns int
+  language plpgsql
+  security definer
+  set search_path = public
+  set row_security = off
+  as $$
+declare
+  v_count int := 0;
+begin
+  update public.voucher_wallet
+    set status = 'EXPIRED'
+  where status = 'AVAILABLE'
+    and expires_at is not null
+    and expires_at < now();
+
+  get diagnostics v_count = row_count;
+  return v_count;
+  end;
+  $$;
+
+drop function if exists public.fn_grant_monthly_vouchers(timestamptz);
+
+create or replace function public.fn_grant_spend_vouchers(p_user_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_spend numeric := 0;
+  v_fs100 uuid;
+  v_fs200 uuid;
+  v_fs300 uuid;
+  v_existing int := 0;
+  v_earned int := 0;
+  v_added int := 0;
+  v_total int := 0;
+begin
+  if p_user_id is null then
+    raise exception 'User id required';
+  end if;
+
+  select coalesce(sum(total), 0)
+    into v_spend
+  from public.orders
+  where user_id = p_user_id
+    and payment_status = 'PAID';
+
+  select id into v_fs100 from public.vouchers where code = 'FS100' limit 1;
+  select id into v_fs200 from public.vouchers where code = 'FS200' limit 1;
+  select id into v_fs300 from public.vouchers where code = 'FS300' limit 1;
+
+  if v_fs100 is not null then
+    v_earned := floor(v_spend / 2000)::int;
+    select count(*) into v_existing
+      from public.voucher_wallet
+      where user_id = p_user_id
+        and voucher_id = v_fs100
+        and coalesce(status, 'AVAILABLE') <> 'EXPIRED';
+    if v_earned > v_existing then
+      insert into public.voucher_wallet (user_id, voucher_id)
+      select p_user_id, v_fs100 from generate_series(1, v_earned - v_existing);
+      get diagnostics v_added = row_count;
+      v_total := v_total + v_added;
+    end if;
+  end if;
+
+  if v_fs200 is not null then
+    v_earned := floor(v_spend / 4000)::int;
+    select count(*) into v_existing
+      from public.voucher_wallet
+      where user_id = p_user_id
+        and voucher_id = v_fs200
+        and coalesce(status, 'AVAILABLE') <> 'EXPIRED';
+    if v_earned > v_existing then
+      insert into public.voucher_wallet (user_id, voucher_id)
+      select p_user_id, v_fs200 from generate_series(1, v_earned - v_existing);
+      get diagnostics v_added = row_count;
+      v_total := v_total + v_added;
+    end if;
+  end if;
+
+  if v_fs300 is not null then
+    v_earned := floor(v_spend / 10000)::int;
+    select count(*) into v_existing
+      from public.voucher_wallet
+      where user_id = p_user_id
+        and voucher_id = v_fs300
+        and coalesce(status, 'AVAILABLE') <> 'EXPIRED';
+    if v_earned > v_existing then
+      insert into public.voucher_wallet (user_id, voucher_id)
+      select p_user_id, v_fs300 from generate_series(1, v_earned - v_existing);
+      get diagnostics v_added = row_count;
+      v_total := v_total + v_added;
+    end if;
+  end if;
+
+  return jsonb_build_object('ok', true, 'granted', v_total, 'lifetime_spend', v_spend);
+end;
+$$;
+
+create or replace function public.fn_grant_spend_vouchers_for_all()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_row record;
+  v_total int := 0;
+  v_granted int := 0;
+  v_result jsonb;
+begin
+  if not public.is_admin() then
+    raise exception 'Not authorized';
+  end if;
+
+  for v_row in select id from public.profiles loop
+    v_result := public.fn_grant_spend_vouchers(v_row.id);
+    v_granted := v_granted + coalesce((v_result->>'granted')::int, 0);
+    v_total := v_total + 1;
+  end loop;
+
+  return jsonb_build_object('ok', true, 'users', v_total, 'granted', v_granted);
+end;
+$$;
+
+create or replace function public.fn_sync_profile_vouchers_on_paid()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if (tg_op = 'INSERT' and new.payment_status = 'PAID')
+     or (tg_op = 'UPDATE' and new.payment_status = 'PAID' and old.payment_status is distinct from new.payment_status) then
+    perform public.fn_grant_spend_vouchers(new.user_id);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_orders_paid_vouchers on public.orders;
+create trigger trg_orders_paid_vouchers
+after insert or update of payment_status on public.orders
+for each row execute procedure public.fn_sync_profile_vouchers_on_paid();
+
+revoke execute on function public.fn_grant_spend_vouchers(uuid) from public;
+revoke execute on function public.fn_grant_spend_vouchers_for_all() from public;
+grant execute on function public.fn_grant_spend_vouchers_for_all() to authenticated;
+
+insert into public.vouchers (code, title, kind, min_subtotal, shipping_cap, is_active)
+values
+  ('FS100', 'Free Shipping 100', 'FREE_SHIPPING', 2000, 100, true),
+  ('FS200', 'Free Shipping 200', 'FREE_SHIPPING', 4000, 200, true),
+  ('FS300', 'Free Shipping 300', 'FREE_SHIPPING', 10000, 300, true)
+on conflict (code) do update
+  set title = excluded.title,
+      kind = excluded.kind,
+      min_subtotal = excluded.min_subtotal,
+      shipping_cap = excluded.shipping_cap,
+      is_active = excluded.is_active;

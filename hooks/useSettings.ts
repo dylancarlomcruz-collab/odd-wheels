@@ -14,6 +14,9 @@ export type Settings = {
   pickup_unavailable: boolean;
   pickup_schedule: Record<string, string[]> | null;
   header_logo_url: string | null;
+  protector_stock: number | null;
+  protector_stock_mainline: number | null;
+  protector_stock_premium: number | null;
 };
 
 export function useSettings() {

@@ -29,6 +29,7 @@ import {
   QrCode,
   Settings2,
   ScanLine,
+  Crown,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -281,7 +282,14 @@ export function SiteHeader() {
   const mobileMenuItems = [
     { key: "sell-trade", href: "/sell-trade", label: "Sell/Trade", icon: ArrowLeftRight, show: true },
     { key: "orders", href: "/orders", label: "Orders", icon: ClipboardList, show: Boolean(user) },
-    { key: "account", href: "/account", label: "Account", icon: Settings, show: Boolean(user) },
+      { key: "account", href: "/account", label: "Account", icon: Settings, show: Boolean(user) },
+      {
+        key: "tier-vouchers",
+        href: "/account/tiers",
+        label: "Tier & Vouchers",
+        icon: Crown,
+        show: Boolean(user),
+      },
     { key: "login", href: "/auth/login", label: "Login", icon: User2, show: !user },
   ];
 

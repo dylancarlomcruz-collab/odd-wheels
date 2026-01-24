@@ -17,9 +17,15 @@ import { useSettings } from "@/hooks/useSettings";
 import { toast } from "@/components/ui/toast";
 import { resolveEffectivePrice } from "@/lib/pricing";
 import { formatTitle } from "@/lib/text";
+import {
+  PROTECTOR_ADDON_FEE,
+  isProtectorEligibleShipClass,
+  protectorKindFromShipClass,
+  protectorUnitFee,
+} from "@/lib/addons";
 
 function CartContent() {
-  const { lines, loading, updateQty, remove, add } = useCart();
+  const { lines, loading, updateQty, updateProtector, remove, add } = useCart();
   const { settings } = useSettings();
   const selectAllRef = React.useRef<HTMLInputElement>(null);
 
@@ -34,6 +40,56 @@ function CartContent() {
   const selectedLines = React.useMemo(
     () => lines.filter((line) => selectedIds.includes(line.id)),
     [lines, selectedIds],
+  );
+  const protectorFallbackStock = React.useMemo(
+    () => Math.max(0, Number(settings?.protector_stock ?? 0)),
+    [settings?.protector_stock]
+  );
+  const protectorStockByKind = React.useMemo(() => {
+    const mainlineRaw = Number(settings?.protector_stock_mainline ?? NaN);
+    const premiumRaw = Number(settings?.protector_stock_premium ?? NaN);
+    const mainlineValue = Number.isFinite(mainlineRaw)
+      ? Math.max(0, Math.trunc(mainlineRaw))
+      : 0;
+    const premiumValue = Number.isFinite(premiumRaw)
+      ? Math.max(0, Math.trunc(premiumRaw))
+      : 0;
+    const useFallback =
+      protectorFallbackStock > 0 && mainlineValue === 0 && premiumValue === 0;
+    return {
+      MAINLINE: useFallback ? protectorFallbackStock : mainlineValue,
+      PREMIUM: useFallback ? protectorFallbackStock : premiumValue,
+    };
+  }, [
+    settings?.protector_stock_mainline,
+    settings?.protector_stock_premium,
+    protectorFallbackStock,
+  ]);
+  const selectedProtectorCounts = React.useMemo(
+    () =>
+      lines.reduce(
+        (sum, line) => {
+          const kind = protectorKindFromShipClass(line.variant.ship_class);
+          if (!kind || !line.protector_selected) return sum;
+          sum[kind] += line.qty;
+          return sum;
+        },
+        { MAINLINE: 0, PREMIUM: 0 }
+      ),
+    [lines],
+  );
+  const protectorRemainingByKind = React.useMemo(
+    () => ({
+      MAINLINE: Math.max(
+        0,
+        protectorStockByKind.MAINLINE - selectedProtectorCounts.MAINLINE
+      ),
+      PREMIUM: Math.max(
+        0,
+        protectorStockByKind.PREMIUM - selectedProtectorCounts.PREMIUM
+      ),
+    }),
+    [protectorStockByKind, selectedProtectorCounts]
   );
   const hasNonSealedInCart = React.useMemo(() => {
     const isSealed = (value: string | null | undefined) => {
@@ -58,10 +114,13 @@ function CartContent() {
       }).effectivePrice,
     []
   );
-  const selectedSubtotal = selectedLines.reduce(
-    (acc, l) => acc + lineUnitPrice(l) * l.qty,
-    0,
-  );
+  const selectedSubtotal = selectedLines.reduce((acc, l) => {
+    const addOn = protectorUnitFee(
+      l.variant.ship_class,
+      Boolean(l.protector_selected)
+    );
+    return acc + (lineUnitPrice(l) + addOn) * l.qty;
+  }, 0);
   const allSelected = lines.length > 0 && selectedIds.length === lines.length;
   const someSelected =
     selectedIds.length > 0 && selectedIds.length < lines.length;
@@ -205,9 +264,24 @@ function CartContent() {
       : null
     : null;
   const previewCondition = previewLine?.variant.condition ?? "";
-  const previewIssue = previewLine?.variant.issue_notes ?? null;
-  const previewNotes = previewLine?.variant.public_notes ?? null;
+  const previewUnifiedNotes = String(
+    previewLine?.variant.public_notes ?? previewLine?.variant.issue_notes ?? ""
+  ).trim();
   const isPreviewNearMint = previewCondition === "near_mint";
+  const isPreviewWithIssues = previewCondition === "with_issues";
+  const previewIndicatorTone = isPreviewWithIssues
+    ? "bg-red-400"
+    : isPreviewNearMint
+      ? "bg-amber-400"
+      : "";
+  const showPreviewIndicator = previewIndicatorTone.length > 0;
+  const previewNoteTone = previewUnifiedNotes
+    ? isPreviewWithIssues
+      ? "text-red-200/80"
+      : isPreviewNearMint
+        ? "text-amber-200/80"
+        : "text-white/70"
+    : "text-white/70";
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 space-y-6">
@@ -267,6 +341,22 @@ function CartContent() {
               </div>
               {lines.map((l) => {
                 const available = l.variant.qty;
+                const protectorEligible = isProtectorEligibleShipClass(
+                  l.variant.ship_class
+                );
+                const protectorKind = protectorKindFromShipClass(
+                  l.variant.ship_class
+                );
+                const protectorSelected = Boolean(l.protector_selected);
+                const protectorStockForLine = protectorKind
+                  ? protectorStockByKind[protectorKind]
+                  : 0;
+                const protectorRemainingForLine = protectorKind
+                  ? protectorRemainingByKind[protectorKind]
+                  : 0;
+                const canToggleProtector =
+                  protectorEligible &&
+                  (protectorSelected || protectorRemainingForLine >= l.qty);
                 const pricing = resolveEffectivePrice({
                   price: Number(l.variant.price),
                   sale_price: l.variant.sale_price ?? null,
@@ -280,6 +370,7 @@ function CartContent() {
                 const canDec = l.qty > 1;
                 const canInc = available > 0 && l.qty < available;
                 const checked = selectedIds.includes(l.id);
+                const protectorFeeLabel = formatPHP(PROTECTOR_ADDON_FEE);
 
                 return (
                   <div
@@ -328,6 +419,7 @@ function CartContent() {
                           <div className="text-sm text-white/60">
                             {formatConditionLabel(l.variant.condition, {
                               upper: true,
+                              shipClass: l.variant.ship_class,
                             })}{" "}
                             -{" "}
                             <span className="text-price">
@@ -343,28 +435,80 @@ function CartContent() {
                               )}
                             </span>
                           </div>
-                          {l.variant.public_notes ? (
+                          {(() => {
+                            const noteValue = String(
+                              l.variant.public_notes ?? l.variant.issue_notes ?? ""
+                            ).trim();
+                            if (!noteValue) return null;
+                            const noteTone =
+                              l.variant.condition === "with_issues"
+                                ? "text-red-200/80"
+                                : l.variant.condition === "near_mint"
+                                  ? "text-amber-200/80"
+                                  : "text-white/50";
+                            const indicatorTone =
+                              l.variant.condition === "with_issues"
+                                ? "bg-red-400"
+                                : l.variant.condition === "near_mint"
+                                  ? "bg-amber-400"
+                                  : "";
+                            const showIndicator = indicatorTone.length > 0;
+                            return (
+                              <div className={`text-[11px] ${noteTone} flex items-center gap-2`}>
+                                {showIndicator ? (
+                                  <span
+                                    className={`h-2 w-2 rounded-full ${indicatorTone}`}
+                                    aria-hidden="true"
+                                  />
+                                ) : null}
+                                <span>Notes: {noteValue}</span>
+                              </div>
+                            );
+                          })()}
+                          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+                            {protectorEligible ? (
+                              <label className="inline-flex items-center gap-2 text-white/70">
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4"
+                                  checked={protectorSelected}
+                                  disabled={!canToggleProtector}
+                                  onChange={(e) => {
+                                    if (
+                                      e.target.checked &&
+                                      !canToggleProtector
+                                    ) {
+                                      toast({
+                                        title: "No protectors left",
+                                        message: "Protector stock is sold out.",
+                                      });
+                                      return;
+                                    }
+                                    updateProtector(l.id, e.target.checked);
+                                  }}
+                                />
+                                Protector add-on ({protectorFeeLabel})
+                              </label>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => openPreview(l)}
+                              className={`text-left text-xs text-white/50 transition hover:text-white/80 ${
+                                protectorEligible ? "ml-auto" : ""
+                              }`}
+                            >
+                              View details
+                            </button>
+                          </div>
+                          {protectorEligible && protectorSelected ? (
                             <div className="text-[11px] text-white/50">
-                              Notes: {l.variant.public_notes}
+                              Protector adds {protectorFeeLabel} per item.
                             </div>
                           ) : null}
-                          <button
-                            type="button"
-                            onClick={() => openPreview(l)}
-                            className="mt-1 inline-block text-left text-xs text-white/50 transition hover:text-white/80"
-                          >
-                            View details
-                          </button>
-                          {l.variant.issue_notes ? (
-                            l.variant.condition === "near_mint" ? (
-                              <div className="text-sm text-white/70">
-                                Condition note: {l.variant.issue_notes}
-                              </div>
-                            ) : l.variant.condition === "with_issues" ? (
-                              <div className="text-sm text-red-200/80">
-                                Issue: {l.variant.issue_notes}
-                              </div>
-                            ) : null
+                          {protectorEligible && protectorStockForLine > 0 ? (
+                            <div className="text-[11px] text-white/40">
+                              Protectors left: {protectorRemainingForLine}
+                            </div>
                           ) : null}
                         </div>
                       </div>
@@ -598,6 +742,7 @@ function CartContent() {
                         <span className="text-white/90">
                           {formatConditionLabel(previewCondition, {
                             upper: true,
+                            shipClass: previewLine.variant.ship_class,
                           })}
                         </span>
                       </div>
@@ -616,21 +761,58 @@ function CartContent() {
                           )}
                         </span>
                       </div>
-                      {previewNotes ? (
-                        <div className="text-sm text-white/70">
-                          Notes: {previewNotes}
+                      {(() => {
+                        const previewProtectorEligible = isProtectorEligibleShipClass(
+                          previewLine.variant.ship_class
+                        );
+                        const previewProtectorKind = protectorKindFromShipClass(
+                          previewLine.variant.ship_class
+                        );
+                        const previewProtectorSelected = Boolean(
+                          previewLine.protector_selected
+                        );
+                        const previewRemaining = previewProtectorKind
+                          ? protectorRemainingByKind[previewProtectorKind]
+                          : 0;
+                        const previewCanToggle =
+                          previewProtectorEligible &&
+                          (previewProtectorSelected ||
+                            previewRemaining >= previewLine.qty);
+                        return previewProtectorEligible ? (
+                          <label className="mt-2 inline-flex items-center gap-2 text-xs text-white/70">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4"
+                              checked={previewProtectorSelected}
+                              disabled={!previewCanToggle}
+                              onChange={(e) => {
+                                if (e.target.checked && !previewCanToggle) {
+                                  toast({
+                                    title: "No protectors left",
+                                    message: "Protector stock is sold out.",
+                                  });
+                                  return;
+                                }
+                                updateProtector(
+                                  previewLine.id,
+                                  e.target.checked
+                                );
+                              }}
+                            />
+                            Protector add-on ({formatPHP(PROTECTOR_ADDON_FEE)})
+                          </label>
+                        ) : null;
+                      })()}
+                      {previewUnifiedNotes ? (
+                        <div className={`text-sm ${previewNoteTone} flex items-center gap-2`}>
+                          {showPreviewIndicator ? (
+                            <span
+                              className={`h-2 w-2 rounded-full ${previewIndicatorTone}`}
+                              aria-hidden="true"
+                            />
+                          ) : null}
+                          <span>Notes: {previewUnifiedNotes}</span>
                         </div>
-                      ) : null}
-                      {previewIssue ? (
-                        isPreviewNearMint ? (
-                          <div className="text-sm text-white/70">
-                            Condition note: {previewIssue}
-                          </div>
-                        ) : (
-                          <div className="text-sm text-red-200/80">
-                            Issue: {previewIssue}
-                          </div>
-                        )
                       ) : null}
                     </div>
 

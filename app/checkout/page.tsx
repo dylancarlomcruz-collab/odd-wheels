@@ -45,6 +45,8 @@ import {
 } from "@/lib/shipping/logic";
 import { suggestedInsuranceFee } from "@/lib/shipping/config";
 import { resolveEffectivePrice } from "@/lib/pricing";
+import { protectorUnitFee } from "@/lib/addons";
+import { getVoucherEligibility, type VoucherWallet } from "@/lib/vouchers";
 
 type ShippingMethod = "LALAMOVE" | "JNT" | "LBC" | "PICKUP";
 const PHONE_LENGTH = PHONE_MAX_LENGTH;
@@ -195,6 +197,146 @@ function CheckoutAuthModal({
   return createPortal(content, document.body);
 }
 
+type VoucherModalProps = {
+  open: boolean;
+  vouchers: VoucherWallet[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onRemove: () => void;
+  onClose: () => void;
+  subtotal: number;
+  shippingFee: number;
+};
+
+function formatVoucherDate(value: string | null | undefined) {
+  if (!value) return "-";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function VoucherModal({
+  open,
+  vouchers,
+  selectedId,
+  onSelect,
+  onRemove,
+  onClose,
+  subtotal,
+  shippingFee,
+}: VoucherModalProps) {
+  React.useEffect(() => {
+    if (!open || typeof document === "undefined") return undefined;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [open]);
+
+  if (!open || typeof document === "undefined") return null;
+
+  const available = vouchers.filter((v) => v.status === "AVAILABLE");
+
+  const content = (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 p-4">
+      <div className="w-full max-w-2xl">
+        <Card className="border border-white/10 bg-bg-900/95 shadow-soft">
+          <CardHeader className="flex items-center justify-between gap-4">
+            <div>
+              <div className="text-xl font-semibold">Select a voucher</div>
+              <div className="text-xs text-white/60">
+                Free shipping vouchers apply to shipping fee only.
+              </div>
+            </div>
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              Close
+            </Button>
+          </CardHeader>
+          <CardBody className="space-y-3">
+            {available.length === 0 ? (
+              <div className="text-sm text-white/60">No available vouchers.</div>
+            ) : (
+              <div className="space-y-3">
+                {available.map((wallet) => {
+                  const voucher = wallet.voucher;
+                  const eligibility = getVoucherEligibility({
+                    voucher,
+                    walletExpiresAt: wallet.expires_at ?? null,
+                    subtotal,
+                    shippingFee,
+                  });
+                  const isSelected = selectedId === wallet.id;
+                  return (
+                    <div
+                      key={wallet.id}
+                      className={`rounded-xl border p-3 ${
+                        isSelected
+                          ? "border-accent-500/40 bg-accent-500/10"
+                          : "border-white/10 bg-bg-900/40"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold">
+                            {voucher.title || "Free Shipping"}
+                          </div>
+                          <div className="text-xs text-white/60">
+                            Min spend {formatPHP(Number(voucher.min_subtotal ?? 0))} - Cap{" "}
+                            {formatPHP(Number(voucher.shipping_cap ?? 0))}
+                          </div>
+                        </div>
+                        <div className="text-xs text-white/60">
+                          Expires: {formatVoucherDate(wallet.expires_at ?? voucher.expires_at)}
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                        <div
+                          className={
+                            eligibility.eligible
+                              ? "text-xs text-emerald-200"
+                              : "text-xs text-white/50"
+                          }
+                        >
+                          {eligibility.eligible
+                            ? `Eligible - Discount ${formatPHP(eligibility.discount)}`
+                            : `Ineligible - ${eligibility.reason ?? "Not eligible"}`}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {isSelected ? (
+                            <Button variant="ghost" size="sm" onClick={onRemove}>
+                              Remove
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm"
+                              onClick={() => onSelect(wallet.id)}
+                              disabled={!eligibility.eligible}
+                            >
+                              Apply
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardBody>
+        </Card>
+      </div>
+    </div>
+  );
+
+  return createPortal(content, document.body);
+}
+
 function resolveLalamoveSelections(
   sd: ShippingDefaults
 ): LalamoveSelection[] {
@@ -298,6 +440,15 @@ function CheckoutContent() {
     normalizeShippingDefaults({})
   );
 
+  const [voucherWallet, setVoucherWallet] = React.useState<VoucherWallet[]>([]);
+  const [voucherLoading, setVoucherLoading] = React.useState(false);
+  const [voucherError, setVoucherError] = React.useState<string | null>(null);
+  const [voucherOpen, setVoucherOpen] = React.useState(false);
+  const [selectedVoucherWalletId, setSelectedVoucherWalletId] = React.useState<
+    string | null
+  >(null);
+  const [voucherNotice, setVoucherNotice] = React.useState<string | null>(null);
+
   // Shared
   const [name, setName] = React.useState("");
   const [phone, setPhone] = React.useState("");
@@ -386,14 +537,18 @@ function CheckoutContent() {
   const itemsSubtotal = React.useMemo(
     () =>
       (selectedLines ?? []).reduce(
-        (sum, l) =>
-          sum +
-          resolveEffectivePrice({
+        (sum, l) => {
+          const basePrice = resolveEffectivePrice({
             price: Number(l.variant.price),
             sale_price: l.variant.sale_price ?? null,
             discount_percent: l.variant.discount_percent ?? null,
-          }).effectivePrice *
-            l.qty,
+          }).effectivePrice;
+          const addOn = protectorUnitFee(
+            l.variant.ship_class,
+            Boolean(l.protector_selected)
+          );
+          return sum + (basePrice + addOn) * l.qty;
+        },
         0
       ),
     [selectedLines]
@@ -448,6 +603,46 @@ function CheckoutContent() {
     }
 
     run();
+    return () => {
+      mounted = false;
+    };
+  }, [user?.id]);
+
+  React.useEffect(() => {
+    let mounted = true;
+
+    async function loadVouchers() {
+      if (!user) {
+        setVoucherWallet([]);
+        setVoucherLoading(false);
+        return;
+      }
+
+      setVoucherLoading(true);
+      setVoucherError(null);
+
+      const { data, error } = await supabase
+        .from("voucher_wallet")
+        .select(
+          "id,status,claimed_at,used_at,expires_at,voucher:vouchers(id,code,title,kind,min_subtotal,shipping_cap,starts_at,expires_at,is_active)"
+        )
+        .eq("user_id", user.id)
+        .order("claimed_at", { ascending: false });
+
+      if (!mounted) return;
+
+      if (error) {
+        console.error("Failed to load vouchers:", error);
+        setVoucherError(error.message || "Failed to load vouchers.");
+        setVoucherWallet([]);
+      } else {
+        const rows = (data as VoucherWallet[]) ?? [];
+        setVoucherWallet(rows.filter((row) => Boolean((row as any)?.voucher)));
+      }
+      setVoucherLoading(false);
+    }
+
+    loadVouchers();
     return () => {
       mounted = false;
     };
@@ -692,13 +887,57 @@ function CheckoutContent() {
     insuranceFee,
   ]);
 
+  const selectedVoucher = React.useMemo(
+    () =>
+      voucherWallet.find((voucher) => voucher.id === selectedVoucherWalletId) ??
+      null,
+    [voucherWallet, selectedVoucherWalletId]
+  );
+
+  const voucherEligibility = React.useMemo(() => {
+    if (!selectedVoucher) return null;
+    return getVoucherEligibility({
+      voucher: selectedVoucher.voucher,
+      walletExpiresAt: selectedVoucher.expires_at ?? null,
+      subtotal: itemsSubtotal,
+      shippingFee: fees.shipping_fee,
+    });
+  }, [selectedVoucher, itemsSubtotal, fees.shipping_fee]);
+
+  const shippingDiscount = voucherEligibility?.eligible
+    ? voucherEligibility.discount
+    : 0;
+
+  React.useEffect(() => {
+    if (!selectedVoucherWalletId) {
+      setVoucherNotice(null);
+      return;
+    }
+    if (!selectedVoucher || !voucherEligibility?.eligible) {
+      setSelectedVoucherWalletId(null);
+      setVoucherNotice(
+        voucherEligibility?.reason
+          ? `Voucher removed: ${voucherEligibility.reason}`
+          : "Voucher removed."
+      );
+    } else {
+      setVoucherNotice(null);
+    }
+  }, [
+    selectedVoucherWalletId,
+    selectedVoucher,
+    voucherEligibility?.eligible,
+    voucherEligibility?.reason,
+  ]);
+
   const total =
     itemsSubtotal +
     fees.shipping_fee +
     fees.cop_fee +
     fees.lalamove_fee +
     fees.priority_fee +
-    fees.insurance_fee;
+    fees.insurance_fee -
+    shippingDiscount;
 
   const feeLines: FeeLine[] = React.useMemo(() => {
     const subtotalLabel = selectedIds ? "Selected items subtotal" : "Items subtotal";
@@ -734,6 +973,9 @@ function CheckoutContent() {
       });
     }
 
+    if (shippingDiscount > 0) {
+      out.push({ label: "Shipping discount", amount: -shippingDiscount });
+    }
     if (fees.cop_fee > 0)
       out.push({ label: "LBC COP convenience fee", amount: fees.cop_fee });
     if (fees.lalamove_fee > 0)
@@ -908,6 +1150,9 @@ function CheckoutContent() {
               : region,
           shipping_details,
           fees,
+          voucher_id: selectedVoucher?.voucher.id ?? null,
+          shipping_discount: shippingDiscount,
+          discount_total: shippingDiscount,
           priority_requested: priorityRequested,
           insurance_selected: insuranceSelected,
           insurance_fee_user: insuranceFee,
@@ -1016,7 +1261,7 @@ function CheckoutContent() {
             </div>
             {hasLalamoveOnly ? (
               <div className="text-xs text-amber-200">
-                Diorama items require Lalamove delivery.
+                Diorama shipping class requires Lalamove delivery.
               </div>
             ) : null}
 
@@ -1326,9 +1571,75 @@ function CheckoutContent() {
         </Card>
 
         <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <div className="font-semibold">Vouchers</div>
+              <div className="text-sm text-white/60">
+                Apply free shipping vouchers before checkout.
+              </div>
+            </CardHeader>
+            <CardBody className="space-y-3 text-sm">
+              {voucherLoading ? (
+                <div className="text-white/60">Loading vouchers...</div>
+              ) : voucherError ? (
+                <div className="text-red-200">{voucherError}</div>
+              ) : selectedVoucher ? (
+                <div className="space-y-1">
+                  <div className="font-semibold">
+                    {selectedVoucher.voucher.title || "Free Shipping"}
+                  </div>
+                  <div className="text-xs text-white/60">
+                    Min spend {formatPHP(Number(selectedVoucher.voucher.min_subtotal ?? 0))}
+                    {" - "}
+                    Cap {formatPHP(Number(selectedVoucher.voucher.shipping_cap ?? 0))}
+                  </div>
+                  <div className="text-xs text-emerald-200">
+                    Applied discount: {formatPHP(shippingDiscount)}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-white/60">No voucher applied.</div>
+              )}
+              {voucherNotice ? (
+                <div className="text-xs text-yellow-200">{voucherNotice}</div>
+              ) : null}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setVoucherOpen(true)}
+                  disabled={voucherLoading}
+                >
+                  {selectedVoucher ? "Change voucher" : "Select voucher"}
+                </Button>
+                {selectedVoucher ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedVoucherWalletId(null)}
+                  >
+                    Remove
+                  </Button>
+                ) : null}
+              </div>
+            </CardBody>
+          </Card>
           <FeeBreakdown lines={feeLines} total={total} />
         </div>
       </div>
+      <VoucherModal
+        open={voucherOpen}
+        vouchers={voucherWallet}
+        selectedId={selectedVoucherWalletId}
+        onSelect={(id) => {
+          setSelectedVoucherWalletId(id);
+          setVoucherOpen(false);
+        }}
+        onRemove={() => setSelectedVoucherWalletId(null)}
+        onClose={() => setVoucherOpen(false)}
+        subtotal={itemsSubtotal}
+        shippingFee={fees.shipping_fee}
+      />
     </main>
   );
 }

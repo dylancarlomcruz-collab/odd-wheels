@@ -630,13 +630,14 @@ export default function ShopPageClient() {
   async function onAdd(
     product: ShopProduct,
     option: {
-    id: string;
-    condition: string;
-    price: number;
-    sale_price?: number | null;
-    discount_percent?: number | null;
-    qty: number;
-  }) {
+      id: string;
+      condition: string;
+      price: number;
+      sale_price?: number | null;
+      discount_percent?: number | null;
+      qty: number;
+    }
+  ) {
     try {
       const result = await cart.add(option.id, 1);
       const effectivePrice = resolveEffectivePrice({

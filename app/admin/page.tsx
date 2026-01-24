@@ -14,6 +14,7 @@ import {
   Settings2,
   StickyNote,
   Truck,
+  Ticket,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -324,6 +325,13 @@ export default function AdminDashboard() {
                 >
                   <StickyNote className="h-4 w-4" />
                   Post notice
+                </Link>
+                <Link
+                  href="/admin/vouchers"
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-900/40 px-4 py-2 text-sm text-white/90 transition hover:bg-bg-900/60"
+                >
+                  <Ticket className="h-4 w-4" />
+                  Vouchers
                 </Link>
                 <Link
                   href="/admin/settings"

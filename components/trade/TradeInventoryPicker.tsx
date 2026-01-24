@@ -27,7 +27,6 @@ type TradeVariant = {
     | "near_mint"
     | "unsealed"
     | "with_issues"
-    | "diorama"
     | "blistered"
     | "sealed_blister"
     | "unsealed_blister";

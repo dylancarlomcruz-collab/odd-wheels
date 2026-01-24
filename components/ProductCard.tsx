@@ -18,6 +18,7 @@ type ConditionOption = {
   sale_price?: number | null;
   discount_percent?: number | null;
   qty: number;
+  ship_class?: string | null;
   issue_notes?: string | null;
   issue_photo_urls?: string[] | null;
   public_notes?: string | null;
@@ -200,11 +201,27 @@ export default function ProductCard({
   const hasIssuePhotos = issueImages.length > 0;
   const publicNotes = String(previewSelected?.public_notes ?? "").trim();
   const issueNotes = String(previewSelected?.issue_notes ?? "").trim();
+  const unifiedNotes = publicNotes || issueNotes;
   const isNearMint = previewSelected?.condition === "near_mint";
+  const isWithIssues = previewSelected?.condition === "with_issues";
+  const showNoteIndicator = isNearMint || isWithIssues;
+  const noteIndicatorTone = isWithIssues
+    ? "bg-red-400"
+    : isNearMint
+      ? "bg-amber-400"
+      : "";
+  const noteTone = unifiedNotes
+    ? isWithIssues
+      ? "text-red-200/80"
+      : isNearMint
+        ? "text-amber-200/80"
+        : "text-white/70"
+    : "text-white/70";
   const lowStock = (selected?.qty ?? 0) > 0 && (selected?.qty ?? 0) <= 2;
   const onlyOneLeft = (selected?.qty ?? 0) === 1;
   const conditionLabel = formatConditionLabel(selected?.condition ?? "-", {
     upper: true,
+    shipClass: selected?.ship_class,
   });
   const proofBits = [
     socialProof?.inCarts ? `${socialProof.inCarts} in carts` : null,
@@ -507,7 +524,10 @@ export default function ProductCard({
                         : "border-white/20 bg-bg-900/60 text-white/80 hover:bg-bg-900/80 dark:border-white/10 dark:bg-paper/5 dark:text-white/70 dark:hover:bg-paper/10",
                     ].join(" ")}
                   >
-                    {formatConditionLabel(o.condition, { upper: true })}
+                                  {formatConditionLabel(o.condition, {
+                                    upper: true,
+                                    shipClass: o.ship_class,
+                                  })}
                   </button>
                 );
               })}
@@ -730,22 +750,19 @@ export default function ProductCard({
                           <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
                             Notes
                           </div>
-                          <div className="mt-2 text-sm text-white/70">
-                            {publicNotes
-                              ? publicNotes
-                              : "No notes for this item."}
+                          <div className={`mt-2 text-sm ${noteTone} flex items-center gap-2`}>
+                            {showNoteIndicator ? (
+                              <span
+                                className={`h-2 w-2 rounded-full ${noteIndicatorTone}`}
+                                aria-hidden="true"
+                              />
+                            ) : null}
+                            <span>
+                              {unifiedNotes
+                                ? unifiedNotes
+                                : "No notes for this item."}
+                            </span>
                           </div>
-                          {issueNotes ? (
-                            isNearMint ? (
-                              <div className="mt-2 text-sm text-white/70">
-                                Condition note: {issueNotes}
-                              </div>
-                            ) : (
-                              <div className="mt-2 text-sm text-red-200/80">
-                                Issue: {issueNotes}
-                              </div>
-                            )
-                          ) : null}
                         </div>
 
                         <div className="rounded-xl border border-amber-300/70 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-100">

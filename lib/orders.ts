@@ -3,6 +3,7 @@
 import { supabase } from "@/lib/supabase/browser";
 import type { CartLine } from "@/hooks/useCart";
 import { resolveEffectivePrice } from "@/lib/pricing";
+import { protectorUnitFee } from "@/lib/addons";
 
 export type CreateOrderInput = {
   userId: string;
@@ -10,6 +11,9 @@ export type CreateOrderInput = {
   shipping_method: "LBC" | "JNT" | "LALAMOVE" | "PICKUP";
   shipping_region: string | null;
   shipping_details: any;
+  voucher_id?: string | null;
+  shipping_discount?: number;
+  discount_total?: number;
   fees: {
     shipping_fee: number;
     cop_fee: number;
@@ -78,17 +82,27 @@ export async function createOrderFromCart(
   input: CreateOrderInput,
   cartLines: CartLine[]
 ) {
-  const lineUnitPrice = (line: CartLine) =>
-    resolveEffectivePrice({
+  const lineUnitPrice = (line: CartLine) => {
+    const basePrice = resolveEffectivePrice({
       price: Number(line.variant.price),
       sale_price: line.variant.sale_price ?? null,
       discount_percent: line.variant.discount_percent ?? null,
     }).effectivePrice;
+    const addOn = protectorUnitFee(
+      line.variant.ship_class,
+      Boolean(line.protector_selected)
+    );
+    return basePrice + addOn;
+  };
 
   const subtotal = cartLines.reduce(
     (acc, l) => acc + lineUnitPrice(l) * l.qty,
     0
   );
+
+  const shippingDiscount = Math.max(0, Number(input.shipping_discount ?? 0));
+  const discountTotal =
+    Math.max(0, Number(input.discount_total ?? shippingDiscount)) || 0;
 
   const total =
     subtotal +
@@ -96,7 +110,8 @@ export async function createOrderFromCart(
     Number(input.fees.cop_fee ?? 0) +
     Number(input.fees.lalamove_fee ?? 0) +
     Number(input.fees.priority_fee ?? 0) +
-    Number(input.fees.insurance_fee ?? 0);
+    Number(input.fees.insurance_fee ?? 0) -
+    shippingDiscount;
 
   const sd = input.shipping_details ?? {};
 
@@ -128,6 +143,9 @@ export async function createOrderFromCart(
     subtotal,
     shipping_fee: Number(input.fees.shipping_fee ?? 0),
     discount: 0,
+    voucher_id: input.voucher_id ?? null,
+    shipping_discount: shippingDiscount,
+    discount_total: discountTotal,
     total,
 
     cop_fee: Number(input.fees.cop_fee ?? 0),
@@ -216,6 +234,12 @@ export async function createOrderFromCart(
       .in("id", lineIds);
 
     if (clearError) throw clearError;
+  }
+
+  try {
+    await supabase.rpc("fn_auto_approve_order", { p_order_id: order.id });
+  } catch (err) {
+    console.error("Auto-approve failed:", err);
   }
 
   return order as any;

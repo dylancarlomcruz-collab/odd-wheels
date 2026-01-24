@@ -14,6 +14,7 @@ export function emptyShipCounts(): ShipCounts {
     HOT_WHEELS_PREMIUM: 0,
     LOOSE_NO_BOX: 0,
     LALAMOVE: 0,
+    DIORAMA: 0,
   };
 }
 
@@ -46,7 +47,8 @@ export function shipCountsFromLines(lines: Array<{ ship_class: ShipClass | null;
   const c = emptyShipCounts();
   for (const line of lines) {
     const cls = line.ship_class ?? "MINI_GT";
-    c[cls] += Math.max(0, line.qty);
+    const bucket = cls === "DIORAMA" ? "LALAMOVE" : cls;
+    c[bucket] += Math.max(0, line.qty);
   }
   return c;
 }

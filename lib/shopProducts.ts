@@ -8,6 +8,7 @@ export type VariantRow = {
   issue_notes: string | null;
   issue_photo_urls: string[] | null;
   public_notes: string | null;
+  ship_class: string | null;
   price: number | null;
   sale_price?: number | null;
   discount_percent?: number | null;
@@ -37,6 +38,7 @@ export type ProductRow = {
     issue_notes: string | null;
     issue_photo_urls: string[] | null;
     public_notes: string | null;
+    ship_class: string | null;
     price: number | null;
     sale_price?: number | null;
     discount_percent?: number | null;
@@ -59,7 +61,10 @@ export function collapseVariants(rows: VariantRow[]): ShopProduct[] {
 
     const key = p.id;
     const conditionRaw = String(v.condition ?? "sealed").toLowerCase();
-    const condition = formatConditionLabel(conditionRaw, { upper: true });
+    const condition = formatConditionLabel(conditionRaw, {
+      upper: true,
+      shipClass: v.ship_class,
+    });
     const price = pickNumber(v.price, 0);
     const sale_price =
       Number.isFinite(Number((v as any)?.sale_price)) &&
@@ -95,6 +100,7 @@ export function collapseVariants(rows: VariantRow[]): ShopProduct[] {
         ? v.issue_photo_urls
         : null,
       public_notes: v.public_notes ?? null,
+      ship_class: v.ship_class ?? null,
       condition_raw: conditionRaw,
     };
 
@@ -178,7 +184,10 @@ export function mapProductsToShopProducts(rows: ProductRow[]): ShopProduct[] {
           : null;
         return {
           id: v.id,
-          condition: formatConditionLabel(conditionRaw, { upper: true }),
+          condition: formatConditionLabel(conditionRaw, {
+            upper: true,
+            shipClass: v.ship_class,
+          }),
           price,
           sale_price,
           discount_percent,
@@ -188,6 +197,7 @@ export function mapProductsToShopProducts(rows: ProductRow[]): ShopProduct[] {
             ? v.issue_photo_urls
             : null,
           public_notes: v.public_notes ?? null,
+          ship_class: v.ship_class ?? null,
           condition_raw: conditionRaw,
         };
       })

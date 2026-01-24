@@ -330,7 +330,10 @@ export default function ProductDetailPage() {
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <Badge className="border-accent-500/30 text-accent-700 dark:text-accent-200">
-                            {formatConditionLabel(v.condition, { upper: true })}
+                            {formatConditionLabel(v.condition, {
+                              upper: true,
+                              shipClass: v.ship_class,
+                            })}
                           </Badge>
                           {pricing.hasSale ? (
                             <Badge className="border-rose-300/60 bg-rose-500/20 text-rose-100">
@@ -353,23 +356,36 @@ export default function ProductDetailPage() {
                         </div>
                       </div>
 
-                    {v.issue_notes ? (
-                      v.condition === "near_mint" ? (
-                        <div className="mt-2 text-sm text-white/70">
-                          Condition note: {v.issue_notes}
+                    {(() => {
+                      const noteValue = String(
+                        v.public_notes ?? v.issue_notes ?? ""
+                      ).trim();
+                      if (!noteValue) return null;
+                      const noteTone =
+                        v.condition === "with_issues"
+                          ? "text-red-200/80"
+                          : v.condition === "near_mint"
+                            ? "text-amber-200/80"
+                            : "text-white/70";
+                      const indicatorTone =
+                        v.condition === "with_issues"
+                          ? "bg-red-400"
+                          : v.condition === "near_mint"
+                            ? "bg-amber-400"
+                            : "";
+                      const showIndicator = indicatorTone.length > 0;
+                      return (
+                        <div className={`mt-2 flex items-center gap-2 text-sm ${noteTone}`}>
+                          {showIndicator ? (
+                            <span
+                              className={`h-2 w-2 rounded-full ${indicatorTone}`}
+                              aria-hidden="true"
+                            />
+                          ) : null}
+                          <span>Notes: {noteValue}</span>
                         </div>
-                      ) : v.condition === "with_issues" ? (
-                        <div className="mt-2 text-sm text-red-200/80">
-                          Issue: {v.issue_notes}
-                        </div>
-                      ) : null
-                    ) : null}
-
-                    {v.public_notes ? (
-                      <div className="mt-2 text-sm text-white/70">
-                        Notes: {v.public_notes}
-                      </div>
-                    ) : null}
+                      );
+                    })()}
 
                     {Array.isArray(v.issue_photo_urls) && v.issue_photo_urls.length ? (
                       <div className="mt-3">
@@ -379,7 +395,10 @@ export default function ProductDetailPage() {
                             setIssueIndex(0);
                             setIssueViewer({
                               images: v.issue_photo_urls ?? [],
-                              condition: formatConditionLabel(v.condition, { upper: true }),
+                              condition: formatConditionLabel(v.condition, {
+                                upper: true,
+                                shipClass: v.ship_class,
+                              }),
                             });
                           }}
                         >
@@ -396,7 +415,10 @@ export default function ProductDetailPage() {
                             const baseToast = {
                               title: product.title,
                               image_url: heroImg,
-                              variant: formatConditionLabel(v.condition, { upper: true }),
+                              variant: formatConditionLabel(v.condition, {
+                                upper: true,
+                                shipClass: v.ship_class,
+                              }),
                               price: pricing.effectivePrice,
                               action: { label: "View cart", href: "/cart" },
                             };

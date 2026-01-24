@@ -102,6 +102,9 @@ create table if not exists public.settings (
     pickup_schedule jsonb not null default '{}'::jsonb,
     pickup_unavailable boolean not null default false,
     header_logo_url text,
+    protector_stock_mainline int not null default 0,
+    protector_stock_premium int not null default 0,
+    protector_stock int not null default 0,
     created_at timestamptz not null default now()
   );
 
@@ -115,7 +118,10 @@ insert into public.settings (
     pickup_schedule_text,
     pickup_schedule,
     pickup_unavailable,
-    header_logo_url
+    header_logo_url,
+    protector_stock_mainline,
+    protector_stock_premium,
+    protector_stock
   )
 values (
   1,
@@ -136,7 +142,10 @@ values (
     "SUN": ["10:00 AM - 1:00 PM", "2:00 PM - 6:00 PM"]
     }'::jsonb,
     false,
-    null
+    null,
+    0,
+    0,
+    0
   )
 on conflict (id) do nothing;
 
@@ -156,14 +165,14 @@ create table if not exists public.products (
 create table if not exists public.product_variants (
   id uuid primary key default gen_random_uuid(),
   product_id uuid not null references public.products(id) on delete cascade,
-  condition text not null check (condition in ('sealed','resealed','near_mint','unsealed','with_issues','diorama','blistered','sealed_blister','unsealed_blister')),
+  condition text not null check (condition in ('sealed','resealed','near_mint','unsealed','with_issues','blistered','sealed_blister','unsealed_blister')),
   issue_notes text,
   cost numeric,
   price numeric not null,
   sale_price numeric,
   discount_percent numeric,
   qty int not null default 0 check (qty >= 0),
-  ship_class text default 'MINI_GT' check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','BLISTER','TOMICA','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE')),
+  ship_class text default 'MINI_GT' check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','BLISTER','TOMICA','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE','DIORAMA')),
   created_at timestamptz not null default now()
 );
 
@@ -175,6 +184,7 @@ create table if not exists public.cart_items (
   user_id uuid not null references auth.users(id) on delete cascade,
   variant_id uuid not null references public.product_variants(id) on delete restrict,
   qty int not null default 1 check (qty > 0),
+  protector_selected boolean not null default false,
   created_at timestamptz not null default now(),
   unique (user_id, variant_id)
 );
@@ -758,4 +768,3 @@ as $$
 $$;
 
 grant execute on function public.get_frequently_bought_together(uuid, int) to anon, authenticated;
-

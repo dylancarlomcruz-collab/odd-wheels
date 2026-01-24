@@ -9,6 +9,7 @@ export type CartLine = {
   user_id: string;
   variant_id: string;
   qty: number;
+  protector_selected: boolean;
 
   // joined
   variant: {
@@ -46,6 +47,7 @@ type GuestCartItem = {
   variant_id: string;
   qty: number;
   added_at?: string;
+  protector_selected?: boolean;
 };
 
 let mergePromise: Promise<void> | null = null;
@@ -66,11 +68,15 @@ function normalizeGuestCart(items: GuestCartItem[]) {
     if (existing) {
       existing.qty += qty;
       existing.added_at = existing.added_at ?? item.added_at;
+      existing.protector_selected =
+        Boolean(existing.protector_selected) ||
+        Boolean(item.protector_selected);
     } else {
       map.set(id, {
         variant_id: id,
         qty,
         added_at: item.added_at ?? new Date().toISOString(),
+        protector_selected: Boolean(item.protector_selected),
       });
     }
   }
@@ -154,6 +160,7 @@ export function useCart() {
           user_id: "guest",
           variant_id: String(item.variant_id),
           qty: nextQty,
+          protector_selected: Boolean(item.protector_selected),
           variant: variant as any,
         });
         cleanedItems.push({ ...item, qty: nextQty });
@@ -169,7 +176,7 @@ export function useCart() {
     const { data, error } = await supabase
       .from("cart_items")
       .select(
-        "id,user_id,variant_id,qty, variant:product_variants(id,condition,issue_notes,public_notes,price,sale_price,discount_percent,qty,ship_class, product:products(id,title,brand,model,image_urls))"
+        "id,user_id,variant_id,qty,protector_selected, variant:product_variants(id,condition,issue_notes,public_notes,price,sale_price,discount_percent,qty,ship_class, product:products(id,title,brand,model,image_urls))"
       )
       .eq("user_id", user.id)
       .order("created_at", { ascending: false });
@@ -195,7 +202,7 @@ export function useCart() {
       const [existingRes, inventoryRes] = await Promise.all([
         supabase
           .from("cart_items")
-          .select("id,variant_id,qty")
+          .select("id,variant_id,qty,protector_selected")
           .eq("user_id", user.id)
           .in("variant_id", variantIds),
         supabase
@@ -204,12 +211,16 @@ export function useCart() {
           .in("id", variantIds),
       ]);
 
-      const existingMap = new Map<string, { id: string; qty: number }>();
+      const existingMap = new Map<
+        string,
+        { id: string; qty: number; protector_selected: boolean }
+      >();
       (existingRes.data as any[] | null)?.forEach((row) => {
         if (!row?.variant_id) return;
         existingMap.set(String(row.variant_id), {
           id: String(row.id),
           qty: Number(row.qty ?? 0),
+          protector_selected: Boolean(row.protector_selected),
         });
       });
 
@@ -233,17 +244,31 @@ export function useCart() {
         const nextQty = typeof availableQty === "number"
           ? Math.max(1, Math.min(desired, availableQty))
           : Math.max(1, desired);
+        const nextProtectorSelected =
+          Boolean(existing?.protector_selected) ||
+          Boolean(item.protector_selected);
         if (existing?.id) {
-          if (nextQty !== prevQty) {
+          if (
+            nextQty !== prevQty ||
+            nextProtectorSelected !== existing?.protector_selected
+          ) {
             await supabase
               .from("cart_items")
-              .update({ qty: nextQty })
+              .update({
+                qty: nextQty,
+                protector_selected: nextProtectorSelected,
+              })
               .eq("id", existing.id);
           }
         } else {
           await supabase
             .from("cart_items")
-            .insert({ user_id: user.id, variant_id: variantId, qty: nextQty });
+            .insert({
+              user_id: user.id,
+              variant_id: variantId,
+              qty: nextQty,
+              protector_selected: Boolean(item.protector_selected),
+            });
         }
       }
 
@@ -303,7 +328,11 @@ export function useCart() {
   }, [user?.id, JSON.stringify(lines.map((l) => l.variant_id))]);
 
   const add = React.useCallback(
-    async (variantId: string, qty = 1): Promise<AddResult> => {
+    async (
+      variantId: string,
+      qty = 1,
+      options?: { protectorSelected?: boolean }
+    ): Promise<AddResult> => {
       // Always clamp based on current inventory qty
       const { data: vRow, error: vErr } = await supabase
         .from("product_variants")
@@ -314,6 +343,7 @@ export function useCart() {
       const available = Number((vRow as any)?.qty ?? 0);
       const productId = (vRow as any)?.product_id as string | undefined;
       if (available <= 0) throw new Error("Item sold out");
+      const protectorSelected = Boolean(options?.protectorSelected);
 
       if (!user) {
         const guestItems = readGuestCart();
@@ -329,6 +359,9 @@ export function useCart() {
           if (nextQty !== prevQty) {
             existing.qty = nextQty;
           }
+          if (protectorSelected) {
+            existing.protector_selected = true;
+          }
         } else {
           desiredQty = Number(qty) || 1;
           nextQty = Math.max(1, Math.min(desiredQty, available));
@@ -337,6 +370,7 @@ export function useCart() {
             variant_id: variantId,
             qty: nextQty,
             added_at: new Date().toISOString(),
+            protector_selected: protectorSelected,
           });
         }
         writeGuestCart(guestItems);
@@ -356,7 +390,7 @@ export function useCart() {
       // Upsert: if exists, increment
       const { data: existing } = await supabase
         .from("cart_items")
-        .select("id,qty")
+        .select("id,qty,protector_selected")
         .eq("user_id", user.id)
         .eq("variant_id", variantId)
         .maybeSingle();
@@ -367,11 +401,17 @@ export function useCart() {
       let nextQty = Math.max(1, Math.min(desired, available));
       let capped = desired > available;
 
+      const nextProtectorSelected =
+        Boolean(existing?.protector_selected) || protectorSelected;
+
       if (existing?.id) {
-        if (nextQty !== prevQty) {
+        if (
+          nextQty !== prevQty ||
+          nextProtectorSelected !== Boolean(existing?.protector_selected)
+        ) {
           await supabase
             .from("cart_items")
-            .update({ qty: nextQty })
+            .update({ qty: nextQty, protector_selected: nextProtectorSelected })
             .eq("id", existing.id);
         }
       } else {
@@ -380,7 +420,12 @@ export function useCart() {
         capped = desiredQty > available;
         await supabase
           .from("cart_items")
-          .insert({ user_id: user.id, variant_id: variantId, qty: nextQty });
+          .insert({
+            user_id: user.id,
+            variant_id: variantId,
+            qty: nextQty,
+            protector_selected: protectorSelected,
+          });
       }
       await reload();
       if (productId) {
@@ -464,5 +509,36 @@ export function useCart() {
     [reload, user?.id]
   );
 
-  return { lines, loading, reload, add, updateQty, remove, isLoggedIn: !!user };
+  const updateProtector = React.useCallback(
+    async (lineId: string, selected: boolean) => {
+      if (!user) {
+        const guestItems = readGuestCart();
+        const existing = guestItems.find((item) => item.variant_id === lineId);
+        if (!existing) return;
+        existing.protector_selected = selected;
+        writeGuestCart(guestItems);
+        await reload();
+        emitCartUpdated(instanceId.current);
+        return;
+      }
+      await supabase
+        .from("cart_items")
+        .update({ protector_selected: selected })
+        .eq("id", lineId);
+      await reload();
+      emitCartUpdated(instanceId.current);
+    },
+    [reload, user?.id]
+  );
+
+  return {
+    lines,
+    loading,
+    reload,
+    add,
+    updateQty,
+    updateProtector,
+    remove,
+    isLoggedIn: !!user,
+  };
 }
