@@ -75,6 +75,7 @@ type ShipClass =
   | "KAIDO"
   | "POPRACE"
   | "ACRYLIC_TRUE_SCALE"
+  | "TRUCKS"
   | "BLISTER"
   | "TOMICA"
   | "HOT_WHEELS_MAINLINE"
@@ -317,6 +318,7 @@ function VariantDraftPanel({
           <option value="KAIDO">Kaido</option>
           <option value="POPRACE">Pop Race</option>
           <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
+          <option value="TRUCKS">Trucks</option>
           <option value="BLISTER">Blister</option>
           <option value="TOMICA">Tomica</option>
           <option value="HOT_WHEELS_MAINLINE">Hot Wheels Mainline</option>
@@ -2992,6 +2994,7 @@ export default function AdminInventoryPage() {
                         <option value="ACRYLIC_TRUE_SCALE">
                           ACRYLIC_TRUE_SCALE
                         </option>
+                        <option value="TRUCKS">TRUCKS</option>
                         <option value="BLISTER">BLISTER</option>
                         <option value="TOMICA">TOMICA</option>
                         <option value="HOT_WHEELS_MAINLINE">HOT_WHEELS_MAINLINE</option>
@@ -3164,6 +3167,7 @@ export default function AdminInventoryPage() {
                 <option value="KAIDO">Kaido</option>
                 <option value="POPRACE">Pop Race</option>
                 <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
+                <option value="TRUCKS">Trucks</option>
                 <option value="BLISTER">Blister</option>
                 <option value="TOMICA">Tomica</option>
                 <option value="HOT_WHEELS_MAINLINE">Hot Wheels Mainline</option>
@@ -3370,6 +3374,7 @@ export default function AdminInventoryPage() {
                 <option value="KAIDO">Kaido</option>
                 <option value="POPRACE">Pop Race</option>
                 <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
+                <option value="TRUCKS">Trucks</option>
                 <option value="BLISTER">Blister</option>
                 <option value="TOMICA">Tomica</option>
                 <option value="HOT_WHEELS_MAINLINE">Hot Wheels Mainline</option>

@@ -748,7 +748,7 @@ alter table public.product_variants
 
 alter table public.product_variants
   add constraint product_variants_ship_class_check
-  check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','BLISTER','TOMICA','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE','DIORAMA'));
+  check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','TRUCKS','BLISTER','TOMICA','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE','DIORAMA'));
 
 create table if not exists public.barcode_logs (
   id uuid primary key default gen_random_uuid(),

@@ -6,6 +6,7 @@ export type ShipClass =
   | "KAIDO"
   | "POPRACE"
   | "ACRYLIC_TRUE_SCALE"
+  | "TRUCKS"
   | "BLISTER"
   | "TOMICA"
   | "HOT_WHEELS_MAINLINE"
@@ -43,6 +44,7 @@ export const JNT_CAPACITY: Record<JntPouch, Record<ShipClass, number>> = {
     KAIDO: 2,
     POPRACE: 2,
     ACRYLIC_TRUE_SCALE: 1,
+    TRUCKS: 0,
     BLISTER: 0,
     TOMICA: 10,
     HOT_WHEELS_MAINLINE: 0,
@@ -56,6 +58,7 @@ export const JNT_CAPACITY: Record<JntPouch, Record<ShipClass, number>> = {
     KAIDO: 8,
     POPRACE: 8,
     ACRYLIC_TRUE_SCALE: 4,
+    TRUCKS: 1,
     BLISTER: 2,
     TOMICA: 30,
     HOT_WHEELS_MAINLINE: 8,
@@ -72,6 +75,7 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     KAIDO: 1,
     POPRACE: 1,
     ACRYLIC_TRUE_SCALE: 1,
+    TRUCKS: 0,
     BLISTER: 0,
     TOMICA: 4,
     HOT_WHEELS_MAINLINE: 0,
@@ -85,6 +89,7 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     KAIDO: 4,
     POPRACE: 4,
     ACRYLIC_TRUE_SCALE: 4,
+    TRUCKS: 1,
     BLISTER: 1,
     TOMICA: 20,
     HOT_WHEELS_MAINLINE: 8,
@@ -98,6 +103,7 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     KAIDO: Math.floor(4 * 3.5),
     POPRACE: Math.floor(4 * 3.5),
     ACRYLIC_TRUE_SCALE: Math.floor(4 * 3.5),
+    TRUCKS: 3,
     BLISTER: 8,
     TOMICA: 20,
     HOT_WHEELS_MAINLINE: 20,

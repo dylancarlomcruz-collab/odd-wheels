@@ -172,7 +172,7 @@ create table if not exists public.product_variants (
   sale_price numeric,
   discount_percent numeric,
   qty int not null default 0 check (qty >= 0),
-  ship_class text default 'MINI_GT' check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','BLISTER','TOMICA','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE','DIORAMA')),
+  ship_class text default 'MINI_GT' check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','TRUCKS','BLISTER','TOMICA','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE','DIORAMA')),
   created_at timestamptz not null default now()
 );
 

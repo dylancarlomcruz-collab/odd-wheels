@@ -8,6 +8,7 @@ export function emptyShipCounts(): ShipCounts {
     KAIDO: 0,
     POPRACE: 0,
     ACRYLIC_TRUE_SCALE: 0,
+    TRUCKS: 0,
     BLISTER: 0,
     TOMICA: 0,
     HOT_WHEELS_MAINLINE: 0,
@@ -19,7 +20,16 @@ export function emptyShipCounts(): ShipCounts {
 }
 
 export function fitsCapacity(counts: ShipCounts, capacity: Record<ShipClass, number>): boolean {
-  return (Object.keys(counts) as ShipClass[]).every((k) => counts[k] <= capacity[k]);
+  const normalized =
+    counts.TRUCKS > 0
+      ? {
+          ...counts,
+          ACRYLIC_TRUE_SCALE: counts.ACRYLIC_TRUE_SCALE + counts.TRUCKS * 4,
+        }
+      : counts;
+  return (Object.keys(normalized) as ShipClass[]).every(
+    (k) => normalized[k] <= capacity[k]
+  );
 }
 
 export function recommendJntPouch(counts: ShipCounts): { ok: true; pouch: JntPouch } | { ok: false; reason: string } {
