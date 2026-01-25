@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Select } from "@/components/ui/Select";
+import { Checkbox } from "@/components/ui/Checkbox";
 import { FeeBreakdown, type FeeLine } from "@/components/checkout/FeeBreakdown";
 import Link from "next/link";
 import { createPortal } from "react-dom";
@@ -31,7 +32,7 @@ import {
 } from "@/lib/shipping/config";
 import { PHONE_MAX_LENGTH, sanitizePhone, validatePhone11 } from "@/lib/phone";
 import {
-  formatJntAddressLine,
+  mergeShippingDefaults,
   normalizeShippingDefaults,
   type ShippingDefaults,
 } from "@/lib/shippingDefaults";
@@ -147,6 +148,31 @@ function buildLalamoveSelectionFromSlot(
   return null;
 }
 
+const LOCATION_SUGGESTION_LIMIT = 20;
+
+function filterLocationSuggestions(
+  items: string[],
+  value: string,
+  minChars = 2
+) {
+  const query = value.trim().toLowerCase();
+  if (query.length < minChars) return [];
+  const startsWith: string[] = [];
+  const contains: string[] = [];
+
+  for (const item of items) {
+    const lower = item.toLowerCase();
+    if (lower.startsWith(query)) {
+      startsWith.push(item);
+    } else if (lower.includes(query)) {
+      contains.push(item);
+    }
+    if (startsWith.length + contains.length >= LOCATION_SUGGESTION_LIMIT) break;
+  }
+
+  return [...startsWith, ...contains].slice(0, LOCATION_SUGGESTION_LIMIT);
+}
+
 type CheckoutAuthModalProps = {
   open: boolean;
   checkoutRedirect: string;
@@ -156,16 +182,22 @@ function CheckoutAuthModal({
   open,
   checkoutRedirect,
 }: CheckoutAuthModalProps) {
+  const [mounted, setMounted] = React.useState(false);
+
   React.useEffect(() => {
-    if (!open || typeof document === "undefined") return undefined;
+    setMounted(true);
+  }, []);
+
+  React.useEffect(() => {
+    if (!open || !mounted) return undefined;
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = originalOverflow;
     };
-  }, [open]);
+  }, [open, mounted]);
 
-  if (!open || typeof document === "undefined") return null;
+  if (!open || !mounted) return null;
 
   const content = (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 p-4">
@@ -418,20 +450,6 @@ function CheckoutContent() {
 
   const [msg, setMsg] = React.useState<string | null>(null);
 
-  if (!user) {
-    return (
-      <main className="mx-auto max-w-6xl px-4 py-8">
-        <div className="space-y-2 text-white/50">
-          <div className="text-2xl font-semibold text-white">Checkout</div>
-          <div className="text-sm">
-            Log in or create an account to continue.
-          </div>
-        </div>
-        <CheckoutAuthModal open checkoutRedirect={checkoutRedirect} />
-      </main>
-    );
-  }
-
   const [shippingMethod, setShippingMethod] =
     React.useState<ShippingMethod>("LALAMOVE");
   const [region, setRegion] = React.useState<Region>("METRO_MANILA");
@@ -443,6 +461,7 @@ function CheckoutContent() {
   const [defaults, setDefaults] = React.useState<ShippingDefaults>(() =>
     normalizeShippingDefaults({})
   );
+  const [defaultsRaw, setDefaultsRaw] = React.useState<unknown>({});
 
   const [voucherWallet, setVoucherWallet] = React.useState<VoucherWallet[]>([]);
   const [voucherLoading, setVoucherLoading] = React.useState(false);
@@ -460,8 +479,18 @@ function CheckoutContent() {
   const [submitAttempted, setSubmitAttempted] = React.useState(false);
 
   // J&T (split)
-  const [jtAddressLine, setJtAddressLine] = React.useState("");
-  const [jtBrgy, setJtBrgy] = React.useState("");
+  const [jtHouseStreetUnit, setJtHouseStreetUnit] = React.useState("");
+  const [jtBarangay, setJtBarangay] = React.useState("");
+  const [jtCity, setJtCity] = React.useState("");
+  const [jtProvince, setJtProvince] = React.useState("");
+  const [jtPostalCode, setJtPostalCode] = React.useState("");
+  const [phBarangays, setPhBarangays] = React.useState<string[]>([]);
+  const [phCities, setPhCities] = React.useState<string[]>([]);
+  const [phProvinces, setPhProvinces] = React.useState<string[]>([]);
+  const [locationsLoading, setLocationsLoading] = React.useState(false);
+  const [locationsError, setLocationsError] = React.useState<string | null>(
+    null
+  );
 
   // LBC (split)
   const [lbcFirstName, setLbcFirstName] = React.useState("");
@@ -475,6 +504,15 @@ function CheckoutContent() {
   const [lalamoveAddress, setLalamoveAddress] = React.useState("");
   const [lalamoveImageUrl, setLalamoveImageUrl] = React.useState<string>("");
   const [lalamoveUploading, setLalamoveUploading] = React.useState(false);
+  const [lalamoveMapLink, setLalamoveMapLink] = React.useState("");
+  const [lalamoveMapCoords, setLalamoveMapCoords] = React.useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
+  const [lalamovePinLoading, setLalamovePinLoading] = React.useState(false);
+  const [lalamovePinError, setLalamovePinError] = React.useState<string | null>(
+    null
+  );
   const [lalamoveSlots, setLalamoveSlots] = React.useState<
     LalamoveSelection[]
   >([]);
@@ -486,6 +524,7 @@ function CheckoutContent() {
   const [pickupSlot, setPickupSlot] = React.useState("");
 
   const [notes, setNotes] = React.useState("");
+  const [saveAsDefault, setSaveAsDefault] = React.useState(false);
 
   const phoneError = formatPhoneError(phone, phoneTouched || submitAttempted);
 
@@ -536,6 +575,65 @@ function CheckoutContent() {
   );
 
   const pickupUnavailable = Boolean(settings?.pickup_unavailable);
+
+  React.useEffect(() => {
+    let mounted = true;
+    if (shippingMethod !== "JNT") return undefined;
+    if (phBarangays.length || phCities.length || phProvinces.length)
+      return undefined;
+
+    async function loadLocations() {
+      setLocationsLoading(true);
+      setLocationsError(null);
+      try {
+        const [barangaysRes, citiesRes, provincesRes] = await Promise.all([
+          fetch("/data/ph-barangays.json"),
+          fetch("/data/ph-cities.json"),
+          fetch("/data/ph-provinces.json"),
+        ]);
+        if (!barangaysRes.ok || !citiesRes.ok || !provincesRes.ok) {
+          throw new Error("Failed to load location data.");
+        }
+        const [barangays, cities, provinces] = await Promise.all([
+          barangaysRes.json(),
+          citiesRes.json(),
+          provincesRes.json(),
+        ]);
+        if (!mounted) return;
+        setPhBarangays(Array.isArray(barangays) ? barangays : []);
+        setPhCities(Array.isArray(cities) ? cities : []);
+        setPhProvinces(Array.isArray(provinces) ? provinces : []);
+      } catch (err) {
+        if (!mounted) return;
+        setLocationsError("Failed to load location suggestions.");
+      } finally {
+        if (mounted) setLocationsLoading(false);
+      }
+    }
+
+    loadLocations();
+    return () => {
+      mounted = false;
+    };
+  }, [
+    shippingMethod,
+    phBarangays.length,
+    phCities.length,
+    phProvinces.length,
+  ]);
+
+  const barangaySuggestions = React.useMemo(
+    () => filterLocationSuggestions(phBarangays, jtBarangay, 2),
+    [phBarangays, jtBarangay]
+  );
+  const citySuggestions = React.useMemo(
+    () => filterLocationSuggestions(phCities, jtCity, 2),
+    [phCities, jtCity]
+  );
+  const provinceSuggestions = React.useMemo(
+    () => filterLocationSuggestions(phProvinces, jtProvince, 1),
+    [phProvinces, jtProvince]
+  );
 
   // Insurance
   const itemsSubtotal = React.useMemo(
@@ -592,6 +690,7 @@ function CheckoutContent() {
         ((data as any)?.shipping_defaults as ShippingDefaults | null) ?? {};
       const normalizedDefaults = normalizeShippingDefaults(rawDefaults);
       setDefaults(normalizedDefaults);
+      setDefaultsRaw(rawDefaults ?? {});
 
       const profileName = (data as any)?.name as string | null;
       const profilePhone = (data as any)?.contact as string | null;
@@ -666,8 +765,11 @@ function CheckoutContent() {
     if (shippingMethod === "JNT") {
       setName(sd.jnt?.recipient_name ?? name);
       setPhone(sanitizePhone(sd.jnt?.contact_number ?? phone));
-      setJtAddressLine(formatJntAddressLine(sd.jnt));
-      setJtBrgy(sd.jnt?.barangay ?? "");
+      setJtHouseStreetUnit(sd.jnt?.house_street_unit ?? "");
+      setJtBarangay(sd.jnt?.barangay ?? "");
+      setJtCity(sd.jnt?.city ?? "");
+      setJtProvince(sd.jnt?.province ?? "");
+      setJtPostalCode(sd.jnt?.postal_code ?? "");
       setNotes(sd.jnt?.notes ?? "");
 
       setLbcFirstName("");
@@ -676,8 +778,12 @@ function CheckoutContent() {
       setLbcBranchCity("");
       setLalamoveAddress("");
       setLalamoveImageUrl("");
+      setLalamoveMapLink("");
+      setLalamoveMapCoords(null);
       setLalamoveSlots([]);
       setLalamoveSlotError(null);
+      setLalamovePinError(null);
+      setLalamovePinLoading(false);
     }
 
     if (shippingMethod === "LBC") {
@@ -689,12 +795,19 @@ function CheckoutContent() {
       setNotes(sd.lbc?.notes ?? "");
       setLbcPackageChoice("N_SAKTO");
 
-      setJtAddressLine("");
-      setJtBrgy("");
+      setJtHouseStreetUnit("");
+      setJtBarangay("");
+      setJtCity("");
+      setJtProvince("");
+      setJtPostalCode("");
       setLalamoveAddress("");
       setLalamoveImageUrl("");
+      setLalamoveMapLink("");
+      setLalamoveMapCoords(null);
       setLalamoveSlots([]);
       setLalamoveSlotError(null);
+      setLalamovePinError(null);
+      setLalamovePinLoading(false);
     }
 
     if (shippingMethod === "LALAMOVE") {
@@ -702,12 +815,19 @@ function CheckoutContent() {
       setPhone(sanitizePhone(sd.lalamove?.recipient_phone ?? phone));
       setLalamoveAddress(sd.lalamove?.dropoff_address ?? "");
       setLalamoveImageUrl(sd.lalamove?.map_screenshot_url ?? "");
+      setLalamoveMapLink("");
+      setLalamoveMapCoords(null);
       setLalamoveSlots(resolveLalamoveSelections(sd));
       setLalamoveSlotError(null);
       setNotes(sd.lalamove?.notes ?? "");
+      setLalamovePinError(null);
+      setLalamovePinLoading(false);
 
-      setJtAddressLine("");
-      setJtBrgy("");
+      setJtHouseStreetUnit("");
+      setJtBarangay("");
+      setJtCity("");
+      setJtProvince("");
+      setJtPostalCode("");
       setLbcFirstName("");
       setLbcLastName("");
       setLbcBranchName("");
@@ -717,10 +837,17 @@ function CheckoutContent() {
     if (shippingMethod === "PICKUP") {
       setLalamoveAddress("");
       setLalamoveImageUrl("");
+      setLalamoveMapLink("");
+      setLalamoveMapCoords(null);
       setLalamoveSlots([]);
       setLalamoveSlotError(null);
-      setJtAddressLine("");
-      setJtBrgy("");
+      setLalamovePinError(null);
+      setLalamovePinLoading(false);
+      setJtHouseStreetUnit("");
+      setJtBarangay("");
+      setJtCity("");
+      setJtProvince("");
+      setJtPostalCode("");
       setLbcFirstName("");
       setLbcLastName("");
       setLbcBranchName("");
@@ -760,15 +887,110 @@ function CheckoutContent() {
 
     setMsg(null);
     setLalamoveUploading(true);
+    setLalamovePinError(null);
     try {
       const url = await uploadLalamoveImage(file, user.id);
       setLalamoveImageUrl(url);
+      setLalamoveMapLink("");
+      setLalamoveMapCoords(null);
     } catch (err: any) {
       setMsg(err?.message ?? "Upload failed");
     } finally {
       setLalamoveUploading(false);
       e.target.value = "";
     }
+  }
+
+  async function requestLalamovePin(payload: {
+    address?: string;
+    lat?: number;
+    lng?: number;
+  }) {
+    setLalamovePinError(null);
+    setLalamovePinLoading(true);
+
+    try {
+      const res = await fetch("/api/lalamove/map", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || "Failed to pin map.");
+      }
+
+      const data = json.data ?? {};
+      const mapImageUrl = String(data.map_image_url ?? "");
+      const mapUrl = String(data.map_url ?? "");
+      const lat = Number(data.lat);
+      const lng = Number(data.lng);
+
+      setLalamoveImageUrl(mapImageUrl);
+      setLalamoveMapLink(mapUrl);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        setLalamoveMapCoords({ lat, lng });
+      } else {
+        setLalamoveMapCoords(null);
+      }
+
+      if (!payload.address && typeof data.address === "string" && data.address) {
+        setLalamoveAddress(data.address);
+      }
+    } catch (err: any) {
+      setLalamovePinError(err?.message ?? "Failed to pin map.");
+    } finally {
+      setLalamovePinLoading(false);
+    }
+  }
+
+  function onPinFromAddress() {
+    const trimmed = lalamoveAddress.trim();
+    if (!trimmed) {
+      setLalamovePinError("Enter a drop-off address to pin.");
+      return;
+    }
+    requestLalamovePin({ address: trimmed });
+  }
+
+  function onUseCurrentLocation() {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      setLalamovePinError("Geolocation is not supported on this device.");
+      return;
+    }
+
+    setLalamovePinError(null);
+    setLalamovePinLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        requestLalamovePin({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        });
+      },
+      (err) => {
+        setLalamovePinLoading(false);
+        setLalamovePinError(err?.message || "Unable to get current location.");
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }
+
+  async function persistCheckoutDefaults(nextDefaults: ShippingDefaults) {
+    if (!user) return;
+    const mergedDefaults = mergeShippingDefaults(defaultsRaw, nextDefaults);
+    const { data, error } = await supabase
+      .from("customers")
+      .upsert({ id: user.id, shipping_defaults: mergedDefaults }, { onConflict: "id" })
+      .select("shipping_defaults")
+      .single();
+
+    if (error) throw error;
+
+    const savedRaw = (data as any)?.shipping_defaults ?? mergedDefaults;
+    const savedDefaults = normalizeShippingDefaults(savedRaw);
+    setDefaults(savedDefaults);
+    setDefaultsRaw(savedRaw ?? mergedDefaults);
   }
 
   function handleLalamoveSlotChange(next: LalamoveSelection[]) {
@@ -1049,9 +1271,11 @@ function CheckoutContent() {
     }
 
     if (shippingMethod === "JNT") {
-      if (!jtBrgy.trim()) return setMsg("Barangay is required for J&T.");
-      if (!jtAddressLine.trim())
-        return setMsg("Please enter your J&T address.");
+      if (!jtHouseStreetUnit.trim())
+        return setMsg("House/Street/Unit is required for J&T.");
+      if (!jtBarangay.trim()) return setMsg("Barangay is required for J&T.");
+      if (!jtCity.trim()) return setMsg("City is required for J&T.");
+      if (!jtProvince.trim()) return setMsg("Province is required for J&T.");
     }
 
     if (shippingMethod === "LBC") {
@@ -1098,15 +1322,46 @@ function CheckoutContent() {
         window_label: slot.window_label,
       }));
 
+      const jtHouseStreetUnitTrimmed = jtHouseStreetUnit.trim();
+      const jtBarangayTrimmed = jtBarangay.trim();
+      const jtCityTrimmed = jtCity.trim();
+      const jtProvinceTrimmed = jtProvince.trim();
+      const jtPostalCodeTrimmed = jtPostalCode.trim();
+
+      const jntAddressLine = [
+        jtHouseStreetUnitTrimmed,
+        jtCityTrimmed,
+        jtProvinceTrimmed,
+        jtPostalCodeTrimmed,
+      ]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join(", ");
+      const jntFullAddress = [
+        jtHouseStreetUnitTrimmed,
+        jtBarangayTrimmed ? `Brgy ${jtBarangayTrimmed}` : "",
+        jtCityTrimmed,
+        jtProvinceTrimmed,
+        jtPostalCodeTrimmed,
+      ]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join(", ");
+
       let shipping_details: Record<string, any>;
       if (shippingMethod === "JNT") {
         shipping_details = {
           method: "JNT",
           receiver_name: name.trim(),
           receiver_phone: sanitizedPhone,
-          brgy: jtBrgy.trim(),
-          address_line: jtAddressLine.trim(),
-          full_address: `${jtAddressLine.trim()}, Brgy ${jtBrgy.trim()}`,
+          house_street_unit: jtHouseStreetUnitTrimmed,
+          barangay: jtBarangayTrimmed,
+          city: jtCityTrimmed,
+          province: jtProvinceTrimmed,
+          postal_code: jtPostalCodeTrimmed || null,
+          brgy: jtBarangayTrimmed,
+          address_line: jntAddressLine,
+          full_address: jntFullAddress,
           region,
           package: shippingMeta.ok ? shippingMeta.pack : null,
           notes: notes.trim() || null,
@@ -1144,10 +1399,61 @@ function CheckoutContent() {
           receiver_phone: sanitizedPhone,
           dropoff_address: lalamoveAddress.trim(),
           map_image_url: lalamoveImageUrl || null,
+          map_url: lalamoveMapLink || null,
+          map_lat: lalamoveMapCoords?.lat ?? null,
+          map_lng: lalamoveMapCoords?.lng ?? null,
           lalamove: lalamoveSlotsPayload[0] ?? null,
           lalamove_slots: lalamoveSlotsPayload,
           notes: notes.trim() || null,
         };
+      }
+
+      let nextDefaults: ShippingDefaults | null = null;
+      if (saveAsDefault && shippingMethod !== "PICKUP") {
+        if (shippingMethod === "JNT") {
+          nextDefaults = normalizeShippingDefaults({
+            ...defaults,
+            jnt: {
+              ...defaults.jnt,
+              recipient_name: name.trim(),
+              contact_number: sanitizedPhone,
+              house_street_unit: jtHouseStreetUnitTrimmed,
+              barangay: jtBarangayTrimmed,
+              city: jtCityTrimmed,
+              province: jtProvinceTrimmed,
+              postal_code: jtPostalCodeTrimmed,
+              notes: notes.trim() || "",
+            },
+          });
+        } else if (shippingMethod === "LBC") {
+          nextDefaults = normalizeShippingDefaults({
+            ...defaults,
+            lbc: {
+              ...defaults.lbc,
+              first_name: lbcFirstName.trim(),
+              last_name: lbcLastName.trim(),
+              contact_number: sanitizedPhone,
+              branch: lbcBranchName.trim(),
+              city: lbcBranchCity.trim(),
+              notes: notes.trim() || "",
+            },
+          });
+        } else if (shippingMethod === "LALAMOVE") {
+          nextDefaults = normalizeShippingDefaults({
+            ...defaults,
+            lalamove: {
+              ...defaults.lalamove,
+              recipient_name: name.trim(),
+              recipient_phone: sanitizedPhone,
+              dropoff_address: lalamoveAddress.trim(),
+              notes: notes.trim() || "",
+              map_screenshot_url: lalamoveImageUrl || "",
+              map_url: lalamoveMapLink || null,
+              map_lat: lalamoveMapCoords?.lat ?? null,
+              map_lng: lalamoveMapCoords?.lng ?? null,
+            },
+          });
+        }
       }
 
       const order = await createOrderFromCart(
@@ -1170,6 +1476,14 @@ function CheckoutContent() {
         },
         selectedLines
       );
+
+      if (nextDefaults) {
+        try {
+          await persistCheckoutDefaults(nextDefaults);
+        } catch (err) {
+          console.error("Failed to save checkout defaults:", err);
+        }
+      }
 
       try {
         if (typeof window !== "undefined") {
@@ -1194,6 +1508,20 @@ function CheckoutContent() {
       console.error(e);
       setMsg(e?.message ?? "Failed to place order");
     }
+  }
+
+  if (!user) {
+    return (
+      <main className="mx-auto max-w-6xl px-4 py-8">
+        <div className="space-y-2 text-white/50">
+          <div className="text-2xl font-semibold text-white">Checkout</div>
+          <div className="text-sm">
+            Log in or create an account to continue.
+          </div>
+        </div>
+        <CheckoutAuthModal open checkoutRedirect={checkoutRedirect} />
+      </main>
+    );
   }
 
   return (
@@ -1249,15 +1577,15 @@ function CheckoutContent() {
                   setShippingMethod(e.target.value as ShippingMethod)
                 }
               >
-                <option value="LALAMOVE">Lalamove</option>
-                <option value="JNT" disabled={hasLalamoveOnly}>
-                  J&amp;T
-                </option>
                 <option value="LBC" disabled={hasLalamoveOnly}>
                   LBC Pickup
                 </option>
+                <option value="JNT" disabled={hasLalamoveOnly}>
+                  J&amp;T
+                </option>
+                <option value="LALAMOVE">Lalamove</option>
                 <option value="PICKUP" disabled={hasLalamoveOnly}>
-                  Store Pickup
+                  Store
                 </option>
               </Select>
 
@@ -1326,17 +1654,69 @@ function CheckoutContent() {
 
             {shippingMethod === "JNT" ? (
               <div className="space-y-3">
-                <Input
-                  label="Barangay (required)"
-                  value={jtBrgy}
-                  onChange={(e) => setJtBrgy(e.target.value)}
-                />
-                <Textarea
-                  label="J&T Address (House/Street/City/Province)"
-                  rows={3}
-                  value={jtAddressLine}
-                  onChange={(e) => setJtAddressLine(e.target.value)}
-                />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2">
+                    <Input
+                      label="House/Street/Unit (required)"
+                      value={jtHouseStreetUnit}
+                      onChange={(e) => setJtHouseStreetUnit(e.target.value)}
+                    />
+                  </div>
+                  <Input
+                    label="Barangay (required)"
+                    value={jtBarangay}
+                    onChange={(e) => setJtBarangay(e.target.value)}
+                    list="jnt-barangays"
+                    hint="Start typing to see suggestions."
+                  />
+                  <Input
+                    label="City (required)"
+                    value={jtCity}
+                    onChange={(e) => setJtCity(e.target.value)}
+                    list="jnt-cities"
+                    hint="Start typing to see suggestions."
+                  />
+                  <Input
+                    label="Province (required)"
+                    value={jtProvince}
+                    onChange={(e) => setJtProvince(e.target.value)}
+                    list="jnt-provinces"
+                    hint="Start typing to see suggestions."
+                  />
+                  <Input
+                    label="Postal Code (optional)"
+                    value={jtPostalCode}
+                    onChange={(e) => setJtPostalCode(e.target.value)}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={4}
+                  />
+                </div>
+
+                {locationsLoading ? (
+                  <div className="text-xs text-white/50">
+                    Loading location suggestions...
+                  </div>
+                ) : null}
+                {locationsError ? (
+                  <div className="text-xs text-red-200">{locationsError}</div>
+                ) : null}
+
+                <datalist id="jnt-barangays">
+                  {barangaySuggestions.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+                <datalist id="jnt-cities">
+                  {citySuggestions.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+                <datalist id="jnt-provinces">
+                  {provinceSuggestions.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
               </div>
             ) : null}
 
@@ -1419,25 +1799,59 @@ function CheckoutContent() {
                 />
 
                 <div>
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={onPinFromAddress}
+                      disabled={lalamovePinLoading || !lalamoveAddress.trim()}
+                    >
+                      {lalamovePinLoading ? "Pinning..." : "Pin from address"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={onUseCurrentLocation}
+                      disabled={lalamovePinLoading}
+                    >
+                      Use current location
+                    </Button>
+                    {lalamoveMapLink ? (
+                      <a
+                        href={lalamoveMapLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-accent-700 underline hover:text-accent-600 dark:text-accent-200 dark:hover:text-accent-100"
+                      >
+                        Open map
+                      </a>
+                    ) : null}
+                  </div>
+                  {lalamovePinError ? (
+                    <div className="text-xs text-red-200">{lalamovePinError}</div>
+                  ) : null}
                   <div className="mb-1 text-sm text-white/80">
-                    Pinned map screenshot (image upload)
+                    Pinned map (auto pin or image upload)
                   </div>
                   <input
                     type="file"
                     accept="image/*"
                     onChange={onPickLalamoveImage}
+                    disabled={lalamoveUploading || lalamovePinLoading}
                   />
                   <div className="mt-1 text-xs text-white/60">
-                    {lalamoveUploading
-                      ? "Uploading..."
+                    {lalamoveUploading || lalamovePinLoading
+                      ? "Updating map..."
                       : lalamoveImageUrl
-                      ? "Map screenshot ready."
-                      : "No image yet."}
+                      ? "Map ready."
+                      : "No map yet."}
                   </div>
                   {lalamoveImageUrl ? (
                     <img
                       src={lalamoveImageUrl}
-                      alt="Lalamove map screenshot"
+                      alt="Lalamove pinned map"
                       className="mt-2 h-28 w-auto rounded-lg border border-white/10 object-cover"
                     />
                   ) : null}
@@ -1504,6 +1918,21 @@ function CheckoutContent() {
                 {!pickupUnavailable && pickupDay && pickupSlotsForDay.length === 0 ? (
                   <div className="text-xs text-white/50">No timeslots for the selected day.</div>
                 ) : null}
+              </div>
+            ) : null}
+
+            {shippingMethod !== "PICKUP" ? (
+              <div className="rounded-xl border border-white/10 bg-bg-900/20 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <Checkbox
+                    checked={saveAsDefault}
+                    onChange={setSaveAsDefault}
+                    label="Save this address as my default"
+                  />
+                  <span className="text-xs text-white/50">
+                    Stored in account settings for faster checkout.
+                  </span>
+                </div>
               </div>
             ) : null}
 

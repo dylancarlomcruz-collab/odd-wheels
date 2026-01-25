@@ -18,6 +18,7 @@ import {
   Truck,
   Ticket,
   Crown,
+  Bug,
 } from "lucide-react";
 
 const links = [
@@ -34,7 +35,9 @@ const links = [
   { href: "/admin/brands", label: "Brand Tabs", icon: Tags },
   { href: "/admin/users/tiers", label: "User Tiers", icon: Crown },
   { href: "/admin/vouchers", label: "Vouchers", icon: Ticket },
+  { href: "/announcements", label: "Announcements", icon: StickyNote },
   { href: "/admin/notices", label: "Notice Board", icon: StickyNote },
+  { href: "/admin/bug-reports", label: "Bug Reports", icon: Bug },
   { href: "/admin/settings/payment-methods", label: "Payment Methods", icon: QrCode },
   { href: "/admin/settings", label: "Settings", icon: Settings2 },
 ];

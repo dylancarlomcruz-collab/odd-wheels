@@ -44,6 +44,9 @@ export type LalamoveDefaults = {
   dropoff_address: string;
   notes: string;
   map_screenshot_url: string;
+  map_url?: string | null;
+  map_lat?: number | null;
+  map_lng?: number | null;
   name?: string;
   phone?: string;
   map_image_url?: string;

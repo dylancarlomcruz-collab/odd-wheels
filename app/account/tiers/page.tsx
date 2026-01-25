@@ -221,22 +221,23 @@ export default function AccountTierPage() {
     const normalizedSpend = Math.max(0, lifetimeSpend);
     const cycleSpend = normalizedSpend % SPEND_CYCLE_SIZE;
     const cycleComplete = normalizedSpend > 0 && cycleSpend === 0;
-    const displaySpend = cycleComplete ? SPEND_CYCLE_SIZE : cycleSpend;
-    const progress = Math.min(1, Math.max(0, displaySpend / SPEND_CYCLE_SIZE));
-    const nextMilestone = cycleComplete
-      ? SPEND_CYCLE_MILESTONES[0]
-      : SPEND_CYCLE_MILESTONES.find((m) => cycleSpend < m.at) ??
-        SPEND_CYCLE_MILESTONES[0];
+    const displaySpend = cycleComplete ? 0 : cycleSpend;
+    const nextMilestone =
+      SPEND_CYCLE_MILESTONES.find((m) => cycleSpend < m.at) ??
+      SPEND_CYCLE_MILESTONES[0];
     const lastMilestone = cycleComplete
       ? SPEND_CYCLE_MILESTONES[SPEND_CYCLE_MILESTONES.length - 1]
       : [...SPEND_CYCLE_MILESTONES].filter((m) => cycleSpend >= m.at).slice(-1)[0];
-    const remaining = Math.max(0, nextMilestone.at - (cycleComplete ? 0 : cycleSpend));
+    const target = Math.max(1, nextMilestone.at);
+    const progress = Math.min(1, Math.max(0, displaySpend / target));
+    const remaining = Math.max(0, nextMilestone.at - displaySpend);
     return {
       cycleSpend: displaySpend,
       progress,
       nextMilestone,
       lastMilestone,
       remaining,
+      target,
     };
   }, [lifetimeSpend]);
 
@@ -439,7 +440,7 @@ export default function AccountTierPage() {
               <div className="flex items-center justify-between text-xs text-neutral-300">
                 <span>Cycle spend</span>
                 <span>
-                  {formatPHP(spendCycle.cycleSpend)} / {formatPHP(SPEND_CYCLE_SIZE)}
+                  {formatPHP(spendCycle.cycleSpend)} / {formatPHP(spendCycle.target)}
                 </span>
               </div>
               <div className="h-2 rounded-full bg-white/10 overflow-hidden">
@@ -456,10 +457,6 @@ export default function AccountTierPage() {
               <div className="text-[11px] text-neutral-500">
                 Current cycle earned:{" "}
                 {spendCycle.lastMilestone?.label ?? "None yet"}.
-              </div>
-              <div className="text-[11px] text-neutral-500">
-                Milestones: 2k FS100, 4k FS100+FS200, 6k FS100, 8k FS100+FS200, 10k
-                all (FS100+FS200+FS300).
               </div>
             </div>
           </div>

@@ -30,9 +30,12 @@ import {
   Settings2,
   ScanLine,
   Crown,
+  Bug,
+  LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { Textarea } from "@/components/ui/Textarea";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useProfile } from "@/hooks/useProfile";
 import { useActiveOrderCount } from "@/hooks/useActiveOrderCount";
@@ -83,6 +86,11 @@ export function SiteHeader() {
     sellTradePending: 0,
     pendingShipping: 0,
   });
+  const [bugOpen, setBugOpen] = React.useState(false);
+  const [bugDetails, setBugDetails] = React.useState("");
+  const [bugError, setBugError] = React.useState<string | null>(null);
+  const [bugSent, setBugSent] = React.useState(false);
+  const [bugSending, setBugSending] = React.useState(false);
   const headerRef = React.useRef<HTMLElement | null>(null);
   const searchRefs = React.useRef<{ desktop: HTMLDivElement | null; mobile: HTMLDivElement | null }>({
     desktop: null,
@@ -279,7 +287,48 @@ export function SiteHeader() {
     }
   }
 
+  React.useEffect(() => {
+    if (menuOpen) return;
+    setBugOpen(false);
+    setBugError(null);
+    setBugSent(false);
+  }, [menuOpen]);
+
+  const submitBugReport = React.useCallback(async () => {
+    const message = bugDetails.trim();
+    if (!message) {
+      setBugError("Add a short description before sending.");
+      setBugSent(false);
+      return;
+    }
+
+    setBugSending(true);
+    setBugError(null);
+    setBugSent(false);
+
+    const pageUrl = typeof window !== "undefined" ? window.location.href : "";
+    const userAgent = typeof navigator !== "undefined" ? navigator.userAgent : "";
+    const { error } = await supabase.rpc("fn_report_bug", {
+      p_message: message,
+      p_page_url: pageUrl || null,
+      p_user_email: user?.email ?? null,
+      p_user_agent: userAgent || null,
+    });
+
+    if (error) {
+      setBugError(error.message || "Failed to send bug report.");
+      setBugSent(false);
+      setBugSending(false);
+      return;
+    }
+
+    setBugDetails("");
+    setBugSent(true);
+    setBugSending(false);
+  }, [bugDetails, user?.email]);
+
   const mobileMenuItems = [
+    { key: "announcements", href: "/announcements", label: "Announcements", icon: StickyNote, show: true },
     { key: "sell-trade", href: "/sell-trade", label: "Sell/Trade", icon: ArrowLeftRight, show: true },
     { key: "orders", href: "/orders", label: "Orders", icon: ClipboardList, show: Boolean(user) },
       { key: "account", href: "/account", label: "Account", icon: Settings, show: Boolean(user) },
@@ -290,6 +339,7 @@ export function SiteHeader() {
         icon: Crown,
         show: Boolean(user),
       },
+    { key: "logout", href: "/auth/logout", label: "Logout", icon: LogOut, show: Boolean(user) },
     { key: "login", href: "/auth/login", label: "Login", icon: User2, show: !user },
   ];
 
@@ -324,6 +374,7 @@ export function SiteHeader() {
     { key: "admin-pos", href: "/cashier", label: "POS (Cashier)", icon: ScanBarcode },
     { key: "admin-brands", href: "/admin/brands", label: "Brand Tabs", icon: Tags },
     { key: "admin-notices", href: "/admin/notices", label: "Notice Board", icon: StickyNote },
+    { key: "admin-bug-reports", href: "/admin/bug-reports", label: "Bug Reports", icon: Bug },
     { key: "admin-payment-methods", href: "/admin/settings/payment-methods", label: "Payment Methods", icon: QrCode },
     { key: "admin-settings", href: "/admin/settings", label: "Settings", icon: Settings2 },
   ];
@@ -888,6 +939,49 @@ export function SiteHeader() {
                       </div>
                     </div>
                   ) : null}
+                  <div className="pt-2">
+                    <div className="mb-2 text-[11px] uppercase tracking-wide text-white/50">
+                      Support
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setBugOpen((prev) => !prev)}
+                      className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-bg-950/30 px-3 py-2 text-sm text-white/90 hover:bg-bg-950/50"
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <Bug className="h-4 w-4" />
+                        Report a bug
+                      </span>
+                      <span className="text-xs text-white/50">{bugOpen ? "Hide" : "Open"}</span>
+                    </button>
+                    {bugOpen ? (
+                      <div className="mt-2 space-y-2 rounded-xl border border-white/10 bg-bg-950/40 p-3">
+                        <Textarea
+                          label="What happened?"
+                          value={bugDetails}
+                          onChange={(e) => setBugDetails(e.target.value)}
+                          placeholder="Tell us what broke and what you expected."
+                        />
+                        {bugError ? (
+                          <div className="text-xs text-red-200">{bugError}</div>
+                        ) : null}
+                        {bugSent ? (
+                          <div className="text-xs text-emerald-200">
+                            Thanks! Your report was sent to the admin.
+                          </div>
+                        ) : null}
+                        <div className="flex items-center justify-end">
+                          <Button
+                            size="sm"
+                            onClick={submitBugReport}
+                            disabled={bugSending}
+                          >
+                            {bugSending ? "Sending..." : "Send report"}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
                 </nav>
               </div>
             </div>,

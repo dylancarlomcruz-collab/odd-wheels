@@ -56,6 +56,22 @@ function normalizeAddress(sd: any) {
   if (line && brgy) return `${line}, Brgy ${brgy}`;
   if (line) return line;
 
+  const house = pickStr(sd?.house_street_unit);
+  const barangay = pickStr(sd?.barangay);
+  const city = pickStr(sd?.city);
+  const province = pickStr(sd?.province);
+  const postal = pickStr(sd?.postal_code);
+  if (house || barangay || city || province || postal) {
+    const parts = [
+      house,
+      barangay ? `Brgy ${barangay}` : null,
+      city,
+      province,
+      postal,
+    ].filter(Boolean);
+    return parts.join(", ");
+  }
+
   const drop = pickStr(sd?.dropoff_address);
   if (drop) return drop;
 

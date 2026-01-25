@@ -170,7 +170,7 @@ function buildShippingSections(order: any, details: Record<string, any>) {
     [details.branch_name || details.branch, details.branch_city]
       .filter(Boolean)
       .join(", ") || null;
-  const mapUrl = details.map_image_url || details.map_url || details.map;
+  const mapUrl = details.map_url || details.map || details.map_image_url;
   const notes = details.notes || details.note || null;
   const pack = details.package || details.package_size || null;
   const cop = details.cop ?? details.cash_on_pickup;

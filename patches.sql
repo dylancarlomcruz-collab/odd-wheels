@@ -78,6 +78,61 @@ begin
 end;
 $$;
 
+-- Bug reports
+create table if not exists public.bug_reports (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  user_id uuid references auth.users(id) on delete set null,
+  user_email text,
+  page_url text,
+  user_agent text,
+  message text not null,
+  status text not null default 'NEW'
+);
+
+alter table public.bug_reports enable row level security;
+
+drop policy if exists "admin read bug reports" on public.bug_reports;
+create policy "admin read bug reports" on public.bug_reports
+for select using (public.is_admin());
+
+drop policy if exists "admin update bug reports" on public.bug_reports;
+create policy "admin update bug reports" on public.bug_reports
+for update using (public.is_admin()) with check (public.is_admin());
+
+create or replace function public.fn_report_bug(
+  p_message text,
+  p_page_url text default null,
+  p_user_email text default null,
+  p_user_agent text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+begin
+  if coalesce(trim(p_message), '') = '' then
+    raise exception 'Bug report message required.';
+  end if;
+
+  insert into public.bug_reports (user_id, user_email, page_url, user_agent, message)
+  values (
+    auth.uid(),
+    nullif(trim(p_user_email), ''),
+    nullif(trim(p_page_url), ''),
+    nullif(trim(p_user_agent), ''),
+    trim(p_message)
+  );
+
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
+revoke execute on function public.fn_report_bug(text, text, text, text) from public;
+grant execute on function public.fn_report_bug(text, text, text, text) to anon, authenticated;
+
 -- Hotfix: ensure order expiry columns exist for cancellation/expiry flows.
 alter table public.orders
   add column if not exists expires_at timestamptz,
@@ -1439,6 +1494,88 @@ begin
   end if;
 end;
 $$;
+
+-- Bug reports (menu)
+
+create table if not exists public.bug_reports (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete set null,
+  user_email text,
+  message text not null,
+  page_url text,
+  user_agent text,
+  status text not null default 'NEW' check (status in ('NEW','RESOLVED')),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_bug_reports_status
+  on public.bug_reports (status, created_at desc);
+
+alter table public.bug_reports enable row level security;
+
+drop policy if exists "admin read bug reports" on public.bug_reports;
+create policy "admin read bug reports" on public.bug_reports
+for select using (public.is_admin());
+
+drop policy if exists "admin manage bug reports" on public.bug_reports;
+create policy "admin manage bug reports" on public.bug_reports
+for all using (public.is_admin()) with check (public.is_admin());
+
+create or replace function public.fn_report_bug(
+  p_message text,
+  p_page_url text default null,
+  p_user_email text default null,
+  p_user_agent text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+begin
+  if p_message is null or length(trim(p_message)) = 0 then
+    raise exception 'Bug report message is required.';
+  end if;
+
+  insert into public.bug_reports (user_id, user_email, message, page_url, user_agent)
+  values (auth.uid(), nullif(trim(coalesce(p_user_email, '')), ''), trim(p_message), p_page_url, p_user_agent);
+
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
+revoke execute on function public.fn_report_bug(text, text, text, text) from public;
+grant execute on function public.fn_report_bug(text, text, text, text) to anon, authenticated;
+
+-- Announcements
+
+create table if not exists public.announcements (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete set null,
+  title text,
+  body text not null,
+  image_urls text[] not null default '{}'::text[],
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_announcements_created_at
+  on public.announcements (created_at desc);
+
+alter table public.announcements enable row level security;
+
+drop policy if exists "public read active announcements" on public.announcements;
+create policy "public read active announcements" on public.announcements
+for select using (is_active = true);
+
+drop policy if exists "staff read announcements" on public.announcements;
+create policy "staff read announcements" on public.announcements
+for select using (public.is_staff());
+
+drop policy if exists "admin manage announcements" on public.announcements;
+create policy "admin manage announcements" on public.announcements
+for all using (public.is_admin()) with check (public.is_admin());
 
 create or replace function public.fn_recalculate_profile_tier(p_user_id uuid)
 returns jsonb

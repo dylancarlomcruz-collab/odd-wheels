@@ -79,6 +79,10 @@ export default function AccountPage() {
   );
   const [shippingDefaultsRaw, setShippingDefaultsRaw] = React.useState<unknown>({});
   const [lalamoveUploading, setLalamoveUploading] = React.useState(false);
+  const [lalamovePinLoading, setLalamovePinLoading] = React.useState(false);
+  const [lalamovePinError, setLalamovePinError] = React.useState<string | null>(
+    null
+  );
   const [phoneTouched, setPhoneTouched] = React.useState({
     profile: false,
     jnt: false,
@@ -259,11 +263,18 @@ export default function AccountPage() {
     if (!user || !file) return;
     setMsg(null);
     setLalamoveUploading(true);
+    setLalamovePinError(null);
     try {
       const url = await uploadLalamoveMap(file, user.id);
       const nextDefaults = normalizeShippingDefaults({
         ...shippingDefaults,
-        lalamove: { ...shippingDefaults.lalamove, map_screenshot_url: url },
+        lalamove: {
+          ...shippingDefaults.lalamove,
+          map_screenshot_url: url,
+          map_url: null,
+          map_lat: null,
+          map_lng: null,
+        },
       });
       await persistShippingDefaults(nextDefaults, "Map image saved.");
     } catch (e: any) {
@@ -280,6 +291,7 @@ export default function AccountPage() {
     if (!currentUrl) return;
     setMsg(null);
     setLalamoveUploading(true);
+    setLalamovePinError(null);
     try {
       const path = getStoragePathFromPublicUrl(currentUrl, LALAMOVE_BUCKET);
       if (path) {
@@ -287,7 +299,13 @@ export default function AccountPage() {
       }
       const nextDefaults = normalizeShippingDefaults({
         ...shippingDefaults,
-        lalamove: { ...shippingDefaults.lalamove, map_screenshot_url: "" },
+        lalamove: {
+          ...shippingDefaults.lalamove,
+          map_screenshot_url: "",
+          map_url: null,
+          map_lat: null,
+          map_lng: null,
+        },
       });
       await persistShippingDefaults(nextDefaults, "Map image removed.");
     } catch (e: any) {
@@ -296,6 +314,88 @@ export default function AccountPage() {
     } finally {
       setLalamoveUploading(false);
     }
+  }
+
+  async function requestLalamovePin(payload: {
+    address?: string;
+    lat?: number;
+    lng?: number;
+  }) {
+    setLalamovePinError(null);
+    setLalamovePinLoading(true);
+    setMsg(null);
+
+    try {
+      const res = await fetch("/api/lalamove/map", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || "Failed to pin map.");
+      }
+
+      const data = json.data ?? {};
+      const mapImageUrl = String(data.map_image_url ?? "");
+      const mapUrl = String(data.map_url ?? "");
+      const lat = Number(data.lat);
+      const lng = Number(data.lng);
+
+      const nextDefaults = normalizeShippingDefaults({
+        ...shippingDefaults,
+        lalamove: {
+          ...shippingDefaults.lalamove,
+          map_screenshot_url: mapImageUrl,
+          map_url: mapUrl || null,
+          map_lat: Number.isFinite(lat) ? lat : null,
+          map_lng: Number.isFinite(lng) ? lng : null,
+        },
+      });
+
+      if (!payload.address && typeof data.address === "string" && data.address) {
+        nextDefaults.lalamove.dropoff_address = data.address;
+      }
+
+      await persistShippingDefaults(nextDefaults, "Pinned location saved.");
+    } catch (e: any) {
+      setLalamovePinError(e?.message ?? "Failed to pin map.");
+    } finally {
+      setLalamovePinLoading(false);
+    }
+  }
+
+  function onPinFromAddress() {
+    const address = shippingDefaults.lalamove?.dropoff_address ?? "";
+    const trimmed = address.trim();
+    if (!trimmed) {
+      setLalamovePinError("Enter a drop-off address to pin.");
+      return;
+    }
+    requestLalamovePin({ address: trimmed });
+  }
+
+  function onUseCurrentLocation() {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      setLalamovePinError("Geolocation is not supported on this device.");
+      return;
+    }
+
+    setLalamovePinError(null);
+    setLalamovePinLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        requestLalamovePin({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        });
+      },
+      (err) => {
+        setLalamovePinLoading(false);
+        setLalamovePinError(err?.message || "Unable to get current location.");
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   }
 
   const profilePhoneError = formatPhoneError(
@@ -315,6 +415,9 @@ export default function AccountPage() {
     phoneTouched.lalamove || saveAttempted
   );
   const lalamoveMapUrl = shippingDefaults.lalamove?.map_screenshot_url ?? "";
+  const lalamoveMapLink = String(
+    shippingDefaults.lalamove?.map_url ?? ""
+  );
 
   if (loading) {
     return (
@@ -605,8 +708,46 @@ export default function AccountPage() {
                   </div>
 
                   <div className="md:col-span-2">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={onPinFromAddress}
+                        disabled={
+                          lalamovePinLoading ||
+                          !shippingDefaults.lalamove?.dropoff_address?.trim()
+                        }
+                      >
+                        {lalamovePinLoading ? "Pinning..." : "Pin from address"}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={onUseCurrentLocation}
+                        disabled={lalamovePinLoading}
+                      >
+                        Use current location
+                      </Button>
+                      {lalamoveMapLink ? (
+                        <a
+                          href={lalamoveMapLink}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs text-accent-700 underline hover:text-accent-600 dark:text-accent-200 dark:hover:text-accent-100"
+                        >
+                          Open map
+                        </a>
+                      ) : null}
+                    </div>
+                    {lalamovePinError ? (
+                      <div className="mb-2 text-xs text-red-300">
+                        {lalamovePinError}
+                      </div>
+                    ) : null}
                     <label className="block text-sm mb-1 text-neutral-300">
-                      Map Screenshot (optional)
+                      Pinned map (auto pin or image upload)
                     </label>
                     <input
                       type="file"
@@ -617,12 +758,12 @@ export default function AccountPage() {
                         e.currentTarget.value = "";
                       }}
                       className="block w-full text-sm"
-                      disabled={lalamoveUploading}
+                      disabled={lalamoveUploading || lalamovePinLoading}
                     />
                     <div className="mt-2 flex items-center gap-3 text-xs text-neutral-400">
                       <span>
-                        {lalamoveUploading
-                          ? "Uploading..."
+                        {lalamoveUploading || lalamovePinLoading
+                          ? "Updating..."
                           : lalamoveMapUrl
                           ? "Saved map screenshot."
                           : "No image yet."}
