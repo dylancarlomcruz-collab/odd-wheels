@@ -10,7 +10,7 @@ import { formatPHP } from "@/lib/money";
 import { toast } from "@/components/ui/toast";
 import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 import { normalizeBarcode } from "@/lib/barcode";
-import { conditionSortOrder, formatConditionLabel } from "@/lib/conditions";
+import { conditionSortOrder, formatConditionLabel, isBlisterCondition } from "@/lib/conditions";
 import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
 
 export type AdminVariant = {
@@ -48,6 +48,31 @@ export type AdminProduct = {
 };
 
 const PAGE_SIZE = 24;
+const CONDITION_OPTIONS: AdminVariant["condition"][] = [
+  "sealed",
+  "resealed",
+  "near_mint",
+  "unsealed",
+  "with_issues",
+  "blistered",
+  "sealed_blister",
+  "unsealed_blister",
+];
+const BLISTER_CONDITIONS = ["blistered", "sealed_blister", "unsealed_blister"] as const;
+const SHIP_CLASS_OPTIONS = [
+  "MINI_GT",
+  "KAIDO",
+  "POPRACE",
+  "ACRYLIC_TRUE_SCALE",
+  "TRUCKS",
+  "BLISTER",
+  "TOMICA",
+  "HOT_WHEELS_MAINLINE",
+  "HOT_WHEELS_PREMIUM",
+  "LOOSE_NO_BOX",
+  "LALAMOVE",
+  "DIORAMA",
+];
 
 type InventoryBrowseGridProps = {
   onSelect: (product: AdminProduct) => void;
@@ -83,6 +108,28 @@ function sortVariants(variants: AdminVariant[]) {
         conditionSortOrder(a.condition) - conditionSortOrder(b.condition) ||
         Number(a.price ?? 0) - Number(b.price ?? 0)
     );
+}
+
+function formatShipClassLabel(value: string) {
+  switch (value) {
+    case "ACRYLIC_TRUE_SCALE":
+      return "Acrylic True-Scale";
+    case "HOT_WHEELS_MAINLINE":
+      return "Hot Wheels Mainline";
+    case "HOT_WHEELS_PREMIUM":
+      return "Hot Wheels Premium";
+    case "LOOSE_NO_BOX":
+      return "Loose (No Box)";
+    default:
+      return value.replace(/_/g, " ");
+  }
+}
+
+function toggleListValue<T extends string>(values: T[], value: T, next: boolean) {
+  if (next) {
+    return values.includes(value) ? values : [...values, value];
+  }
+  return values.filter((v) => v !== value);
 }
 
 function AdminProductCard({
@@ -271,11 +318,16 @@ export function InventoryBrowseGrid({
   const [searchInput, setSearchInput] = React.useState("");
   const [searchTerm, setSearchTerm] = React.useState("");
   const [scanTerm, setScanTerm] = React.useState("");
-  const [brandTab, setBrandTab] = React.useState("All");
   const [inStockOnly, setInStockOnly] = React.useState(true);
   const [showSoldOut, setShowSoldOut] = React.useState(false);
   const [noPhotoOnly, setNoPhotoOnly] = React.useState(false);
   const [scannerOpen, setScannerOpen] = React.useState(false);
+  const [filtersOpen, setFiltersOpen] = React.useState(false);
+  const [selectedBrands, setSelectedBrands] = React.useState<string[]>([]);
+  const [selectedConditions, setSelectedConditions] = React.useState<
+    AdminVariant["condition"][]
+  >([]);
+  const [selectedShipClasses, setSelectedShipClasses] = React.useState<string[]>([]);
   const searchTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
@@ -286,14 +338,14 @@ export function InventoryBrowseGrid({
   const scanActiveRef = React.useRef(false);
 
   const effectiveTerm = scanTerm || searchTerm;
-  const filtersKey = `${effectiveTerm}|${brandTab}|${inStockOnly}|${showSoldOut}|${noPhotoOnly}|${refreshToken}`;
+  const filtersKey = `${effectiveTerm}|${selectedBrands.join(",")}|${selectedConditions.join(",")}|${selectedShipClasses.join(",")}|${inStockOnly}|${showSoldOut}|${noPhotoOnly}|${refreshToken}`;
 
   const brands = React.useMemo(() => {
     const set = new Set<string>();
     for (const p of rows) {
-      if (p.brand) set.add(p.brand);
+      set.add(p.brand ?? "Unknown");
     }
-    return ["All", ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [rows]);
 
   const filteredRows = React.useMemo(() => {
@@ -301,7 +353,34 @@ export function InventoryBrowseGrid({
       const { totalQty } = derivedTotals(p);
       const isSoldOut = totalQty <= 0 || !p.is_active;
       const hasPhoto = Array.isArray(p.image_urls) && p.image_urls.length > 0;
-      if (brandTab !== "All" && p.brand !== brandTab) return false;
+      const resolvedBrand = p.brand ?? "Unknown";
+      if (selectedBrands.length && !selectedBrands.includes(resolvedBrand)) {
+        return false;
+      }
+      if (selectedConditions.length || selectedShipClasses.length) {
+        const matches = (p.product_variants ?? []).some((variant) => {
+          if (
+            selectedConditions.length &&
+            !selectedConditions.includes(variant.condition)
+          ) {
+            return false;
+          }
+          if (selectedShipClasses.length) {
+            const matchesShip = selectedShipClasses.some((shipClass) => {
+              if (shipClass === "BLISTER") {
+                return (
+                  variant.ship_class === "BLISTER" ||
+                  isBlisterCondition(variant.condition)
+                );
+              }
+              return variant.ship_class === shipClass;
+            });
+            if (!matchesShip) return false;
+          }
+          return true;
+        });
+        if (!matches) return false;
+      }
       if (showSoldOut && !isSoldOut) return false;
       if (inStockOnly && !showSoldOut && isSoldOut) {
         return false;
@@ -309,7 +388,7 @@ export function InventoryBrowseGrid({
       if (noPhotoOnly && hasPhoto) return false;
       return true;
     });
-  }, [rows, brandTab, inStockOnly, showSoldOut, noPhotoOnly]);
+  }, [rows, selectedBrands, selectedConditions, selectedShipClasses, inStockOnly, showSoldOut, noPhotoOnly]);
 
   const loadPage = React.useCallback(
     async (pageIndex: number, replace = false) => {
@@ -324,6 +403,15 @@ export function InventoryBrowseGrid({
       const isBarcodeLike = /^[0-9]+$/.test(rawTerm) && rawTerm.length >= 6;
       const allowArchived = showSoldOut;
       const applyStockFilter = inStockOnly && !showSoldOut;
+      const brandValues = selectedBrands.filter((b) => b !== "Unknown");
+      const wantsUnknownBrand = selectedBrands.length !== brandValues.length;
+      const shipClassValues = selectedShipClasses.filter((value) => value !== "BLISTER");
+      const wantsBlister = selectedShipClasses.includes("BLISTER");
+      const hasVariantFilters =
+        selectedConditions.length > 0 || selectedShipClasses.length > 0 || applyStockFilter;
+      const variantSelect = hasVariantFilters
+        ? "product_variants!inner(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)"
+        : "product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)";
       let batch: AdminProduct[] = [];
 
       if (rawTerm && safeTerm && isBarcodeLike) {
@@ -354,7 +442,7 @@ export function InventoryBrowseGrid({
         let pQuery = supabase
           .from("products")
           .select(
-            "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)"
+            `id,title,brand,model,variation,image_urls,is_active,created_at,${variantSelect}`
           )
           .in("id", productIds);
 
@@ -363,8 +451,32 @@ export function InventoryBrowseGrid({
         }
         pQuery = pQuery.order("created_at", { ascending: false });
 
-        if (brandTab !== "All") {
-          pQuery = pQuery.eq("brand", brandTab);
+        if (selectedBrands.length) {
+          if (brandValues.length && !wantsUnknownBrand) {
+            pQuery = pQuery.in("brand", brandValues);
+          } else if (wantsUnknownBrand && !brandValues.length) {
+            pQuery = pQuery.is("brand", null);
+          }
+        }
+        if (selectedConditions.length) {
+          pQuery = pQuery.in("product_variants.condition", selectedConditions);
+        }
+        if (selectedShipClasses.length) {
+          const orClauses: string[] = [];
+          shipClassValues.forEach((shipClass) => {
+            orClauses.push(`ship_class.eq.${shipClass}`);
+          });
+          if (wantsBlister) {
+            orClauses.push("ship_class.eq.BLISTER");
+            BLISTER_CONDITIONS.forEach((condition) => {
+              orClauses.push(`condition.eq.${condition}`);
+            });
+          }
+          if (orClauses.length) {
+            pQuery = pQuery.or(orClauses.join(","), {
+              foreignTable: "product_variants",
+            });
+          }
         }
         if (applyStockFilter) {
           pQuery = pQuery.gt("product_variants.qty", 0);
@@ -389,7 +501,7 @@ export function InventoryBrowseGrid({
         let query = supabase
           .from("products")
           .select(
-            "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)"
+            `id,title,brand,model,variation,image_urls,is_active,created_at,${variantSelect}`
           );
 
         if (showSoldOut) {
@@ -402,8 +514,32 @@ export function InventoryBrowseGrid({
             `title.ilike.${like},brand.ilike.${like},model.ilike.${like},variation.ilike.${like}`
           );
         }
-        if (brandTab !== "All") {
-          query = query.eq("brand", brandTab);
+        if (selectedBrands.length) {
+          if (brandValues.length && !wantsUnknownBrand) {
+            query = query.in("brand", brandValues);
+          } else if (wantsUnknownBrand && !brandValues.length) {
+            query = query.is("brand", null);
+          }
+        }
+        if (selectedConditions.length) {
+          query = query.in("product_variants.condition", selectedConditions);
+        }
+        if (selectedShipClasses.length) {
+          const orClauses: string[] = [];
+          shipClassValues.forEach((shipClass) => {
+            orClauses.push(`ship_class.eq.${shipClass}`);
+          });
+          if (wantsBlister) {
+            orClauses.push("ship_class.eq.BLISTER");
+            BLISTER_CONDITIONS.forEach((condition) => {
+              orClauses.push(`condition.eq.${condition}`);
+            });
+          }
+          if (orClauses.length) {
+            query = query.or(orClauses.join(","), {
+              foreignTable: "product_variants",
+            });
+          }
         }
         if (applyStockFilter) {
           query = query.gt("product_variants.qty", 0);
@@ -429,7 +565,15 @@ export function InventoryBrowseGrid({
       setRows((prev) => (replace ? batch : [...prev, ...batch]));
       setPage(pageIndex);
     },
-    [effectiveTerm, brandTab, inStockOnly, showSoldOut, noPhotoOnly]
+    [
+      effectiveTerm,
+      selectedBrands,
+      selectedConditions,
+      selectedShipClasses,
+      inStockOnly,
+      showSoldOut,
+      noPhotoOnly,
+    ]
   );
 
   const adjustVariantQty = React.useCallback(
@@ -627,6 +771,9 @@ export function InventoryBrowseGrid({
     loadPage(0, true);
   }, [filtersKey, loadPage]);
 
+  const activeFilterCount =
+    selectedBrands.length + selectedConditions.length + selectedShipClasses.length;
+
   return (
     <div className="space-y-4">
       <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4 space-y-3">
@@ -688,6 +835,12 @@ export function InventoryBrowseGrid({
             >
               Clear
             </Button>
+            <Button
+              variant="secondary"
+              onClick={() => setFiltersOpen((prev) => !prev)}
+            >
+              Filters{activeFilterCount ? ` (${activeFilterCount})` : ""}
+            </Button>
           </div>
         </div>
 
@@ -715,22 +868,87 @@ export function InventoryBrowseGrid({
           />
         </div>
 
-        <div className="flex gap-2 overflow-x-auto pb-2">
-          {brands.map((b) => (
-            <button
-              key={b}
-              onClick={() => setBrandTab(b)}
-              className={[
-                "whitespace-nowrap rounded-full px-4 py-2 text-sm border",
-                b === brandTab
-                  ? "bg-amber-600 text-black border-amber-500"
-                  : "bg-paper/5 text-white/80 border-white/10",
-              ].join(" ")}
-            >
-              {b}
-            </button>
-          ))}
-        </div>
+        {filtersOpen ? (
+          <div className="rounded-xl border border-white/10 bg-black/20 p-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold">Filters</div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSelectedBrands([]);
+                  setSelectedConditions([]);
+                  setSelectedShipClasses([]);
+                }}
+              >
+                Reset filters
+              </Button>
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="space-y-2">
+                <div className="text-xs uppercase tracking-wide text-white/60">
+                  Brands
+                </div>
+                <div className="max-h-40 space-y-1 overflow-auto pr-1">
+                  {brands.length ? (
+                    brands.map((brand) => (
+                      <Checkbox
+                        key={brand}
+                        label={brand}
+                        checked={selectedBrands.includes(brand)}
+                        onChange={(next) =>
+                          setSelectedBrands((prev) =>
+                            toggleListValue(prev, brand, next)
+                          )
+                        }
+                      />
+                    ))
+                  ) : (
+                    <div className="text-xs text-white/50">No brands loaded.</div>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <div className="text-xs uppercase tracking-wide text-white/60">
+                  Condition
+                </div>
+                <div className="space-y-1">
+                  {CONDITION_OPTIONS.map((condition) => (
+                    <Checkbox
+                      key={condition}
+                      label={formatConditionLabel(condition)}
+                      checked={selectedConditions.includes(condition)}
+                      onChange={(next) =>
+                        setSelectedConditions((prev) =>
+                          toggleListValue(prev, condition, next)
+                        )
+                      }
+                    />
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <div className="text-xs uppercase tracking-wide text-white/60">
+                  Shipping class
+                </div>
+                <div className="space-y-1">
+                  {SHIP_CLASS_OPTIONS.map((shipClass) => (
+                    <Checkbox
+                      key={shipClass}
+                      label={formatShipClassLabel(shipClass)}
+                      checked={selectedShipClasses.includes(shipClass)}
+                      onChange={(next) =>
+                        setSelectedShipClasses((prev) =>
+                          toggleListValue(prev, shipClass, next)
+                        )
+                      }
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {error ? <div className="text-red-300">{error}</div> : null}

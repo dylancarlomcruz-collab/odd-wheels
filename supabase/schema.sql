@@ -214,6 +214,9 @@ create table if not exists public.orders (
   insurance_selected boolean not null default false,
   insurance_fee numeric not null default 0,
 
+  expires_at timestamptz,
+  expired_at timestamptz,
+
   paid_at timestamptz,
   created_at timestamptz not null default now()
 );

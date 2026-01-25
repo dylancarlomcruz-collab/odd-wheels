@@ -78,6 +78,11 @@ begin
 end;
 $$;
 
+-- Hotfix: ensure order expiry columns exist for cancellation/expiry flows.
+alter table public.orders
+  add column if not exists expires_at timestamptz,
+  add column if not exists expired_at timestamptz;
+
 -- Admin inventory valuation
 create or replace function public.fn_admin_inventory_valuation(include_archived boolean default false)
 returns jsonb
@@ -622,6 +627,7 @@ begin
 end;
 $$;
 
+drop function if exists public.fn_staff_approve_order(uuid);
 create or replace function public.fn_staff_approve_order(p_order_id uuid)
 returns jsonb
 language plpgsql
