@@ -40,6 +40,7 @@ export type ShopProduct = {
   title: string;
   brand: string | null;
   model: string | null;
+  variation?: string | null;
   image_url: string | null;
   image_urls?: string[] | null;
   minPrice: number;

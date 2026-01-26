@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { supabase } from "@/lib/supabase/browser";
@@ -21,6 +22,7 @@ import {
   type LalamoveSelection,
   type LalamoveWindowKey,
 } from "@/components/checkout/LalamoveTimeSlotPicker";
+import { LalamoveMapPickerModal } from "@/components/lalamove/LalamoveMapPickerModal";
 import { formatPHP } from "@/lib/money";
 import { createOrderFromCart } from "@/lib/orders";
 import {
@@ -47,7 +49,11 @@ import {
 import { suggestedInsuranceFee } from "@/lib/shipping/config";
 import { resolveEffectivePrice } from "@/lib/pricing";
 import { protectorUnitFee } from "@/lib/addons";
-import { getVoucherEligibility, type Voucher, type VoucherWallet } from "@/lib/vouchers";
+import {
+  getVoucherEligibility,
+  type Voucher,
+  type VoucherWallet,
+} from "@/lib/vouchers";
 
 type ShippingMethod = "LALAMOVE" | "JNT" | "LBC" | "PICKUP";
 const PHONE_LENGTH = PHONE_MAX_LENGTH;
@@ -56,8 +62,16 @@ type VoucherWalletRow = Omit<VoucherWallet, "voucher"> & {
   voucher: Voucher | Voucher[] | null;
 };
 
+type PhBarangayLocation = {
+  label: string;
+  barangay: string;
+  city: string;
+  province: string;
+  district?: string | null;
+};
+
 const LALAMOVE_WINDOW_LABELS = new Map<LalamoveWindowKey, string>(
-  LALAMOVE_WINDOWS.map((window) => [window.key, window.label] as const)
+  LALAMOVE_WINDOWS.map((window) => [window.key, window.label] as const),
 );
 
 const LEGACY_LALAMOVE_WINDOW_MAP: Record<string, LalamoveWindowKey> = {
@@ -67,6 +81,11 @@ const LEGACY_LALAMOVE_WINDOW_MAP: Record<string, LalamoveWindowKey> = {
   "3-6": "15_18",
   "6-9": "18_21",
 };
+
+const LeafletMapPreview = dynamic(
+  () => import("@/components/lalamove/LeafletMap"),
+  { ssr: false },
+);
 
 const PICKUP_DAYS = [
   { key: "MON", label: "Monday" },
@@ -98,7 +117,7 @@ function isLalamoveWindowKey(value: string): value is LalamoveWindowKey {
 
 function buildLalamoveSelection(
   date: string | null | undefined,
-  key: string | null | undefined
+  key: string | null | undefined,
 ): LalamoveSelection | null {
   if (!date || !key || !isLalamoveWindowKey(key)) return null;
   const label = LALAMOVE_WINDOW_LABELS.get(key);
@@ -108,15 +127,14 @@ function buildLalamoveSelection(
 
 function buildLalamoveSelectionFromLegacy(
   date: string | null | undefined,
-  window: string | null | undefined
+  window: string | null | undefined,
 ): LalamoveSelection | null {
   if (!date || !window) return null;
   const normalized = String(window).trim();
   if (isLalamoveWindowKey(normalized))
     return buildLalamoveSelection(date, normalized);
   const directLabel = LALAMOVE_WINDOWS.find((w) => w.label === normalized);
-  if (directLabel)
-    return buildLalamoveSelection(date, directLabel.key);
+  if (directLabel) return buildLalamoveSelection(date, directLabel.key);
   const key = LEGACY_LALAMOVE_WINDOW_MAP[normalized];
   return key ? buildLalamoveSelection(date, key) : null;
 }
@@ -129,14 +147,18 @@ type LalamoveSlotInput = {
 };
 
 function buildLalamoveSelectionFromSlot(
-  slot: LalamoveSlotInput | null | undefined
+  slot: LalamoveSlotInput | null | undefined,
 ): LalamoveSelection | null {
   if (!slot?.date) return null;
   if (slot.window_key && isLalamoveWindowKey(slot.window_key)) {
     const label =
       slot.window_label ?? LALAMOVE_WINDOW_LABELS.get(slot.window_key);
     if (!label) return null;
-    return { date: slot.date, window_key: slot.window_key, window_label: label };
+    return {
+      date: slot.date,
+      window_key: slot.window_key,
+      window_label: label,
+    };
   }
   if (slot.window) {
     return buildLalamoveSelectionFromLegacy(slot.date, slot.window);
@@ -150,18 +172,51 @@ function buildLalamoveSelectionFromSlot(
 
 const LOCATION_SUGGESTION_LIMIT = 20;
 
-function filterLocationSuggestions(
-  items: string[],
+function normalizeBarangayLabel(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (/^brgy\b/i.test(trimmed)) {
+    return `Brgy ${trimmed.replace(/^brgy\s*/i, "").trim()}`;
+  }
+  if (/^barangay\b/i.test(trimmed)) {
+    return `Brgy ${trimmed.replace(/^barangay\s*/i, "").trim()}`;
+  }
+  return trimmed;
+}
+
+function buildJntLocationLabel(
+  barangay: string,
+  city: string,
+  province: string,
+): string {
+  const normalizedBarangay = normalizeBarangayLabel(barangay);
+  const parts = [normalizedBarangay, city, province]
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts.join(" - ");
+}
+
+function findBarangayLocationByLabel(
+  items: PhBarangayLocation[],
   value: string,
-  minChars = 2
+): PhBarangayLocation | null {
+  const target = value.trim();
+  if (!target) return null;
+  return items.find((item) => item.label === target) ?? null;
+}
+
+function filterBarangayLocations(
+  items: PhBarangayLocation[],
+  value: string,
+  minChars = 2,
 ) {
   const query = value.trim().toLowerCase();
   if (query.length < minChars) return [];
-  const startsWith: string[] = [];
-  const contains: string[] = [];
+  const startsWith: PhBarangayLocation[] = [];
+  const contains: PhBarangayLocation[] = [];
 
   for (const item of items) {
-    const lower = item.toLowerCase();
+    const lower = item.label.toLowerCase();
     if (lower.startsWith(query)) {
       startsWith.push(item);
     } else if (lower.includes(query)) {
@@ -173,15 +228,32 @@ function filterLocationSuggestions(
   return [...startsWith, ...contains].slice(0, LOCATION_SUGGESTION_LIMIT);
 }
 
+function findBarangayLocationByParts(
+  items: PhBarangayLocation[],
+  barangay: string,
+  city: string,
+  province: string,
+): PhBarangayLocation | null {
+  const normalizedBarangay = normalizeBarangayLabel(barangay);
+  const targetCity = city.trim();
+  const targetProvince = province.trim();
+  if (!normalizedBarangay || !targetCity || !targetProvince) return null;
+  return (
+    items.find(
+      (item) =>
+        item.barangay === normalizedBarangay &&
+        item.city === targetCity &&
+        item.province === targetProvince,
+    ) ?? null
+  );
+}
+
 type CheckoutAuthModalProps = {
   open: boolean;
   checkoutRedirect: string;
 };
 
-function CheckoutAuthModal({
-  open,
-  checkoutRedirect,
-}: CheckoutAuthModalProps) {
+function CheckoutAuthModal({ open, checkoutRedirect }: CheckoutAuthModalProps) {
   const [mounted, setMounted] = React.useState(false);
 
   React.useEffect(() => {
@@ -212,14 +284,14 @@ function CheckoutAuthModal({
           <CardFooter className="flex flex-wrap gap-2">
             <Link
               href={`/auth/login?redirect=${encodeURIComponent(
-                checkoutRedirect
+                checkoutRedirect,
               )}`}
             >
               <Button>Login</Button>
             </Link>
             <Link
               href={`/auth/register?redirect=${encodeURIComponent(
-                checkoutRedirect
+                checkoutRedirect,
               )}`}
             >
               <Button variant="secondary">Create account</Button>
@@ -243,6 +315,150 @@ type VoucherModalProps = {
   subtotal: number;
   shippingFee: number;
 };
+
+type JntLocationModalProps = {
+  open: boolean;
+  value: string;
+  locations: PhBarangayLocation[];
+  loading: boolean;
+  error: string | null;
+  onApply: (value: string) => void;
+  onClear: () => void;
+  onClose: () => void;
+};
+
+function JntLocationModal({
+  open,
+  value,
+  locations,
+  loading,
+  error,
+  onApply,
+  onClear,
+  onClose,
+}: JntLocationModalProps) {
+  const [draft, setDraft] = React.useState(value);
+  const [draftError, setDraftError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setDraft(value);
+    setDraftError(null);
+  }, [open, value]);
+
+  React.useEffect(() => {
+    if (!open || typeof document === "undefined") return undefined;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [open]);
+
+  const suggestions = React.useMemo(
+    () => filterBarangayLocations(locations, draft, 2),
+    [locations, draft],
+  );
+
+  if (!open || typeof document === "undefined") return null;
+
+  const content = (
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div className="w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+        <Card className="border border-white/10 bg-bg-900/95 shadow-soft">
+          <CardHeader className="flex items-center justify-between gap-4">
+            <div>
+              <div className="text-xl font-semibold">Find your barangay</div>
+              <div className="text-xs text-white/60">
+                Search and select your barangay, city, and province.
+              </div>
+            </div>
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              Close
+            </Button>
+          </CardHeader>
+          <CardBody className="space-y-4">
+            <Input
+              label="Search location"
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                setDraftError(null);
+              }}
+              placeholder="Brgy 123 - Manila - Metro Manila"
+              hint="Start typing your barangay name."
+            />
+
+            {loading ? (
+              <div className="text-xs text-white/50">
+                Loading location suggestions...
+              </div>
+            ) : null}
+            {error ? <div className="text-xs text-red-200">{error}</div> : null}
+            {draftError ? (
+              <div className="text-xs text-red-200">{draftError}</div>
+            ) : null}
+
+            <div className="max-h-72 overflow-y-auto rounded-xl border border-white/10 bg-bg-900/40">
+              {suggestions.length ? (
+                <div className="divide-y divide-white/5">
+                  {suggestions.map((location) => (
+                    <button
+                      key={location.label}
+                      type="button"
+                      className="w-full px-4 py-2 text-left text-sm text-white/80 hover:bg-white/5"
+                      onClick={() => {
+                        onApply(location.label);
+                        onClose();
+                      }}
+                    >
+                      {location.label}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="px-4 py-6 text-sm text-white/50">
+                  Start typing to see suggestions.
+                </div>
+              )}
+            </div>
+          </CardBody>
+          <CardFooter className="flex flex-wrap items-center justify-between gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                onClear();
+                onClose();
+              }}
+            >
+              Clear selection
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                const match = findBarangayLocationByLabel(locations, draft);
+                if (!match) {
+                  setDraftError("Select a location from the suggestions.");
+                  return;
+                }
+                onApply(match.label);
+                onClose();
+              }}
+            >
+              Use this location
+            </Button>
+          </CardFooter>
+        </Card>
+      </div>
+    </div>
+  );
+
+  return createPortal(content, document.body);
+}
 
 function formatVoucherDate(value: string | null | undefined) {
   if (!value) return "-";
@@ -295,7 +511,9 @@ function VoucherModal({
           </CardHeader>
           <CardBody className="space-y-3">
             {available.length === 0 ? (
-              <div className="text-sm text-white/60">No available vouchers.</div>
+              <div className="text-sm text-white/60">
+                No available vouchers.
+              </div>
             ) : (
               <div className="space-y-3">
                 {available.map((wallet) => {
@@ -322,12 +540,16 @@ function VoucherModal({
                             {voucher.title || "Free Shipping"}
                           </div>
                           <div className="text-xs text-white/60">
-                            Min spend {formatPHP(Number(voucher.min_subtotal ?? 0))} - Cap{" "}
+                            Min spend{" "}
+                            {formatPHP(Number(voucher.min_subtotal ?? 0))} - Cap{" "}
                             {formatPHP(Number(voucher.shipping_cap ?? 0))}
                           </div>
                         </div>
                         <div className="text-xs text-white/60">
-                          Expires: {formatVoucherDate(wallet.expires_at ?? voucher.expires_at)}
+                          Expires:{" "}
+                          {formatVoucherDate(
+                            wallet.expires_at ?? voucher.expires_at,
+                          )}
                         </div>
                       </div>
 
@@ -345,7 +567,11 @@ function VoucherModal({
                         </div>
                         <div className="flex items-center gap-2">
                           {isSelected ? (
-                            <Button variant="ghost" size="sm" onClick={onRemove}>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={onRemove}
+                            >
                               Remove
                             </Button>
                           ) : (
@@ -373,15 +599,13 @@ function VoucherModal({
   return createPortal(content, document.body);
 }
 
-function resolveLalamoveSelections(
-  sd: ShippingDefaults
-): LalamoveSelection[] {
+function resolveLalamoveSelections(sd: ShippingDefaults): LalamoveSelection[] {
   const selections: LalamoveSelection[] = [];
 
   const stored = sd.lalamove?.lalamove;
   const storedSelection = buildLalamoveSelection(
     stored?.date,
-    stored?.window_key
+    stored?.window_key,
   );
   if (storedSelection) selections.push(storedSelection);
 
@@ -404,16 +628,6 @@ function resolveLalamoveSelections(
   });
 }
 
-async function uploadLalamoveImage(file: File, userId: string) {
-  const fd = new FormData();
-  fd.append("file", file);
-  fd.append("productId", `lalamove-map-${userId}`);
-  const res = await fetch("/api/images/upload", { method: "POST", body: fd });
-  const json = await res.json();
-  if (!res.ok || !json?.ok) throw new Error(json?.error || "Upload failed");
-  return (json.publicUrl as string) || "";
-}
-
 function CheckoutContent() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -434,15 +648,15 @@ function CheckoutContent() {
     if (!selectedIds) return lines;
     const idSet = new Set(selectedIds);
     return lines.filter(
-      (line) => idSet.has(line.id) || idSet.has(line.variant_id)
+      (line) => idSet.has(line.id) || idSet.has(line.variant_id),
     );
   }, [lines, selectedIds]);
   const selectionNote = selectedIds
     ? cartLoading
       ? null
       : selectedLines.length
-      ? `${selectedLines.length} selected item(s) from your cart.`
-      : "No selected items from your cart. Go back to cart to choose items."
+        ? `${selectedLines.length} selected item(s) from your cart.`
+        : "No selected items from your cart. Go back to cart to choose items."
     : null;
   const checkoutRedirect = selectedParam
     ? `/checkout?selected=${encodeURIComponent(selectedParam)}`
@@ -455,11 +669,11 @@ function CheckoutContent() {
   const [region, setRegion] = React.useState<Region>("METRO_MANILA");
   const [lbcCop, setLbcCop] = React.useState(false);
   const [paymentMethod, setPaymentMethod] = React.useState<"GCASH" | "BPI">(
-    "GCASH"
+    "GCASH",
   );
 
   const [defaults, setDefaults] = React.useState<ShippingDefaults>(() =>
-    normalizeShippingDefaults({})
+    normalizeShippingDefaults({}),
   );
   const [defaultsRaw, setDefaultsRaw] = React.useState<unknown>({});
 
@@ -478,18 +692,20 @@ function CheckoutContent() {
   const [phoneTouched, setPhoneTouched] = React.useState(false);
   const [submitAttempted, setSubmitAttempted] = React.useState(false);
 
-  // J&T (split)
+  // J&T
   const [jtHouseStreetUnit, setJtHouseStreetUnit] = React.useState("");
   const [jtBarangay, setJtBarangay] = React.useState("");
   const [jtCity, setJtCity] = React.useState("");
   const [jtProvince, setJtProvince] = React.useState("");
   const [jtPostalCode, setJtPostalCode] = React.useState("");
-  const [phBarangays, setPhBarangays] = React.useState<string[]>([]);
-  const [phCities, setPhCities] = React.useState<string[]>([]);
-  const [phProvinces, setPhProvinces] = React.useState<string[]>([]);
+  const [jtLocationQuery, setJtLocationQuery] = React.useState("");
+  const [jtLocationModalOpen, setJtLocationModalOpen] = React.useState(false);
+  const [phBarangayLocations, setPhBarangayLocations] = React.useState<
+    PhBarangayLocation[]
+  >([]);
   const [locationsLoading, setLocationsLoading] = React.useState(false);
   const [locationsError, setLocationsError] = React.useState<string | null>(
-    null
+    null,
   );
 
   // LBC (split)
@@ -503,7 +719,6 @@ function CheckoutContent() {
   // Lalamove
   const [lalamoveAddress, setLalamoveAddress] = React.useState("");
   const [lalamoveImageUrl, setLalamoveImageUrl] = React.useState<string>("");
-  const [lalamoveUploading, setLalamoveUploading] = React.useState(false);
   const [lalamoveMapLink, setLalamoveMapLink] = React.useState("");
   const [lalamoveMapCoords, setLalamoveMapCoords] = React.useState<{
     lat: number;
@@ -511,14 +726,16 @@ function CheckoutContent() {
   } | null>(null);
   const [lalamovePinLoading, setLalamovePinLoading] = React.useState(false);
   const [lalamovePinError, setLalamovePinError] = React.useState<string | null>(
-    null
+    null,
   );
-  const [lalamoveSlots, setLalamoveSlots] = React.useState<
-    LalamoveSelection[]
-  >([]);
+  const [lalamoveSlots, setLalamoveSlots] = React.useState<LalamoveSelection[]>(
+    [],
+  );
   const [lalamoveSlotError, setLalamoveSlotError] = React.useState<
     string | null
   >(null);
+  const [lalamoveMapPickerOpen, setLalamoveMapPickerOpen] =
+    React.useState(false);
 
   const [pickupDay, setPickupDay] = React.useState("");
   const [pickupSlot, setPickupSlot] = React.useState("");
@@ -534,9 +751,10 @@ function CheckoutContent() {
 
   const pickupSchedule = React.useMemo(() => {
     const schedule: Record<string, string[]> = {};
-    const raw = (settings?.pickup_schedule ?? null) as
-      | Record<string, unknown>
-      | null;
+    const raw = (settings?.pickup_schedule ?? null) as Record<
+      string,
+      unknown
+    > | null;
     if (raw && typeof raw === "object") {
       for (const day of PICKUP_DAYS) {
         const slotsRaw = raw[day.key];
@@ -566,12 +784,12 @@ function CheckoutContent() {
   const pickupDayOptions = React.useMemo(
     () =>
       PICKUP_DAYS.filter((day) => (pickupSchedule[day.key] ?? []).length > 0),
-    [pickupSchedule]
+    [pickupSchedule],
   );
 
   const pickupSlotsForDay = React.useMemo(
-    () => (pickupDay ? pickupSchedule[pickupDay] ?? [] : []),
-    [pickupDay, pickupSchedule]
+    () => (pickupDay ? (pickupSchedule[pickupDay] ?? []) : []),
+    [pickupDay, pickupSchedule],
   );
 
   const pickupUnavailable = Boolean(settings?.pickup_unavailable);
@@ -579,30 +797,19 @@ function CheckoutContent() {
   React.useEffect(() => {
     let mounted = true;
     if (shippingMethod !== "JNT") return undefined;
-    if (phBarangays.length || phCities.length || phProvinces.length)
-      return undefined;
+    if (phBarangayLocations.length) return undefined;
 
     async function loadLocations() {
       setLocationsLoading(true);
       setLocationsError(null);
       try {
-        const [barangaysRes, citiesRes, provincesRes] = await Promise.all([
-          fetch("/data/ph-barangays.json"),
-          fetch("/data/ph-cities.json"),
-          fetch("/data/ph-provinces.json"),
-        ]);
-        if (!barangaysRes.ok || !citiesRes.ok || !provincesRes.ok) {
+        const res = await fetch("/data/ph-barangay-locations.json");
+        if (!res.ok) {
           throw new Error("Failed to load location data.");
         }
-        const [barangays, cities, provinces] = await Promise.all([
-          barangaysRes.json(),
-          citiesRes.json(),
-          provincesRes.json(),
-        ]);
+        const locations = await res.json();
         if (!mounted) return;
-        setPhBarangays(Array.isArray(barangays) ? barangays : []);
-        setPhCities(Array.isArray(cities) ? cities : []);
-        setPhProvinces(Array.isArray(provinces) ? provinces : []);
+        setPhBarangayLocations(Array.isArray(locations) ? locations : []);
       } catch (err) {
         if (!mounted) return;
         setLocationsError("Failed to load location suggestions.");
@@ -615,49 +822,57 @@ function CheckoutContent() {
     return () => {
       mounted = false;
     };
+  }, [shippingMethod, phBarangayLocations.length]);
+
+  React.useEffect(() => {
+    if (shippingMethod !== "JNT") return;
+    if (!phBarangayLocations.length) return;
+    if (jtLocationQuery.trim()) {
+      const exact = findBarangayLocationByLabel(
+        phBarangayLocations,
+        jtLocationQuery,
+      );
+      if (exact) return;
+    }
+    const match = findBarangayLocationByParts(
+      phBarangayLocations,
+      jtBarangay,
+      jtCity,
+      jtProvince,
+    );
+    if (!match) return;
+    if (match.label !== jtLocationQuery) {
+      setJtLocationQuery(match.label);
+    }
   }, [
     shippingMethod,
-    phBarangays.length,
-    phCities.length,
-    phProvinces.length,
+    phBarangayLocations,
+    jtLocationQuery,
+    jtBarangay,
+    jtCity,
+    jtProvince,
   ]);
-
-  const barangaySuggestions = React.useMemo(
-    () => filterLocationSuggestions(phBarangays, jtBarangay, 2),
-    [phBarangays, jtBarangay]
-  );
-  const citySuggestions = React.useMemo(
-    () => filterLocationSuggestions(phCities, jtCity, 2),
-    [phCities, jtCity]
-  );
-  const provinceSuggestions = React.useMemo(
-    () => filterLocationSuggestions(phProvinces, jtProvince, 1),
-    [phProvinces, jtProvince]
-  );
 
   // Insurance
   const itemsSubtotal = React.useMemo(
     () =>
-      (selectedLines ?? []).reduce(
-        (sum, l) => {
-          const basePrice = resolveEffectivePrice({
-            price: Number(l.variant.price),
-            sale_price: l.variant.sale_price ?? null,
-            discount_percent: l.variant.discount_percent ?? null,
-          }).effectivePrice;
-          const addOn = protectorUnitFee(
-            l.variant.ship_class,
-            Boolean(l.protector_selected)
-          );
-          return sum + (basePrice + addOn) * l.qty;
-        },
-        0
-      ),
-    [selectedLines]
+      (selectedLines ?? []).reduce((sum, l) => {
+        const basePrice = resolveEffectivePrice({
+          price: Number(l.variant.price),
+          sale_price: l.variant.sale_price ?? null,
+          discount_percent: l.variant.discount_percent ?? null,
+        }).effectivePrice;
+        const addOn = protectorUnitFee(
+          l.variant.ship_class,
+          Boolean(l.protector_selected),
+        );
+        return sum + (basePrice + addOn) * l.qty;
+      }, 0),
+    [selectedLines],
   );
   const suggestedInsurance = React.useMemo(
     () => suggestedInsuranceFee(itemsSubtotal),
-    [itemsSubtotal]
+    [itemsSubtotal],
   );
   const [insuranceSelected, setInsuranceSelected] = React.useState(false);
   const [insuranceFee, setInsuranceFee] = React.useState<number>(0);
@@ -698,10 +913,10 @@ function CheckoutContent() {
         profileName ??
           user.user_metadata?.full_name ??
           user.user_metadata?.name ??
-          ""
+          "",
       );
       setPhone(
-        sanitizePhone(profilePhone ?? user.user_metadata?.contact_number ?? "")
+        sanitizePhone(profilePhone ?? user.user_metadata?.contact_number ?? ""),
       );
     }
 
@@ -727,7 +942,7 @@ function CheckoutContent() {
       const { data, error } = await supabase
         .from("voucher_wallet")
         .select(
-          "id,status,claimed_at,used_at,expires_at,voucher:vouchers(id,code,title,kind,min_subtotal,shipping_cap,starts_at,expires_at,is_active)"
+          "id,status,claimed_at,used_at,expires_at,voucher:vouchers(id,code,title,kind,min_subtotal,shipping_cap,starts_at,expires_at,is_active)",
         )
         .eq("user_id", user.id)
         .order("claimed_at", { ascending: false });
@@ -742,7 +957,9 @@ function CheckoutContent() {
         const rows = (data ?? []) as VoucherWalletRow[];
         const normalized = rows
           .map((row) => {
-            const voucher = Array.isArray(row.voucher) ? row.voucher[0] : row.voucher;
+            const voucher = Array.isArray(row.voucher)
+              ? row.voucher[0]
+              : row.voucher;
             if (!voucher) return null;
             return { ...row, voucher } as VoucherWallet;
           })
@@ -761,15 +978,28 @@ function CheckoutContent() {
   // Apply defaults when switching method
   React.useEffect(() => {
     const sd = defaults;
+    if (shippingMethod !== "JNT") {
+      setJtLocationModalOpen(false);
+    }
 
     if (shippingMethod === "JNT") {
+      const normalizedJtBarangay = normalizeBarangayLabel(
+        String(sd.jnt?.barangay ?? ""),
+      );
       setName(sd.jnt?.recipient_name ?? name);
       setPhone(sanitizePhone(sd.jnt?.contact_number ?? phone));
       setJtHouseStreetUnit(sd.jnt?.house_street_unit ?? "");
-      setJtBarangay(sd.jnt?.barangay ?? "");
+      setJtBarangay(normalizedJtBarangay);
       setJtCity(sd.jnt?.city ?? "");
       setJtProvince(sd.jnt?.province ?? "");
       setJtPostalCode(sd.jnt?.postal_code ?? "");
+      setJtLocationQuery(
+        buildJntLocationLabel(
+          normalizedJtBarangay,
+          String(sd.jnt?.city ?? ""),
+          String(sd.jnt?.province ?? ""),
+        ),
+      );
       setNotes(sd.jnt?.notes ?? "");
 
       setLbcFirstName("");
@@ -800,6 +1030,7 @@ function CheckoutContent() {
       setJtCity("");
       setJtProvince("");
       setJtPostalCode("");
+      setJtLocationQuery("");
       setLalamoveAddress("");
       setLalamoveImageUrl("");
       setLalamoveMapLink("");
@@ -815,8 +1046,14 @@ function CheckoutContent() {
       setPhone(sanitizePhone(sd.lalamove?.recipient_phone ?? phone));
       setLalamoveAddress(sd.lalamove?.dropoff_address ?? "");
       setLalamoveImageUrl(sd.lalamove?.map_screenshot_url ?? "");
-      setLalamoveMapLink("");
-      setLalamoveMapCoords(null);
+      setLalamoveMapLink(String(sd.lalamove?.map_url ?? ""));
+      const mapLat = Number(sd.lalamove?.map_lat);
+      const mapLng = Number(sd.lalamove?.map_lng);
+      if (Number.isFinite(mapLat) && Number.isFinite(mapLng)) {
+        setLalamoveMapCoords({ lat: mapLat, lng: mapLng });
+      } else {
+        setLalamoveMapCoords(null);
+      }
       setLalamoveSlots(resolveLalamoveSelections(sd));
       setLalamoveSlotError(null);
       setNotes(sd.lalamove?.notes ?? "");
@@ -828,6 +1065,7 @@ function CheckoutContent() {
       setJtCity("");
       setJtProvince("");
       setJtPostalCode("");
+      setJtLocationQuery("");
       setLbcFirstName("");
       setLbcLastName("");
       setLbcBranchName("");
@@ -848,6 +1086,7 @@ function CheckoutContent() {
       setJtCity("");
       setJtProvince("");
       setJtPostalCode("");
+      setJtLocationQuery("");
       setLbcFirstName("");
       setLbcLastName("");
       setLbcBranchName("");
@@ -881,33 +1120,38 @@ function CheckoutContent() {
     }
   }, [shippingMethod, pickupSchedule, pickupDay, pickupSlot]);
 
-  async function onPickLalamoveImage(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !user) return;
+  function clearJntLocation() {
+    setJtLocationQuery("");
+    setJtBarangay("");
+    setJtCity("");
+    setJtProvince("");
+    setJtPostalCode("");
+  }
 
-    setMsg(null);
-    setLalamoveUploading(true);
-    setLalamovePinError(null);
-    try {
-      const url = await uploadLalamoveImage(file, user.id);
-      setLalamoveImageUrl(url);
-      setLalamoveMapLink("");
-      setLalamoveMapCoords(null);
-    } catch (err: any) {
-      setMsg(err?.message ?? "Upload failed");
-    } finally {
-      setLalamoveUploading(false);
-      e.target.value = "";
+  function onJntLocationChange(nextValue: string) {
+    setJtLocationQuery(nextValue);
+    const match = findBarangayLocationByLabel(phBarangayLocations, nextValue);
+    if (match) {
+      setJtBarangay(normalizeBarangayLabel(match.barangay));
+      setJtCity(match.city);
+      setJtProvince(match.province);
+      setJtPostalCode("");
+      return;
     }
+    setJtBarangay("");
+    setJtCity("");
+    setJtProvince("");
+    setJtPostalCode("");
   }
 
   async function requestLalamovePin(payload: {
     address?: string;
     lat?: number;
     lng?: number;
-  }) {
+  }): Promise<boolean> {
     setLalamovePinError(null);
     setLalamovePinLoading(true);
+    let ok = false;
 
     try {
       const res = await fetch("/api/lalamove/map", {
@@ -934,23 +1178,20 @@ function CheckoutContent() {
         setLalamoveMapCoords(null);
       }
 
-      if (!payload.address && typeof data.address === "string" && data.address) {
+      if (
+        !payload.address &&
+        typeof data.address === "string" &&
+        data.address
+      ) {
         setLalamoveAddress(data.address);
       }
+      ok = true;
     } catch (err: any) {
       setLalamovePinError(err?.message ?? "Failed to pin map.");
     } finally {
       setLalamovePinLoading(false);
     }
-  }
-
-  function onPinFromAddress() {
-    const trimmed = lalamoveAddress.trim();
-    if (!trimmed) {
-      setLalamovePinError("Enter a drop-off address to pin.");
-      return;
-    }
-    requestLalamovePin({ address: trimmed });
+    return ok;
   }
 
   function onUseCurrentLocation() {
@@ -972,8 +1213,13 @@ function CheckoutContent() {
         setLalamovePinLoading(false);
         setLalamovePinError(err?.message || "Unable to get current location.");
       },
-      { enableHighAccuracy: true, timeout: 10000 }
+      { enableHighAccuracy: true, timeout: 10000 },
     );
+  }
+
+  async function onSaveLalamoveMapPin(pos: { lat: number; lng: number }) {
+    const ok = await requestLalamovePin({ lat: pos.lat, lng: pos.lng });
+    if (ok) setLalamoveMapPickerOpen(false);
   }
 
   async function persistCheckoutDefaults(nextDefaults: ShippingDefaults) {
@@ -981,7 +1227,10 @@ function CheckoutContent() {
     const mergedDefaults = mergeShippingDefaults(defaultsRaw, nextDefaults);
     const { data, error } = await supabase
       .from("customers")
-      .upsert({ id: user.id, shipping_defaults: mergedDefaults }, { onConflict: "id" })
+      .upsert(
+        { id: user.id, shipping_defaults: mergedDefaults },
+        { onConflict: "id" },
+      )
       .select("shipping_defaults")
       .single();
 
@@ -1004,9 +1253,9 @@ function CheckoutContent() {
         (selectedLines ?? []).map((l) => ({
           ship_class: (l.variant.ship_class as any) ?? null,
           qty: l.qty,
-        }))
+        })),
       ),
-    [selectedLines]
+    [selectedLines],
   );
   const hasLalamoveOnly = shipCounts.LALAMOVE > 0;
 
@@ -1022,7 +1271,7 @@ function CheckoutContent() {
       MINIBOX: fitsCapacity(shipCounts, LBC_CAPACITY.MINIBOX),
       SMALL_BOX: fitsCapacity(shipCounts, LBC_CAPACITY.SMALL_BOX),
     }),
-    [shipCounts]
+    [shipCounts],
   );
 
   const lbcAllowedPacks = React.useMemo(() => {
@@ -1096,17 +1345,18 @@ function CheckoutContent() {
       shippingMethod === "LALAMOVE" || shippingMethod === "PICKUP"
         ? 0
         : shippingMethod === "LBC" && lbcCop
-        ? 0
-        : shippingMeta.ok
-        ? shippingMeta.fee
-        : 0;
+          ? 0
+          : shippingMeta.ok
+            ? shippingMeta.fee
+            : 0;
 
     const cop_fee =
       shippingMethod === "LBC" && lbcCop ? FEES.LBC_COP_CONVENIENCE : 0;
     const lalamove_fee =
       shippingMethod === "LALAMOVE" ? FEES.LALAMOVE_CONVENIENCE : 0;
     const priority_fee = priorityRequested ? FEES.PRIORITY_SHIPPING : 0;
-    const insurance_fee = insuranceSelected
+    const insurance_fee =
+      shippingMethod !== "LALAMOVE" && insuranceSelected
       ? Math.max(0, Number(insuranceFee) || 0)
       : 0;
 
@@ -1124,7 +1374,7 @@ function CheckoutContent() {
     () =>
       voucherWallet.find((voucher) => voucher.id === selectedVoucherWalletId) ??
       null,
-    [voucherWallet, selectedVoucherWalletId]
+    [voucherWallet, selectedVoucherWalletId],
   );
 
   const voucherEligibility = React.useMemo(() => {
@@ -1151,7 +1401,7 @@ function CheckoutContent() {
       setVoucherNotice(
         voucherEligibility?.reason
           ? `Voucher removed: ${voucherEligibility.reason}`
-          : "Voucher removed."
+          : "Voucher removed.",
       );
     } else {
       setVoucherNotice(null);
@@ -1173,7 +1423,9 @@ function CheckoutContent() {
     shippingDiscount;
 
   const feeLines: FeeLine[] = React.useMemo(() => {
-    const subtotalLabel = selectedIds ? "Selected items subtotal" : "Items subtotal";
+    const subtotalLabel = selectedIds
+      ? "Selected items subtotal"
+      : "Items subtotal";
     const out: FeeLine[] = [{ label: subtotalLabel, amount: itemsSubtotal }];
 
     if (shippingMethod === "JNT") {
@@ -1219,14 +1471,16 @@ function CheckoutContent() {
     if (fees.priority_fee > 0)
       out.push({ label: "Priority shipping", amount: fees.priority_fee });
 
-    if (insuranceSelected)
-      out.push({ label: "Shipping insurance", amount: fees.insurance_fee });
-    else
-      out.push({
-        label: "Shipping insurance (optional)",
-        amount: suggestedInsurance,
-        muted: true,
-      });
+    if (shippingMethod !== "LALAMOVE") {
+      if (insuranceSelected)
+        out.push({ label: "Shipping insurance", amount: fees.insurance_fee });
+      else
+        out.push({
+          label: "Shipping insurance (optional)",
+          amount: suggestedInsurance,
+          muted: true,
+        });
+    }
 
     return out;
   }, [
@@ -1250,11 +1504,11 @@ function CheckoutContent() {
       return setMsg("Please select at least one item in your cart.");
 
     const invalidLine = selectedLines.find(
-      (l) => l.variant.qty <= 0 || l.qty > l.variant.qty
+      (l) => l.variant.qty <= 0 || l.qty > l.variant.qty,
     );
     if (invalidLine)
       return setMsg(
-        "Some items are sold out or exceed available stock. Please adjust your cart."
+        "Some items are sold out or exceed available stock. Please adjust your cart.",
       );
 
     const sanitizedPhone = sanitizePhone(phone);
@@ -1273,7 +1527,6 @@ function CheckoutContent() {
     if (shippingMethod === "JNT") {
       if (!jtHouseStreetUnit.trim())
         return setMsg("House/Street/Unit is required for J&T.");
-      if (!jtBarangay.trim()) return setMsg("Barangay is required for J&T.");
       if (!jtCity.trim()) return setMsg("City is required for J&T.");
       if (!jtProvince.trim()) return setMsg("Province is required for J&T.");
     }
@@ -1288,7 +1541,7 @@ function CheckoutContent() {
     if (shippingMethod === "LALAMOVE") {
       if (!lalamoveAddress.trim())
         return setMsg(
-          "Please enter your Lalamove drop-off address / landmark details."
+          "Please enter your Lalamove drop-off address / landmark details.",
         );
       if (!lalamoveSlots.length) {
         setLalamoveSlotError("Please select at least one Lalamove time slot.");
@@ -1301,7 +1554,9 @@ function CheckoutContent() {
         return setMsg("Pickup is currently unavailable.");
       }
       if (!pickupDayOptions.length) {
-        return setMsg("Pickup schedule not set yet. Please choose another method.");
+        return setMsg(
+          "Pickup schedule not set yet. Please choose another method.",
+        );
       }
       if (!pickupDay.trim()) {
         return setMsg("Please select a pickup day.");
@@ -1324,6 +1579,7 @@ function CheckoutContent() {
 
       const jtHouseStreetUnitTrimmed = jtHouseStreetUnit.trim();
       const jtBarangayTrimmed = jtBarangay.trim();
+      const jtBarangayNormalized = normalizeBarangayLabel(jtBarangayTrimmed);
       const jtCityTrimmed = jtCity.trim();
       const jtProvinceTrimmed = jtProvince.trim();
       const jtPostalCodeTrimmed = jtPostalCode.trim();
@@ -1339,7 +1595,7 @@ function CheckoutContent() {
         .join(", ");
       const jntFullAddress = [
         jtHouseStreetUnitTrimmed,
-        jtBarangayTrimmed ? `Brgy ${jtBarangayTrimmed}` : "",
+        jtBarangayNormalized,
         jtCityTrimmed,
         jtProvinceTrimmed,
         jtPostalCodeTrimmed,
@@ -1355,11 +1611,11 @@ function CheckoutContent() {
           receiver_name: name.trim(),
           receiver_phone: sanitizedPhone,
           house_street_unit: jtHouseStreetUnitTrimmed,
-          barangay: jtBarangayTrimmed,
+          barangay: jtBarangayNormalized,
           city: jtCityTrimmed,
           province: jtProvinceTrimmed,
           postal_code: jtPostalCodeTrimmed || null,
-          brgy: jtBarangayTrimmed,
+          brgy: jtBarangayNormalized,
           address_line: jntAddressLine,
           full_address: jntFullAddress,
           region,
@@ -1418,7 +1674,7 @@ function CheckoutContent() {
               recipient_name: name.trim(),
               contact_number: sanitizedPhone,
               house_street_unit: jtHouseStreetUnitTrimmed,
-              barangay: jtBarangayTrimmed,
+              barangay: jtBarangayNormalized,
               city: jtCityTrimmed,
               province: jtProvinceTrimmed,
               postal_code: jtPostalCodeTrimmed,
@@ -1471,10 +1727,11 @@ function CheckoutContent() {
           shipping_discount: shippingDiscount,
           discount_total: shippingDiscount,
           priority_requested: priorityRequested,
-          insurance_selected: insuranceSelected,
-          insurance_fee_user: insuranceFee,
+          insurance_selected:
+            shippingMethod !== "LALAMOVE" && insuranceSelected,
+          insurance_fee_user: shippingMethod !== "LALAMOVE" ? insuranceFee : 0,
         },
-        selectedLines
+        selectedLines,
       );
 
       if (nextDefaults) {
@@ -1487,14 +1744,16 @@ function CheckoutContent() {
 
       try {
         if (typeof window !== "undefined") {
-          const neverShow = window.localStorage.getItem(FEEDBACK_NEVER_SHOW_KEY);
+          const neverShow = window.localStorage.getItem(
+            FEEDBACK_NEVER_SHOW_KEY,
+          );
           if (!neverShow) {
             window.localStorage.setItem(
               FEEDBACK_PROMPT_KEY,
               JSON.stringify({
                 orderId: order?.id ?? null,
                 createdAt: new Date().toISOString(),
-              })
+              }),
             );
           }
         }
@@ -1564,7 +1823,8 @@ function CheckoutContent() {
               Fill up details then place your order.
             </div>
             <div className="text-xs text-red-200">
-              Required boxes must be filled in. Skipped fields will block checkout.
+              Required boxes must be filled in. Skipped fields will block
+              checkout.
             </div>
           </CardHeader>
 
@@ -1660,63 +1920,28 @@ function CheckoutContent() {
                       label="House/Street/Unit (required)"
                       value={jtHouseStreetUnit}
                       onChange={(e) => setJtHouseStreetUnit(e.target.value)}
+                      hint="Street address, building, and unit details."
                     />
                   </div>
-                  <Input
-                    label="Barangay (required)"
-                    value={jtBarangay}
-                    onChange={(e) => setJtBarangay(e.target.value)}
-                    list="jnt-barangays"
-                    hint="Start typing to see suggestions."
-                  />
-                  <Input
-                    label="City (required)"
-                    value={jtCity}
-                    onChange={(e) => setJtCity(e.target.value)}
-                    list="jnt-cities"
-                    hint="Start typing to see suggestions."
-                  />
-                  <Input
-                    label="Province (required)"
-                    value={jtProvince}
-                    onChange={(e) => setJtProvince(e.target.value)}
-                    list="jnt-provinces"
-                    hint="Start typing to see suggestions."
-                  />
-                  <Input
-                    label="Postal Code (optional)"
-                    value={jtPostalCode}
-                    onChange={(e) => setJtPostalCode(e.target.value)}
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    maxLength={4}
-                  />
-                </div>
-
-                {locationsLoading ? (
-                  <div className="text-xs text-white/50">
-                    Loading location suggestions...
+                  <div className="md:col-span-2">
+                    <Input
+                      label="Barangay / City / Province (required)"
+                      value={jtLocationQuery}
+                      readOnly
+                      placeholder="Click to search your barangay"
+                      onClick={() => setJtLocationModalOpen(true)}
+                      onFocus={() => setJtLocationModalOpen(true)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setJtLocationModalOpen(true);
+                        }
+                      }}
+                      className="cursor-pointer"
+                      hint="Opens a search pop-up (e.g., Brgy 123 - Manila - Metro Manila)."
+                    />
                   </div>
-                ) : null}
-                {locationsError ? (
-                  <div className="text-xs text-red-200">{locationsError}</div>
-                ) : null}
-
-                <datalist id="jnt-barangays">
-                  {barangaySuggestions.map((name) => (
-                    <option key={name} value={name} />
-                  ))}
-                </datalist>
-                <datalist id="jnt-cities">
-                  {citySuggestions.map((name) => (
-                    <option key={name} value={name} />
-                  ))}
-                </datalist>
-                <datalist id="jnt-provinces">
-                  {provinceSuggestions.map((name) => (
-                    <option key={name} value={name} />
-                  ))}
-                </datalist>
+                </div>
               </div>
             ) : null}
 
@@ -1798,17 +2023,8 @@ function CheckoutContent() {
                   onChange={(e) => setLalamoveAddress(e.target.value)}
                 />
 
-                <div>
-                  <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={onPinFromAddress}
-                      disabled={lalamovePinLoading || !lalamoveAddress.trim()}
-                    >
-                      {lalamovePinLoading ? "Pinning..." : "Pin from address"}
-                    </Button>
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button
                       type="button"
                       variant="secondary"
@@ -1816,45 +2032,60 @@ function CheckoutContent() {
                       onClick={onUseCurrentLocation}
                       disabled={lalamovePinLoading}
                     >
-                      Use current location
+                      {lalamovePinLoading
+                        ? "Locating..."
+                        : "Use my current location"}
                     </Button>
-                    {lalamoveMapLink ? (
-                      <a
-                        href={lalamoveMapLink}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs text-accent-700 underline hover:text-accent-600 dark:text-accent-200 dark:hover:text-accent-100"
-                      >
-                        Open map
-                      </a>
-                    ) : null}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setLalamoveMapPickerOpen(true)}
+                      disabled={lalamovePinLoading}
+                    >
+                      Choose from map
+                    </Button>
                   </div>
                   {lalamovePinError ? (
-                    <div className="text-xs text-red-200">{lalamovePinError}</div>
+                    <div className="text-xs text-red-200">
+                      {lalamovePinError}
+                    </div>
                   ) : null}
-                  <div className="mb-1 text-sm text-white/80">
-                    Pinned map (auto pin or image upload)
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    aria-label="Choose location on map"
+                    onClick={() => setLalamoveMapPickerOpen(true)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setLalamoveMapPickerOpen(true);
+                      }
+                    }}
+                    className="rounded-xl border border-white/10 bg-bg-900/60 p-2 transition hover:border-white/20 cursor-pointer"
+                  >
+                    {lalamoveMapCoords ? (
+                      <LeafletMapPreview
+                        center={lalamoveMapCoords}
+                        position={lalamoveMapCoords}
+                        zoom={16}
+                        interactive={false}
+                        onPositionChange={() => {}}
+                        className="h-40 pointer-events-none"
+                      />
+                    ) : (
+                      <div className="flex h-40 items-center justify-center text-sm text-white/50">
+                        Click to choose a location on the map.
+                      </div>
+                    )}
                   </div>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={onPickLalamoveImage}
-                    disabled={lalamoveUploading || lalamovePinLoading}
-                  />
-                  <div className="mt-1 text-xs text-white/60">
-                    {lalamoveUploading || lalamovePinLoading
+                  <div className="text-xs text-white/60">
+                    {lalamovePinLoading
                       ? "Updating map..."
-                      : lalamoveImageUrl
-                      ? "Map ready."
-                      : "No map yet."}
+                      : lalamoveMapCoords
+                        ? "Map pinned."
+                        : "No map selected yet."}
                   </div>
-                  {lalamoveImageUrl ? (
-                    <img
-                      src={lalamoveImageUrl}
-                      alt="Lalamove pinned map"
-                      className="mt-2 h-28 w-auto rounded-lg border border-white/10 object-cover"
-                    />
-                  ) : null}
                 </div>
 
                 <LalamoveTimeSlotPicker
@@ -1862,7 +2093,7 @@ function CheckoutContent() {
                   onChange={handleLalamoveSlotChange}
                   error={lalamoveSlotError}
                   helperText={`Lalamove adds a ${formatPHP(
-                    FEES.LALAMOVE_CONVENIENCE
+                    FEES.LALAMOVE_CONVENIENCE,
                   )} convenience fee.`}
                 />
               </div>
@@ -1873,7 +2104,9 @@ function CheckoutContent() {
                 <div className="rounded-xl border border-white/10 bg-bg-900/20 p-4 space-y-2">
                   <div className="font-semibold">Pickup location</div>
                   <div className="text-sm text-white/70">{PICKUP_LOCATION}</div>
-                  <div className="text-xs text-white/50">Directory: {PICKUP_DIRECTORY}</div>
+                  <div className="text-xs text-white/50">
+                    Directory: {PICKUP_DIRECTORY}
+                  </div>
                 </div>
 
                 {pickupUnavailable ? (
@@ -1901,7 +2134,9 @@ function CheckoutContent() {
                   value={pickupSlot}
                   onChange={(e) => setPickupSlot(e.target.value)}
                   disabled={
-                    pickupUnavailable || !pickupDay || pickupSlotsForDay.length === 0
+                    pickupUnavailable ||
+                    !pickupDay ||
+                    pickupSlotsForDay.length === 0
                   }
                 >
                   <option value="">Select a timeslot</option>
@@ -1913,10 +2148,16 @@ function CheckoutContent() {
                 </Select>
 
                 {!pickupUnavailable && pickupDayOptions.length === 0 ? (
-                  <div className="text-xs text-white/50">Pickup schedule not set yet.</div>
+                  <div className="text-xs text-white/50">
+                    Pickup schedule not set yet.
+                  </div>
                 ) : null}
-                {!pickupUnavailable && pickupDay && pickupSlotsForDay.length === 0 ? (
-                  <div className="text-xs text-white/50">No timeslots for the selected day.</div>
+                {!pickupUnavailable &&
+                pickupDay &&
+                pickupSlotsForDay.length === 0 ? (
+                  <div className="text-xs text-white/50">
+                    No timeslots for the selected day.
+                  </div>
                 ) : null}
               </div>
             ) : null}
@@ -1962,29 +2203,31 @@ function CheckoutContent() {
                 )}
               </div>
 
-              <div className="rounded-xl border border-white/10 bg-bg-900/20 p-4 space-y-2">
-                <div className="font-semibold">
-                  Shipping insurance (optional)
-                </div>
-                <label className="flex items-center gap-2 text-sm text-white/80">
-                  <input
-                    type="checkbox"
-                    checked={insuranceSelected}
-                    onChange={(e) => setInsuranceSelected(e.target.checked)}
-                    className="h-4 w-4"
+              {shippingMethod !== "LALAMOVE" ? (
+                <div className="rounded-xl border border-white/10 bg-bg-900/20 p-4 space-y-2">
+                  <div className="font-semibold">
+                    Shipping insurance (optional)
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-white/80">
+                    <input
+                      type="checkbox"
+                      checked={insuranceSelected}
+                      onChange={(e) => setInsuranceSelected(e.target.checked)}
+                      className="h-4 w-4"
+                    />
+                    Add insurance
+                  </label>
+                  <Input
+                    label="Insurance fee"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={String(insuranceFee)}
+                    onChange={(e) => setInsuranceFee(Number(e.target.value))}
+                    hint={`Suggested: ${formatPHP(suggestedInsurance)}`}
                   />
-                  Add insurance
-                </label>
-                <Input
-                  label="Insurance fee"
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={String(insuranceFee)}
-                  onChange={(e) => setInsuranceFee(Number(e.target.value))}
-                  hint={`Suggested: ${formatPHP(suggestedInsurance)}`}
-                />
-              </div>
+                </div>
+              ) : null}
             </div>
 
             {shippingMeta.ok && (shippingMeta as any).warning ? (
@@ -2004,8 +2247,7 @@ function CheckoutContent() {
               Place order
             </Button>
             <div className="text-sm text-white/70">
-              Total:{" "}
-              <span className="text-price">{formatPHP(total)}</span>
+              Total: <span className="text-price">{formatPHP(total)}</span>
             </div>
           </CardFooter>
         </Card>
@@ -2029,9 +2271,15 @@ function CheckoutContent() {
                     {selectedVoucher.voucher.title || "Free Shipping"}
                   </div>
                   <div className="text-xs text-white/60">
-                    Min spend {formatPHP(Number(selectedVoucher.voucher.min_subtotal ?? 0))}
+                    Min spend{" "}
+                    {formatPHP(
+                      Number(selectedVoucher.voucher.min_subtotal ?? 0),
+                    )}
                     {" - "}
-                    Cap {formatPHP(Number(selectedVoucher.voucher.shipping_cap ?? 0))}
+                    Cap{" "}
+                    {formatPHP(
+                      Number(selectedVoucher.voucher.shipping_cap ?? 0),
+                    )}
                   </div>
                   <div className="text-xs text-emerald-200">
                     Applied discount: {formatPHP(shippingDiscount)}
@@ -2067,6 +2315,16 @@ function CheckoutContent() {
           <FeeBreakdown lines={feeLines} total={total} />
         </div>
       </div>
+      <JntLocationModal
+        open={jtLocationModalOpen}
+        value={jtLocationQuery}
+        locations={phBarangayLocations}
+        loading={locationsLoading}
+        error={locationsError}
+        onApply={onJntLocationChange}
+        onClear={clearJntLocation}
+        onClose={() => setJtLocationModalOpen(false)}
+      />
       <VoucherModal
         open={voucherOpen}
         vouchers={voucherWallet}
@@ -2079,6 +2337,14 @@ function CheckoutContent() {
         onClose={() => setVoucherOpen(false)}
         subtotal={itemsSubtotal}
         shippingFee={fees.shipping_fee}
+      />
+      <LalamoveMapPickerModal
+        open={lalamoveMapPickerOpen}
+        title="Pin Lalamove drop-off"
+        initialPosition={lalamoveMapCoords}
+        saving={lalamovePinLoading}
+        onClose={() => setLalamoveMapPickerOpen(false)}
+        onSave={onSaveLalamoveMapPin}
       />
     </main>
   );
@@ -2097,6 +2363,3 @@ export default function CheckoutPage() {
     </React.Suspense>
   );
 }
-
-
-

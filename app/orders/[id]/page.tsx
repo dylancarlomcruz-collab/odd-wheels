@@ -739,7 +739,7 @@ function OrderDetailContent() {
               ) : null}
 
               {showPaymentDetails ? (
-                <div className="panel p-4">
+                <div className="panel p-4 space-y-4">
                   <div className="flex items-center justify-between">
                     <div className="text-sm font-semibold text-white/90">
                       How to pay
@@ -751,14 +751,14 @@ function OrderDetailContent() {
                     ) : null}
                   </div>
                   {copyMsg ? (
-                    <div className="mt-1 text-[11px] text-white/50">{copyMsg}</div>
+                    <div className="text-[11px] text-white/50">{copyMsg}</div>
                   ) : null}
                   {paymentMethodLoading ? (
-                    <div className="mt-3 text-white/60">
+                    <div className="text-white/60">
                       Loading payment instructions...
                     </div>
                   ) : paymentMethod ? (
-                    <div className="mt-3 grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
+                    <div className="grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
                       <div className="space-y-3">
                         <div className="rounded-lg border border-white/10 bg-bg-950/40 p-3 text-sm text-white/70">
                           <div className="flex items-center justify-between gap-3">
@@ -835,8 +835,42 @@ function OrderDetailContent() {
                       ) : null}
                     </div>
                   ) : (
-                    <div className="mt-3 text-white/60">{fallbackMessage}</div>
+                    <div className="text-white/60">{fallbackMessage}</div>
                   )}
+
+                  {canUploadReceipt ? (
+                    <div className="border-t border-white/10 pt-3 space-y-2">
+                      <div className="font-semibold text-white/80">
+                        {order.receipt_url
+                          ? "Replace receipt"
+                          : "Upload receipt"}
+                      </div>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={onPickReceipt}
+                        disabled={uploading}
+                      />
+                      <div className="text-xs text-white/60">
+                        {uploading
+                          ? "Uploading..."
+                          : order.receipt_url
+                          ? "Upload a new image to replace the current receipt."
+                          : "PNG/JPG supported."}
+                      </div>
+                    </div>
+                  ) : null}
+                  {order.receipt_url ? (
+                    <div className="border-t border-white/10 pt-3 space-y-2">
+                      <div className="font-semibold text-white/80">Receipt</div>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={order.receipt_url}
+                        alt="receipt"
+                        className="w-full max-h-[420px] object-contain rounded-lg bg-neutral-50"
+                      />
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -878,39 +912,6 @@ function OrderDetailContent() {
               ) : null}
 
               {msg ? <div className="text-red-200">{msg}</div> : null}
-
-              {/* Receipt uploader */}
-              {canUploadReceipt ? (
-                <div className="panel p-3 space-y-2">
-                  <div className="font-semibold text-white/80">
-                    {order.receipt_url ? "Replace receipt" : "Upload receipt"}
-                  </div>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={onPickReceipt}
-                    disabled={uploading}
-                  />
-                  <div className="text-xs text-white/60">
-                    {uploading
-                      ? "Uploading..."
-                      : order.receipt_url
-                      ? "Upload a new image to replace the current receipt."
-                      : "PNG/JPG supported."}
-                  </div>
-                </div>
-              ) : null}
-              {order.receipt_url ? (
-                <div className="panel p-3 space-y-2">
-                  <div className="font-semibold text-white/80">Receipt</div>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={order.receipt_url}
-                    alt="receipt"
-                    className="w-full max-h-[420px] object-contain rounded-lg bg-neutral-50"
-                  />
-                </div>
-              ) : null}
 
               {canCancel ? (
                 <div className="panel border-red-500/20 bg-red-500/5 p-3 space-y-2">
@@ -1131,35 +1132,43 @@ function OrderDetailContent() {
             </CardHeader>
             <CardBody className="space-y-2 text-sm">
               <Row label="Subtotal" value={formatPHP(Number(order.subtotal))} />
-              <Row
-                label="Shipping fee"
-                value={formatPHP(Number(order.shipping_fee ?? 0))}
-              />
+              {Number(order.shipping_fee ?? 0) > 0 ? (
+                <Row
+                  label="Shipping fee"
+                  value={formatPHP(Number(order.shipping_fee ?? 0))}
+                />
+              ) : null}
               {Number(order.shipping_discount ?? 0) > 0 ? (
                 <Row
                   label="Shipping discount"
                   value={`-${formatPHP(Number(order.shipping_discount ?? 0))}`}
                 />
               ) : null}
-              <Row
-                label="COP fee"
-                value={formatPHP(Number(order.cop_fee ?? 0))}
-              />
+              {Number(order.cop_fee ?? 0) > 0 ? (
+                <Row
+                  label="COP fee"
+                  value={formatPHP(Number(order.cop_fee ?? 0))}
+                />
+              ) : null}
               {String(order.shipping_method ?? "").toUpperCase() ===
-              "LALAMOVE" ? (
+              "LALAMOVE" && Number(order.lalamove_fee ?? 0) > 0 ? (
                 <Row
                   label="Lalamove fee"
                   value={formatPHP(Number(order.lalamove_fee ?? 0))}
                 />
               ) : null}
-              <Row
-                label="Priority fee"
-                value={formatPHP(Number(order.priority_fee ?? 0))}
-              />
-              <Row
-                label="Insurance fee"
-                value={formatPHP(Number(order.insurance_fee ?? 0))}
-              />
+              {Number(order.priority_fee ?? 0) > 0 ? (
+                <Row
+                  label="Priority fee"
+                  value={formatPHP(Number(order.priority_fee ?? 0))}
+                />
+              ) : null}
+              {Number(order.insurance_fee ?? 0) > 0 ? (
+                <Row
+                  label="Insurance fee"
+                  value={formatPHP(Number(order.insurance_fee ?? 0))}
+                />
+              ) : null}
               <div className="border-t border-white/10 pt-2 flex items-center justify-between">
                 <div className="font-semibold">Total</div>
                 <div className="text-price">{formatPHP(Number(order.total))}</div>

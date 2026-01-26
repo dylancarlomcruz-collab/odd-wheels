@@ -18,6 +18,7 @@ export type VariantRow = {
     title: string;
     brand: string | null;
     model: string | null;
+    variation?: string | null;
     image_urls: string[] | null;
     is_active: boolean | null;
     created_at: string | null;
@@ -29,6 +30,7 @@ export type ProductRow = {
   title: string;
   brand: string | null;
   model: string | null;
+  variation?: string | null;
   image_urls: string[] | null;
   is_active: boolean | null;
   created_at: string | null;
@@ -111,6 +113,7 @@ export function collapseVariants(rows: VariantRow[]): ShopProduct[] {
         title: p.title,
         brand: p.brand,
         model: p.model,
+        variation: p.variation ?? null,
         image_url,
         image_urls: image_urls.length ? image_urls : image_url ? [image_url] : [],
         minPrice: price,
@@ -240,6 +243,7 @@ export function mapProductsToShopProducts(rows: ProductRow[]): ShopProduct[] {
       title: p.title,
       brand: p.brand,
       model: p.model,
+      variation: p.variation ?? null,
       image_url,
       image_urls: image_urls.length ? image_urls : image_url ? [image_url] : [],
       minPrice,

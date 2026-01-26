@@ -8,7 +8,12 @@ import { useCart } from "@/hooks/useCart";
 import { toast } from "@/components/ui/toast";
 import { collapseVariants, type VariantRow } from "@/lib/shopProducts";
 import { readRecentViewEntries } from "@/lib/recentViews";
-import { expandSearchTerms, getLastSearchTerm, normalizeSearchTerm } from "@/lib/search";
+import {
+  buildProductSearchText,
+  buildSearchTermTokens,
+  getLastSearchTerm,
+  matchesSearchText,
+} from "@/lib/search";
 import { useProfile } from "@/hooks/useProfile";
 import { InventoryEditorDrawer } from "@/components/admin/InventoryEditorDrawer";
 import type { AdminProduct } from "@/components/admin/InventoryBrowseGrid";
@@ -136,7 +141,7 @@ export default function ShopPageClient() {
       const { data, error } = await supabase
         .from("product_variants")
         .select(
-          "id,condition,issue_notes,issue_photo_urls,public_notes,price,sale_price,discount_percent,qty, product:products(id,title,brand,model,image_urls,is_active,created_at)"
+          "id,condition,issue_notes,issue_photo_urls,public_notes,price,sale_price,discount_percent,qty, product:products(id,title,brand,model,variation,image_urls,is_active,created_at)"
         )
         .gt("qty", 0)
         .order("created_at", { ascending: false });
@@ -422,22 +427,17 @@ export default function ShopPageClient() {
     return withIndex.map((item) => item.product);
   }, [shopProducts, clickMap, addMap, salesMap]);
 
-  const searchTerms = React.useMemo(() => {
-    if (!searchQuery) return [];
-    return expandSearchTerms(searchQuery)
-      .map((term) => normalizeSearchTerm(term))
-      .filter(Boolean);
-  }, [searchQuery]);
+  const searchTermTokens = React.useMemo(
+    () => buildSearchTermTokens(searchQuery),
+    [searchQuery]
+  );
 
   const searchFiltered = React.useMemo(() => {
-    if (!searchTerms.length) return sortedProducts;
-    return sortedProducts.filter((p) => {
-      const text = normalizeSearchTerm(
-        `${p.title} ${p.brand ?? ""} ${p.model ?? ""}`
-      );
-      return searchTerms.some((term) => text.includes(term));
-    });
-  }, [sortedProducts, searchTerms]);
+    if (!searchTermTokens.length) return sortedProducts;
+    return sortedProducts.filter((p) =>
+      matchesSearchText(buildProductSearchText(p), searchTermTokens)
+    );
+  }, [sortedProducts, searchTermTokens]);
 
   const filtered = React.useMemo(() => {
     if (brandTab === BRAND_ALL_KEY) return searchFiltered;
@@ -511,14 +511,11 @@ export default function ShopPageClient() {
 
   const becauseYouSearched = React.useMemo(() => {
     if (!lastSearch) return [];
-    const normalized = normalizeSearchTerm(lastSearch);
-    if (!normalized) return [];
+    const termTokens = buildSearchTermTokens(lastSearch);
+    if (!termTokens.length) return [];
     return shopProducts
       .filter((p) => {
-        const text = normalizeSearchTerm(
-          `${p.title} ${p.brand ?? ""} ${p.model ?? ""}`
-        );
-        return text.includes(normalized);
+        return matchesSearchText(buildProductSearchText(p), termTokens);
       })
       .slice(0, 8);
   }, [lastSearch, shopProducts]);

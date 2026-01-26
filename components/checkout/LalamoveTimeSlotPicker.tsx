@@ -3,7 +3,14 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-export type LalamoveWindowKey = "08_12" | "12_15" | "15_18" | "18_21";
+export type LalamoveWindowKey =
+  | "08_12"
+  | "12_15"
+  | "15_18"
+  | "18_21"
+  | "BUSINESS_HOURS"
+  | "ANYTIME"
+  | "CUSTOM";
 
 export type LalamoveSelection = {
   date: string;
@@ -16,6 +23,21 @@ export const LALAMOVE_WINDOWS = [
   { key: "12_15", label: "12:00 PM - 3:00 PM" },
   { key: "15_18", label: "3:00 PM - 6:00 PM" },
   { key: "18_21", label: "6:00 PM - 9:00 PM" },
+  { key: "BUSINESS_HOURS", label: "Business hours" },
+  { key: "ANYTIME", label: "Anytime" },
+  { key: "CUSTOM", label: "Custom time" },
+] as const;
+
+const DATE_MODES = [
+  { key: "WEEKDAYS", label: "Weekdays" },
+  { key: "WEEKENDS", label: "Weekends" },
+  { key: "CUSTOM", label: "Pick available days" },
+] as const;
+
+const TIME_MODES = [
+  { key: "BUSINESS_HOURS", label: "Business hours" },
+  { key: "ANYTIME", label: "Anytime" },
+  { key: "CUSTOM", label: "Pick a time" },
 ] as const;
 
 type DateOption = {
@@ -67,6 +89,30 @@ function formatSummaryDate(dateKey: string) {
   }).format(date);
 }
 
+type DateModeKey = (typeof DATE_MODES)[number]["key"];
+type TimeModeKey = (typeof TIME_MODES)[number]["key"];
+
+function isWeekendDate(dateKey: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  const dayIndex = date.getDay();
+  return dayIndex === 0 || dayIndex === 6;
+}
+
+function buildTimeLabel(
+  mode: TimeModeKey,
+  customStart: string,
+  customEnd: string
+) {
+  if (mode === "CUSTOM") {
+    const start = customStart.trim();
+    const end = customEnd.trim();
+    if (start && end) return `${start} - ${end}`;
+    return "Custom time";
+  }
+  return TIME_MODES.find((option) => option.key === mode)?.label ?? mode;
+}
+
 export function LalamoveTimeSlotPicker({
   value,
   onChange,
@@ -80,65 +126,113 @@ export function LalamoveTimeSlotPicker({
   helperText?: string;
   error?: string | null;
 }) {
-  const [selectedDate, setSelectedDate] = React.useState("");
+  const [dateMode, setDateMode] = React.useState<DateModeKey | "">("");
+  const [timeMode, setTimeMode] = React.useState<TimeModeKey>("BUSINESS_HOURS");
+  const [customStart, setCustomStart] = React.useState("");
+  const [customEnd, setCustomEnd] = React.useState("");
 
   const dateOptions = React.useMemo(() => buildDateOptions(days), [days]);
+  const weekdayDates = React.useMemo(
+    () => dateOptions.filter((d) => !isWeekendDate(d.date)).map((d) => d.date),
+    [dateOptions]
+  );
+  const weekendDates = React.useMemo(
+    () => dateOptions.filter((d) => isWeekendDate(d.date)).map((d) => d.date),
+    [dateOptions]
+  );
+
+  const selectedDates = React.useMemo(() => {
+    const unique = new Set(value.map((slot) => slot.date));
+    return Array.from(unique);
+  }, [value]);
 
   React.useEffect(() => {
     if (!value.length) return;
-    if (!selectedDate) setSelectedDate(value[0].date);
-  }, [value, selectedDate]);
+    const firstKey = value[0]?.window_key as TimeModeKey | undefined;
+    if (firstKey && TIME_MODES.some((option) => option.key === firstKey)) {
+      setTimeMode(firstKey);
+      if (firstKey !== "CUSTOM") return;
+    } else {
+      setTimeMode("CUSTOM");
+    }
+    const label = value[0]?.window_label ?? "";
+    if (label.includes(" - ")) {
+      const [start, end] = label.split(" - ").map((part) => part.trim());
+      setCustomStart(start);
+      setCustomEnd(end);
+    }
+  }, [value]);
 
-  const selectedDateSummary =
-    dateOptions.find((d) => d.date === selectedDate)?.summaryLabel ??
-    (selectedDate ? formatSummaryDate(selectedDate) : "");
+  React.useEffect(() => {
+    if (value.length || dateMode) return;
+    if (!selectedDates.length) return;
+    const allWeekdays = selectedDates.every((d) => !isWeekendDate(d));
+    const allWeekends = selectedDates.every((d) => isWeekendDate(d));
+    if (allWeekdays) setDateMode("WEEKDAYS");
+    else if (allWeekends) setDateMode("WEEKENDS");
+    else setDateMode("CUSTOM");
+  }, [value.length, dateMode, selectedDates]);
 
-  function handleDatePick(date: string) {
-    setSelectedDate(date);
-  }
-
-  function handleWindowPick(window: (typeof LALAMOVE_WINDOWS)[number]) {
-    if (!selectedDate) return;
-    const exists = value.some(
-      (slot) => slot.date === selectedDate && slot.window_key === window.key
-    );
-    if (exists) {
-      onChange(
-        value.filter(
-          (slot) =>
-            slot.date !== selectedDate || slot.window_key !== window.key
-        )
-      );
+  function setSlotsForDates(dates: string[]) {
+    if (!dates.length) {
+      onChange([]);
       return;
     }
-    onChange([
-      ...value,
-      { date: selectedDate, window_key: window.key, window_label: window.label },
-    ]);
+    const label = buildTimeLabel(timeMode, customStart, customEnd);
+    onChange(
+      dates.map((date) => ({
+        date,
+        window_key: timeMode,
+        window_label: label,
+      }))
+    );
+  }
+
+  function handleDateModePick(mode: DateModeKey) {
+    setDateMode(mode);
+    if (mode === "WEEKDAYS") {
+      setSlotsForDates(weekdayDates);
+      return;
+    }
+    if (mode === "WEEKENDS") {
+      setSlotsForDates(weekendDates);
+      return;
+    }
+  }
+
+  function handleCustomDateToggle(date: string) {
+    const exists = selectedDates.includes(date);
+    const nextDates = exists
+      ? selectedDates.filter((d) => d !== date)
+      : [...selectedDates, date];
+    setSlotsForDates(nextDates);
+  }
+
+  function handleTimeModePick(mode: TimeModeKey) {
+    setTimeMode(mode);
+    if (!selectedDates.length) return;
+    setSlotsForDates(selectedDates);
   }
 
   function handleRemoveSlot(slotToRemove: LalamoveSelection) {
-    onChange(
-      value.filter(
-        (slot) =>
-          slot.date !== slotToRemove.date ||
-          slot.window_key !== slotToRemove.window_key
-      )
-    );
+    const nextDates = selectedDates.filter((d) => d !== slotToRemove.date);
+    setSlotsForDates(nextDates);
   }
 
-  const summary = value.length
-    ? `Selected: ${value.length} slot${value.length === 1 ? "" : "s"}`
-    : selectedDate
-    ? `Selected: ${selectedDateSummary} - Tap a time window to add`
+  const summary = selectedDates.length
+    ? `Selected: ${selectedDates.length} day${
+        selectedDates.length === 1 ? "" : "s"
+      } - ${buildTimeLabel(timeMode, customStart, customEnd)}`
     : "Selected: None";
+  const dateModeLabel =
+    DATE_MODES.find((option) => option.key === dateMode)?.label ?? "";
 
   return (
     <div className="space-y-4">
       <div>
         <div className="text-sm font-semibold">When can you receive?</div>
         <div className="text-xs text-white/60">
-          Multi-select dates and time windows. Tap a time window to add or remove it.
+          Share your availability and time preference.
         </div>
       </div>
 
@@ -146,34 +240,57 @@ export function LalamoveTimeSlotPicker({
         <div className="text-xs uppercase tracking-wide text-white/50">
           Step 1
         </div>
-        <div className="text-sm font-medium text-white/80">Choose a date</div>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {dateOptions.map((d) => {
-            const isActive = d.date === selectedDate;
-            const isSelected = value.some((slot) => slot.date === d.date);
+        <div className="text-sm font-medium text-white/80">
+          Choose available days
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {DATE_MODES.map((option) => {
+            const isActive = option.key === dateMode;
             return (
               <button
-                key={d.date}
+                key={option.key}
                 type="button"
-                onClick={() => handleDatePick(d.date)}
+                onClick={() => handleDateModePick(option.key)}
                 className={cn(
-                  "rounded-xl border px-3 py-2 text-left text-xs font-medium transition",
+                  "rounded-full border px-3 py-2 text-xs font-medium transition",
                   isActive
-                    ? "border-accent-400/80 bg-accent-500/10 text-white"
-                    : isSelected
-                    ? "border-accent-400/40 bg-bg-900/30 text-white/80"
-                    : "border-white/10 bg-bg-900/20 text-white/70 hover:border-white/30"
+                    ? "border-accent-400/70 bg-accent-500/10 text-white"
+                    : "border-white/10 text-white/70 hover:border-white/30"
                 )}
               >
-                <div>{d.label}</div>
-                {isSelected ? (
-                  <div className="text-[10px] uppercase tracking-wide text-accent-700 dark:text-accent-200">
-                    Added
-                  </div>
-                ) : null}
+                {option.label}
               </button>
             );
           })}
+        </div>
+        {dateMode === "CUSTOM" ? (
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {dateOptions.map((d) => {
+              const isSelected = selectedDates.includes(d.date);
+              return (
+                <button
+                  key={d.date}
+                  type="button"
+                  onClick={() => handleCustomDateToggle(d.date)}
+                  className={cn(
+                    "rounded-xl border px-3 py-2 text-left text-xs font-medium transition",
+                    isSelected
+                      ? "border-accent-400/70 bg-accent-500/10 text-white"
+                      : "border-white/10 bg-bg-900/20 text-white/70 hover:border-white/30"
+                  )}
+                >
+                  <div>{d.label}</div>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+        <div className="text-[11px] text-white/60">
+          {dateMode === "CUSTOM"
+            ? "Tap any day to add or remove it."
+            : dateMode
+            ? `${dateModeLabel} covers the next ${days} days.`
+            : "Choose a day range to continue."}
         </div>
       </div>
 
@@ -181,50 +298,58 @@ export function LalamoveTimeSlotPicker({
         <div className="text-xs uppercase tracking-wide text-white/50">
           Step 2
         </div>
-        <div className="flex items-center justify-between">
-          <div className="text-sm font-medium text-white/80">
-            Choose a time window
-          </div>
-          {!selectedDate ? (
-            <span className="text-xs text-white/50">Select a date first</span>
-          ) : null}
+        <div className="text-sm font-medium text-white/80">
+          Choose hours
         </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {LALAMOVE_WINDOWS.map((window) => {
-            const isActive =
-              Boolean(selectedDate) &&
-              value.some(
-                (slot) =>
-                  slot.date === selectedDate && slot.window_key === window.key
-              );
+        <div className="flex flex-wrap gap-2">
+          {TIME_MODES.map((option) => {
+            const isActive = option.key === timeMode;
             return (
               <button
-                key={window.key}
+                key={option.key}
                 type="button"
-                disabled={!selectedDate}
-                onClick={() => handleWindowPick(window)}
-                aria-pressed={isActive}
+                onClick={() => handleTimeModePick(option.key)}
                 className={cn(
-                  "relative flex w-full items-center justify-center rounded-full border px-3 py-2 text-xs font-medium transition",
+                  "rounded-full border px-3 py-2 text-xs font-medium transition",
                   isActive
-                    ? "border-accent-400/70 text-white shadow-[0_0_0_1px_rgba(217,106,43,.25)]"
-                    : "border-white/10 text-white/75 hover:border-white/30",
-                  !selectedDate && "cursor-not-allowed opacity-50"
+                    ? "border-accent-400/70 bg-accent-500/10 text-white"
+                    : "border-white/10 text-white/70 hover:border-white/30"
                 )}
               >
-                <span
-                  className={cn(
-                    "absolute left-4 h-2 w-2 rounded-full bg-accent-400 transition",
-                    isActive ? "opacity-100" : "opacity-0"
-                  )}
-                />
-                {window.label}
+                {option.label}
               </button>
             );
           })}
         </div>
+        {timeMode === "CUSTOM" ? (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <input
+              value={customStart}
+              onChange={(e) => {
+                setCustomStart(e.target.value);
+                if (selectedDates.length) setSlotsForDates(selectedDates);
+              }}
+              placeholder="Start time"
+              className="w-full rounded-xl border border-white/10 bg-bg-900/20 px-3 py-2 text-xs text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-accent-500/60"
+            />
+            <input
+              value={customEnd}
+              onChange={(e) => {
+                setCustomEnd(e.target.value);
+                if (selectedDates.length) setSlotsForDates(selectedDates);
+              }}
+              placeholder="End time"
+              className="w-full rounded-xl border border-white/10 bg-bg-900/20 px-3 py-2 text-xs text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-accent-500/60"
+            />
+          </div>
+        ) : null}
+        {timeMode === "BUSINESS_HOURS" ? (
+          <div className="text-[11px] text-white/50">
+            Business hours: 9:00 AM - 5:00 PM.
+          </div>
+        ) : null}
         <div className="text-[11px] text-white/60">
-          You can select multiple dates and multiple time windows.
+          Applies to all selected days.
         </div>
       </div>
 

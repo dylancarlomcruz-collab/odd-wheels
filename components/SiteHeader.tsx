@@ -98,6 +98,10 @@ export function SiteHeader() {
   });
 
   const isStaff = profile?.role === "admin" || profile?.role === "cashier";
+  const staffOrdersHref =
+    profile?.role === "admin" ? "/admin/orders" : "/cashier/orders";
+  const staffShippingHref =
+    profile?.role === "admin" ? "/admin/shipments" : "/cashier/shipments";
 
   const { count: orderCount } = useActiveOrderCount();
   const orderCountLabel = orderCount > 99 ? "99+" : String(orderCount);
@@ -598,22 +602,34 @@ export function SiteHeader() {
           {isStaff && staffTotal > 0 ? (
             <div className="hidden items-center gap-2 md:flex">
               {staffCounts.pendingApproval > 0 ? (
-                <div className="inline-flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-100">
+                <Link
+                  href={staffOrdersHref}
+                  aria-label="View pending orders"
+                  className="inline-flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs text-amber-900 transition hover:border-amber-400/70 hover:bg-amber-500/20 dark:text-amber-100"
+                >
                   <ClipboardList className="h-3.5 w-3.5" />
                   {staffCounts.pendingApproval}
-                </div>
+                </Link>
               ) : null}
               {profile?.role === "admin" && staffCounts.sellTradePending > 0 ? (
-                <div className="inline-flex items-center gap-2 rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-1 text-xs text-sky-900 dark:text-sky-100">
+                <Link
+                  href="/admin/sell-trade"
+                  aria-label="View sell/trade offers"
+                  className="inline-flex items-center gap-2 rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-1 text-xs text-sky-900 transition hover:border-sky-400/70 hover:bg-sky-500/20 dark:text-sky-100"
+                >
                   <ArrowLeftRight className="h-3.5 w-3.5" />
                   {staffCounts.sellTradePending}
-                </div>
+                </Link>
               ) : null}
               {staffCounts.pendingShipping > 0 ? (
-                <div className="inline-flex items-center gap-2 rounded-full border border-indigo-500/40 bg-indigo-500/10 px-3 py-1 text-xs text-indigo-900 dark:text-indigo-100">
+                <Link
+                  href={staffShippingHref}
+                  aria-label="View pending shipments"
+                  className="inline-flex items-center gap-2 rounded-full border border-indigo-500/40 bg-indigo-500/10 px-3 py-1 text-xs text-indigo-900 transition hover:border-indigo-400/70 hover:bg-indigo-500/20 dark:text-indigo-100"
+                >
                   <Truck className="h-3.5 w-3.5" />
                   {staffCounts.pendingShipping}
-                </div>
+                </Link>
               ) : null}
             </div>
           ) : null}

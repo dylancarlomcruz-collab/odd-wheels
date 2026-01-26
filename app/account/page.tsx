@@ -1,12 +1,14 @@
 "use client";
 
 import * as React from "react";
+import dynamic from "next/dynamic";
 import { supabase } from "@/lib/supabase/browser";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
+import { LalamoveMapPickerModal } from "@/components/lalamove/LalamoveMapPickerModal";
 import { PHONE_MAX_LENGTH, sanitizePhone, validatePhone11 } from "@/lib/phone";
 import {
   mergeShippingDefaults,
@@ -21,7 +23,10 @@ type CustomerRow = {
   shipping_defaults: ShippingDefaults | null;
 };
 const PHONE_LENGTH = PHONE_MAX_LENGTH;
-const LALAMOVE_BUCKET = "shipping-defaults";
+const LeafletMapPreview = dynamic(
+  () => import("@/components/lalamove/LeafletMap"),
+  { ssr: false }
+);
 
 function formatPhoneError(value: string, show: boolean): string | undefined {
   const digits = sanitizePhone(value);
@@ -29,35 +34,6 @@ function formatPhoneError(value: string, show: boolean): string | undefined {
   return validatePhone11(digits)
     ? undefined
     : "Use an 11-digit PH mobile number (09XXXXXXXXX).";
-}
-
-function guessImageExtension(file: File): string {
-  const name = file.name.toLowerCase();
-  if (name.endsWith(".png") || file.type.includes("png")) return "png";
-  if (name.endsWith(".webp") || file.type.includes("webp")) return "webp";
-  return "jpg";
-}
-
-function getStoragePathFromPublicUrl(url: string, bucket: string): string | null {
-  const marker = `/storage/v1/object/public/${bucket}/`;
-  const index = url.indexOf(marker);
-  if (index === -1) return null;
-  const rest = url.slice(index + marker.length);
-  return rest.split("?")[0] || null;
-}
-
-async function uploadLalamoveMap(file: File, userId: string): Promise<string> {
-  const extension = guessImageExtension(file);
-  const path = `${userId}/lalamove-map-${Date.now()}.${extension}`;
-  const contentType = file.type || "image/jpeg";
-
-  const { error } = await supabase.storage
-    .from(LALAMOVE_BUCKET)
-    .upload(path, file, { contentType, upsert: false });
-
-  if (error) throw error;
-  const { data } = supabase.storage.from(LALAMOVE_BUCKET).getPublicUrl(path);
-  return data.publicUrl;
 }
 
 export default function AccountPage() {
@@ -78,11 +54,11 @@ export default function AccountPage() {
     normalizeShippingDefaults({})
   );
   const [shippingDefaultsRaw, setShippingDefaultsRaw] = React.useState<unknown>({});
-  const [lalamoveUploading, setLalamoveUploading] = React.useState(false);
   const [lalamovePinLoading, setLalamovePinLoading] = React.useState(false);
   const [lalamovePinError, setLalamovePinError] = React.useState<string | null>(
     null
   );
+  const [lalamoveMapPickerOpen, setLalamoveMapPickerOpen] = React.useState(false);
   const [phoneTouched, setPhoneTouched] = React.useState({
     profile: false,
     jnt: false,
@@ -259,71 +235,15 @@ export default function AccountPage() {
     setMsg(successMessage);
   }
 
-  async function onUploadLalamoveMap(file: File | null) {
-    if (!user || !file) return;
-    setMsg(null);
-    setLalamoveUploading(true);
-    setLalamovePinError(null);
-    try {
-      const url = await uploadLalamoveMap(file, user.id);
-      const nextDefaults = normalizeShippingDefaults({
-        ...shippingDefaults,
-        lalamove: {
-          ...shippingDefaults.lalamove,
-          map_screenshot_url: url,
-          map_url: null,
-          map_lat: null,
-          map_lng: null,
-        },
-      });
-      await persistShippingDefaults(nextDefaults, "Map image saved.");
-    } catch (e: any) {
-      console.error(e);
-      setMsg(e?.message || "Upload failed");
-    } finally {
-      setLalamoveUploading(false);
-    }
-  }
-
-  async function onRemoveLalamoveMap() {
-    if (!user) return;
-    const currentUrl = shippingDefaults.lalamove?.map_screenshot_url ?? "";
-    if (!currentUrl) return;
-    setMsg(null);
-    setLalamoveUploading(true);
-    setLalamovePinError(null);
-    try {
-      const path = getStoragePathFromPublicUrl(currentUrl, LALAMOVE_BUCKET);
-      if (path) {
-        await supabase.storage.from(LALAMOVE_BUCKET).remove([path]);
-      }
-      const nextDefaults = normalizeShippingDefaults({
-        ...shippingDefaults,
-        lalamove: {
-          ...shippingDefaults.lalamove,
-          map_screenshot_url: "",
-          map_url: null,
-          map_lat: null,
-          map_lng: null,
-        },
-      });
-      await persistShippingDefaults(nextDefaults, "Map image removed.");
-    } catch (e: any) {
-      console.error(e);
-      setMsg(e?.message || "Failed to remove image");
-    } finally {
-      setLalamoveUploading(false);
-    }
-  }
-
   async function requestLalamovePin(payload: {
     address?: string;
     lat?: number;
     lng?: number;
-  }) {
+  }): Promise<boolean> {
     setLalamovePinError(null);
     setLalamovePinLoading(true);
     setMsg(null);
+    let ok = false;
 
     try {
       const res = await fetch("/api/lalamove/map", {
@@ -358,21 +278,13 @@ export default function AccountPage() {
       }
 
       await persistShippingDefaults(nextDefaults, "Pinned location saved.");
+      ok = true;
     } catch (e: any) {
       setLalamovePinError(e?.message ?? "Failed to pin map.");
     } finally {
       setLalamovePinLoading(false);
     }
-  }
-
-  function onPinFromAddress() {
-    const address = shippingDefaults.lalamove?.dropoff_address ?? "";
-    const trimmed = address.trim();
-    if (!trimmed) {
-      setLalamovePinError("Enter a drop-off address to pin.");
-      return;
-    }
-    requestLalamovePin({ address: trimmed });
+    return ok;
   }
 
   function onUseCurrentLocation() {
@@ -398,6 +310,11 @@ export default function AccountPage() {
     );
   }
 
+  async function onSaveLalamoveMapPin(pos: { lat: number; lng: number }) {
+    const ok = await requestLalamovePin({ lat: pos.lat, lng: pos.lng });
+    if (ok) setLalamoveMapPickerOpen(false);
+  }
+
   const profilePhoneError = formatPhoneError(
     contactNumber,
     phoneTouched.profile || saveAttempted
@@ -414,10 +331,12 @@ export default function AccountPage() {
     shippingDefaults.lalamove?.recipient_phone ?? "",
     phoneTouched.lalamove || saveAttempted
   );
-  const lalamoveMapUrl = shippingDefaults.lalamove?.map_screenshot_url ?? "";
-  const lalamoveMapLink = String(
-    shippingDefaults.lalamove?.map_url ?? ""
-  );
+  const lalamoveMapCoords = React.useMemo(() => {
+    const lat = Number(shippingDefaults.lalamove?.map_lat);
+    const lng = Number(shippingDefaults.lalamove?.map_lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return { lat, lng };
+  }, [shippingDefaults.lalamove?.map_lat, shippingDefaults.lalamove?.map_lng]);
 
   if (loading) {
     return (
@@ -707,20 +626,8 @@ export default function AccountPage() {
                     />
                   </div>
 
-                  <div className="md:col-span-2">
-                    <div className="mb-2 flex flex-wrap items-center gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={onPinFromAddress}
-                        disabled={
-                          lalamovePinLoading ||
-                          !shippingDefaults.lalamove?.dropoff_address?.trim()
-                        }
-                      >
-                        {lalamovePinLoading ? "Pinning..." : "Pin from address"}
-                      </Button>
+                  <div className="md:col-span-2 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Button
                         type="button"
                         size="sm"
@@ -728,65 +635,58 @@ export default function AccountPage() {
                         onClick={onUseCurrentLocation}
                         disabled={lalamovePinLoading}
                       >
-                        Use current location
+                        {lalamovePinLoading ? "Locating..." : "Use my current location"}
                       </Button>
-                      {lalamoveMapLink ? (
-                        <a
-                          href={lalamoveMapLink}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-xs text-accent-700 underline hover:text-accent-600 dark:text-accent-200 dark:hover:text-accent-100"
-                        >
-                          Open map
-                        </a>
-                      ) : null}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setLalamoveMapPickerOpen(true)}
+                        disabled={lalamovePinLoading}
+                      >
+                        Choose from map
+                      </Button>
                     </div>
                     {lalamovePinError ? (
-                      <div className="mb-2 text-xs text-red-300">
+                      <div className="text-xs text-red-300">
                         {lalamovePinError}
                       </div>
                     ) : null}
-                    <label className="block text-sm mb-1 text-neutral-300">
-                      Pinned map (auto pin or image upload)
-                    </label>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0] ?? null;
-                        onUploadLalamoveMap(file);
-                        e.currentTarget.value = "";
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Choose location on map"
+                      onClick={() => setLalamoveMapPickerOpen(true)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setLalamoveMapPickerOpen(true);
+                        }
                       }}
-                      className="block w-full text-sm"
-                      disabled={lalamoveUploading || lalamovePinLoading}
-                    />
-                    <div className="mt-2 flex items-center gap-3 text-xs text-neutral-400">
-                      <span>
-                        {lalamoveUploading || lalamovePinLoading
-                          ? "Updating..."
-                          : lalamoveMapUrl
-                          ? "Saved map screenshot."
-                          : "No image yet."}
-                      </span>
-                      {lalamoveMapUrl ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          onClick={onRemoveLalamoveMap}
-                          disabled={lalamoveUploading}
-                        >
-                          Remove image
-                        </Button>
-                      ) : null}
+                      className="rounded-xl border border-white/10 bg-bg-900/60 p-2 transition hover:border-white/20 cursor-pointer"
+                    >
+                      {lalamoveMapCoords ? (
+                        <LeafletMapPreview
+                          center={lalamoveMapCoords}
+                          position={lalamoveMapCoords}
+                          zoom={16}
+                          interactive={false}
+                          onPositionChange={() => {}}
+                          className="h-40 pointer-events-none"
+                        />
+                      ) : (
+                        <div className="flex h-40 items-center justify-center text-sm text-white/50">
+                          Click to choose a location on the map.
+                        </div>
+                      )}
                     </div>
-                    {lalamoveMapUrl ? (
-                      <img
-                        src={lalamoveMapUrl}
-                        alt="Lalamove map screenshot"
-                        className="mt-3 h-32 w-auto rounded-lg border border-white/10 object-cover"
-                      />
-                    ) : null}
+                    <div className="text-xs text-neutral-400">
+                      {lalamovePinLoading
+                        ? "Updating map..."
+                        : lalamoveMapCoords
+                        ? "Map pinned."
+                        : "No map selected yet."}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -830,6 +730,14 @@ export default function AccountPage() {
           </Button>
         </CardBody>
       </Card>
+      <LalamoveMapPickerModal
+        open={lalamoveMapPickerOpen}
+        title="Pin Lalamove drop-off"
+        initialPosition={lalamoveMapCoords}
+        saving={lalamovePinLoading}
+        onClose={() => setLalamoveMapPickerOpen(false)}
+        onSave={onSaveLalamoveMapPin}
+      />
     </div>
   );
 }

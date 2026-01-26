@@ -1,3 +1,5 @@
+import type { ShopProduct } from "@/components/ProductCard";
+
 const BRAND_SYNONYMS: Array<{ pattern: RegExp; canonical: string }> = [
   { pattern: /\bmini\s*-?\s*gt\b/gi, canonical: "mini gt" },
   { pattern: /\bminigt\b/gi, canonical: "mini gt" },
@@ -57,16 +59,56 @@ function sanitizeIlikeTerm(term: string) {
 
 export function buildSearchOr(terms: string[]) {
   const clauses: string[] = [];
+  const seen = new Set<string>();
   for (const term of terms) {
     const clean = sanitizeIlikeTerm(term);
     if (!clean) continue;
-    const ilike = `%${clean}%`;
-    clauses.push(`title.ilike.${ilike}`);
-    clauses.push(`brand.ilike.${ilike}`);
-    clauses.push(`model.ilike.${ilike}`);
-    clauses.push(`variation.ilike.${ilike}`);
+    const normalizedTokens = normalizeSearchTerm(clean)
+      .split(" ")
+      .filter(Boolean);
+    const allTerms = [clean, ...normalizedTokens].filter(Boolean);
+    for (const piece of allTerms) {
+      const key = piece.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const ilike = `%${piece}%`;
+      clauses.push(`title.ilike.${ilike}`);
+      clauses.push(`brand.ilike.${ilike}`);
+      clauses.push(`model.ilike.${ilike}`);
+      clauses.push(`variation.ilike.${ilike}`);
+      clauses.push(`product_variants.public_notes.ilike.${ilike}`);
+      clauses.push(`product_variants.issue_notes.ilike.${ilike}`);
+    }
   }
   return clauses.join(",");
+}
+
+export function buildSearchTermTokens(query: string) {
+  return expandSearchTerms(query)
+    .map((term) => normalizeSearchTerm(term))
+    .map((term) => term.split(" ").filter(Boolean))
+    .filter((tokens) => tokens.length > 0);
+}
+
+export function buildProductSearchText(product: ShopProduct) {
+  const optionNotes = (product.options ?? [])
+    .flatMap((option) => [option.public_notes, option.issue_notes])
+    .filter(Boolean);
+  const raw = [
+    product.title,
+    product.brand,
+    product.model,
+    product.variation,
+    ...optionNotes,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return normalizeSearchTerm(raw);
+}
+
+export function matchesSearchText(text: string, termTokens: string[][]) {
+  if (!termTokens.length) return true;
+  return termTokens.some((tokens) => tokens.every((t) => text.includes(t)));
 }
 
 export function rememberSearchTerm(term: string) {

@@ -4,7 +4,14 @@ import * as React from "react";
 import { supabase } from "@/lib/supabase/browser";
 import type { ShopProduct } from "@/components/ProductCard";
 import { isSupabaseConfigured } from "@/lib/env";
-import { buildSearchOr, expandSearchTerms, normalizeSearchTerm } from "@/lib/search";
+import {
+  buildProductSearchText,
+  buildSearchOr,
+  buildSearchTermTokens,
+  expandSearchTerms,
+  normalizeSearchTerm,
+  matchesSearchText,
+} from "@/lib/search";
 import { mapProductsToShopProducts } from "@/lib/shopProducts";
 
 export function useSearchProducts(q: string) {
@@ -107,13 +114,24 @@ export function useSearchProducts(q: string) {
           }
         });
 
-        const scored = mapped
+        const termTokens = buildSearchTermTokens(query);
+        const filtered = termTokens.length
+          ? mapped.filter((p) =>
+              matchesSearchText(buildProductSearchText(p), termTokens)
+            )
+          : mapped;
+        if (!filtered.length) {
+          setProducts([]);
+          setLoading(false);
+          return;
+        }
+
+        const scored = filtered
           .map((p, index) => {
-            const text = `${p.title} ${p.brand ?? ""} ${p.model ?? ""}`
-              .toLowerCase()
-              .replace(/[^a-z0-9\s]/g, " ");
-            const relevance = terms.reduce(
-              (acc, term) => (text.includes(term.toLowerCase()) ? acc + 1 : acc),
+            const text = buildProductSearchText(p);
+            const relevance = termTokens.reduce(
+              (acc, tokens) =>
+                acc + (matchesSearchText(text, [tokens]) ? 1 : 0),
               0
             );
             const clicks = clickMap[p.key] ?? 0;
