@@ -18,6 +18,7 @@ type Announcement = {
   body: string;
   image_urls: string[] | null;
   is_active: boolean;
+  pinned: boolean;
   created_at: string;
 };
 
@@ -25,6 +26,10 @@ type MediaItem = {
   file: File;
   preview: string;
 };
+
+const ANNOUNCEMENT_IMAGE_WIDTH = 940;
+const ANNOUNCEMENT_IMAGE_HEIGHT = 788;
+const ANNOUNCEMENT_IMAGE_RATIO = ANNOUNCEMENT_IMAGE_WIDTH / ANNOUNCEMENT_IMAGE_HEIGHT;
 
 function formatDate(value: string | null | undefined) {
   if (!value) return "-";
@@ -42,12 +47,17 @@ export default function AnnouncementsPage() {
   const [announcements, setAnnouncements] = React.useState<Announcement[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [expandedId, setExpandedId] = React.useState<string | null>(null);
+  const [lightboxUrl, setLightboxUrl] = React.useState<string | null>(null);
 
   const [title, setTitle] = React.useState("");
   const [body, setBody] = React.useState("");
   const [media, setMedia] = React.useState<MediaItem[]>([]);
+  const [dragIndex, setDragIndex] = React.useState<number | null>(null);
+  const [processingMedia, setProcessingMedia] = React.useState(false);
   const [posting, setPosting] = React.useState(false);
   const [postError, setPostError] = React.useState<string | null>(null);
+  const bodyRef = React.useRef<HTMLTextAreaElement | null>(null);
 
   const loadAnnouncements = React.useCallback(
     async (includeInactive: boolean) => {
@@ -56,7 +66,8 @@ export default function AnnouncementsPage() {
 
       let query = supabase
         .from("announcements")
-        .select("id,user_id,title,body,image_urls,is_active,created_at")
+        .select("id,user_id,title,body,image_urls,is_active,pinned,created_at")
+        .order("pinned", { ascending: false })
         .order("created_at", { ascending: false })
         .limit(60);
 
@@ -90,13 +101,79 @@ export default function AnnouncementsPage() {
     };
   }, [media]);
 
-  function onAddMedia(files: FileList | null) {
+  async function cropAnnouncementImage(file: File): Promise<MediaItem> {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("Failed to load image."));
+        image.src = url;
+      });
+
+      const sourceRatio = img.width / img.height;
+      let sx = 0;
+      let sy = 0;
+      let sw = img.width;
+      let sh = img.height;
+
+      if (sourceRatio > ANNOUNCEMENT_IMAGE_RATIO) {
+        sw = Math.round(img.height * ANNOUNCEMENT_IMAGE_RATIO);
+        sx = Math.round((img.width - sw) / 2);
+      } else if (sourceRatio < ANNOUNCEMENT_IMAGE_RATIO) {
+        sh = Math.round(img.width / ANNOUNCEMENT_IMAGE_RATIO);
+        sy = Math.round((img.height - sh) / 2);
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = ANNOUNCEMENT_IMAGE_WIDTH;
+      canvas.height = ANNOUNCEMENT_IMAGE_HEIGHT;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas not available.");
+
+      ctx.drawImage(
+        img,
+        sx,
+        sy,
+        sw,
+        sh,
+        0,
+        0,
+        ANNOUNCEMENT_IMAGE_WIDTH,
+        ANNOUNCEMENT_IMAGE_HEIGHT
+      );
+
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob(
+          (output) => (output ? resolve(output) : reject(new Error("Image crop failed."))),
+          "image/jpeg",
+          0.9
+        );
+      });
+
+      const baseName = file.name.replace(/\.[^/.]+$/, "");
+      const croppedFile = new File([blob], `${baseName}-940x788.jpg`, { type: blob.type });
+      const preview = URL.createObjectURL(croppedFile);
+      return { file: croppedFile, preview };
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  async function onAddMedia(files: FileList | null) {
     if (!files?.length) return;
-    const next: MediaItem[] = Array.from(files).map((file) => ({
-      file,
-      preview: URL.createObjectURL(file),
-    }));
-    setMedia((prev) => [...prev, ...next]);
+    setProcessingMedia(true);
+    setPostError(null);
+    try {
+      const next = await Promise.all(
+        Array.from(files).map((file) => cropAnnouncementImage(file))
+      );
+      setMedia((prev) => [...prev, ...next]);
+    } catch (err: any) {
+      setPostError(err?.message ?? "Failed to process images.");
+    } finally {
+      setProcessingMedia(false);
+    }
   }
 
   function removeMedia(index: number) {
@@ -105,6 +182,75 @@ export default function AnnouncementsPage() {
       const [removed] = next.splice(index, 1);
       if (removed) URL.revokeObjectURL(removed.preview);
       return next;
+    });
+  }
+
+  function moveMedia(fromIndex: number, toIndex: number) {
+    if (fromIndex === toIndex) return;
+    setMedia((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      if (!moved) return prev;
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  }
+
+  function insertPlaceholder(index: number) {
+    const token = `{image:${index + 1}}`;
+    const textarea = bodyRef.current;
+    const current = body;
+    const start = textarea?.selectionStart ?? current.length;
+    const end = textarea?.selectionEnd ?? current.length;
+    const next = `${current.slice(0, start)}${token}${current.slice(end)}`;
+    setBody(next);
+    requestAnimationFrame(() => {
+      if (!textarea) return;
+      textarea.focus();
+      const pos = start + token.length;
+      textarea.setSelectionRange(pos, pos);
+    });
+  }
+
+  function renderBodyWithImages(text: string, imageUrls: string[]) {
+    const parts = text.split(/(\{image:\d+\})/g);
+    return parts.map((part, index) => {
+      const match = part.match(/^\{image:(\d+)\}$/);
+      if (match) {
+        const imageIndex = Number(match[1]) - 1;
+        const url = imageUrls?.[imageIndex];
+        if (!url) {
+          return (
+            <div key={`missing-${index}`} className="text-xs text-white/40">
+              [Missing image {match[1]}]
+            </div>
+          );
+        }
+        return (
+          <button
+            key={`img-${index}`}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setLightboxUrl(url);
+            }}
+            className="overflow-hidden rounded-xl border border-white/10 bg-black/20 text-left"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={url}
+              alt={`Announcement image ${match[1]}`}
+              className="w-full aspect-[940/788] object-cover"
+            />
+          </button>
+        );
+      }
+      if (!part) return null;
+      return (
+        <div key={`text-${index}`} className="text-sm text-white/80 whitespace-pre-wrap">
+          {part}
+        </div>
+      );
     });
   }
 
@@ -126,6 +272,7 @@ export default function AnnouncementsPage() {
 
   async function submitAnnouncement() {
     if (!isAdmin) return;
+    if (processingMedia) return;
     const trimmedTitle = title.trim();
     const trimmedBody = body.trim();
 
@@ -173,10 +320,24 @@ export default function AnnouncementsPage() {
     await loadAnnouncements(true);
   }
 
+  async function togglePinned(announcement: Announcement) {
+    if (!isAdmin) return;
+    const { error: updateError } = await supabase
+      .from("announcements")
+      .update({ pinned: !announcement.pinned })
+      .eq("id", announcement.id);
+    if (updateError) {
+      setError(updateError.message || "Failed to update pin status.");
+      return;
+    }
+    await loadAnnouncements(true);
+  }
+
   const scheduleText = settings?.shipping_schedule_text?.trim();
   const cutoffText = settings?.shipping_cutoff_text?.trim();
 
   return (
+    <>
     <div className="mx-auto max-w-6xl px-4 py-8 space-y-6">
       <Card>
         <CardHeader>
@@ -217,13 +378,18 @@ export default function AnnouncementsPage() {
               placeholder="Announcement title"
             />
             <Textarea
+              ref={bodyRef}
               label="Message"
+              hint="Use {image:1}, {image:2}, etc. to place photos inside the message."
               value={body}
               onChange={(e) => setBody(e.target.value)}
               placeholder="Write your announcement..."
             />
             <label className="block text-sm text-white/80">
               Photos
+              <span className="ml-2 text-[11px] text-white/50">
+                Auto-cropped to 940x788px. Use placeholders to position them.
+              </span>
               <input
                 type="file"
                 accept="image/*"
@@ -237,14 +403,32 @@ export default function AnnouncementsPage() {
                 {media.map((item, index) => (
                   <div
                     key={item.preview}
-                    className="relative overflow-hidden rounded-xl border border-white/10"
+                    className={`relative overflow-hidden rounded-xl border border-white/10 bg-black/20 ${
+                      dragIndex === index ? "ring-2 ring-white/30" : ""
+                    }`}
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer.setData("text/plain", String(index));
+                      setDragIndex(index);
+                    }}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const from = Number(event.dataTransfer.getData("text/plain"));
+                      if (!Number.isNaN(from)) moveMedia(from, index);
+                      setDragIndex(null);
+                    }}
+                    onDragEnd={() => setDragIndex(null)}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={item.preview}
                       alt={`Upload ${index + 1}`}
-                      className="h-28 w-full object-cover"
+                      className="w-full aspect-[940/788] object-cover"
                     />
+                    <div className="absolute left-2 top-2 rounded-full bg-black/70 px-2 py-1 text-[10px] text-white">
+                      Image {index + 1}
+                    </div>
                     <button
                       type="button"
                       onClick={() => removeMedia(index)}
@@ -252,13 +436,23 @@ export default function AnnouncementsPage() {
                     >
                       Remove
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => insertPlaceholder(index)}
+                      className="absolute bottom-2 right-2 rounded-full bg-black/60 px-2 py-1 text-[10px] text-white"
+                    >
+                      Insert in message
+                    </button>
                   </div>
                 ))}
               </div>
             ) : null}
+            {processingMedia ? (
+              <div className="text-xs text-white/50">Processing images...</div>
+            ) : null}
             {postError ? <div className="text-xs text-red-200">{postError}</div> : null}
             <div className="flex items-center justify-end">
-              <Button onClick={submitAnnouncement} disabled={posting}>
+              <Button onClick={submitAnnouncement} disabled={posting || processingMedia}>
                 {posting ? "Posting..." : "Post announcement"}
               </Button>
             </div>
@@ -283,16 +477,36 @@ export default function AnnouncementsPage() {
             <div className="text-sm text-white/60">No announcements yet.</div>
           ) : (
             <div className="space-y-4">
-              {announcements.map((announcement) => (
-                <div
-                  key={announcement.id}
-                  className="rounded-2xl border border-white/10 bg-bg-900/30 p-4"
-                >
+              {announcements.map((announcement) => {
+                const isExpanded = expandedId === announcement.id;
+                return (
+                  <div
+                    key={announcement.id}
+                    className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent-500/40"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() =>
+                      setExpandedId((prev) =>
+                        prev === announcement.id ? null : announcement.id
+                      )
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setExpandedId((prev) =>
+                          prev === announcement.id ? null : announcement.id
+                        );
+                      }
+                    }}
+                  >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <div className="text-sm font-semibold">
                         {announcement.title || "Announcement"}
                       </div>
+                      {announcement.pinned ? (
+                        <Badge className="border-amber-400/40 text-amber-200">Pinned</Badge>
+                      ) : null}
                       {!announcement.is_active ? (
                         <Badge className="border-red-500/30 text-red-200">Hidden</Badge>
                       ) : null}
@@ -301,41 +515,107 @@ export default function AnnouncementsPage() {
                       {formatDate(announcement.created_at)}
                     </div>
                   </div>
-                  {announcement.body ? (
-                    <div className="mt-2 text-sm text-white/80 whitespace-pre-wrap">
-                      {announcement.body}
+                  <div className={isExpanded ? "mt-3 space-y-3" : "mt-3 space-y-3 max-h-[420px] overflow-hidden"}>
+                    {announcement.body ? (
+                      (() => {
+                        const inline = /\{image:\d+\}/.test(announcement.body ?? "");
+                        const urls = announcement.image_urls ?? [];
+                        return inline ? (
+                          renderBodyWithImages(announcement.body, urls)
+                        ) : (
+                          <div className={isExpanded ? "text-sm text-white/80 whitespace-pre-wrap" : "text-sm text-white/80 whitespace-pre-wrap line-clamp-4"}>
+                            {announcement.body}
+                          </div>
+                        );
+                      })()
+                    ) : null}
+                    {announcement.image_urls?.length &&
+                    !/\{image:\d+\}/.test(announcement.body ?? "") ? (
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        {announcement.image_urls.map((url, index) => (
+                          <button
+                            key={url}
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setLightboxUrl(url);
+                            }}
+                            className="overflow-hidden rounded-xl border border-white/10 bg-black/20 text-left"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={url}
+                              alt={`Announcement ${index + 1}`}
+                              className="w-full aspect-[940/788] object-cover"
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  {!isExpanded ? (
+                    <div className="mt-2 text-xs text-white/40">
+                      Click to view full post
                     </div>
                   ) : null}
-                  {announcement.image_urls?.length ? (
-                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                      {announcement.image_urls.map((url) => (
-                        <div
-                          key={url}
-                          className="overflow-hidden rounded-xl border border-white/10"
+                      {isAdmin ? (
+                        <div className="mt-3 flex justify-end gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => togglePinned(announcement)}
+                            onMouseDown={(event) => event.stopPropagation()}
+                            onClickCapture={(event) => event.stopPropagation()}
+                          >
+                            {announcement.pinned ? "Unpin" : "Pin"}
+                          </Button>
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            onClick={() => removeAnnouncement(announcement.id)}
+                            onMouseDown={(event) => event.stopPropagation()}
+                            onClickCapture={(event) => event.stopPropagation()}
                         >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={url} alt="Announcement" className="h-28 w-full object-cover" />
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                  {isAdmin ? (
-                    <div className="mt-3 flex justify-end">
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        onClick={() => removeAnnouncement(announcement.id)}
-                      >
-                        Delete
-                      </Button>
-                    </div>
-                  ) : null}
-                </div>
-              ))}
+                          Delete
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           )}
         </CardBody>
       </Card>
     </div>
+    {lightboxUrl ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <div className="relative max-h-[90vh] max-w-[90vw]">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setLightboxUrl(null);
+              }}
+              className="absolute -top-3 -right-3 rounded-full bg-black/80 px-2 py-1 text-xs text-white"
+            >
+              Close
+            </button>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={lightboxUrl}
+              alt="Announcement full view"
+              className="max-h-[90vh] max-w-[90vw] rounded-xl border border-white/10 object-contain"
+              onClick={(event) => event.stopPropagation()}
+            />
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }

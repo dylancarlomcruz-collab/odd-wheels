@@ -1495,6 +1495,10 @@ begin
 end;
 $$;
 
+-- Announcements pinning
+alter table public.announcements
+  add column if not exists pinned boolean not null default false;
+
 -- Bug reports (menu)
 
 create table if not exists public.bug_reports (
