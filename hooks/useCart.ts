@@ -3,6 +3,7 @@
 import * as React from "react";
 import { supabase } from "@/lib/supabase/browser";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { getOrCreateGuestSessionId } from "@/lib/guestSession";
 
 export type CartLine = {
   id: string;
@@ -42,6 +43,7 @@ export type AddResult = {
 
 const CART_EVENT = "oddwheels:cart-updated";
 const GUEST_CART_KEY = "oddwheels:guest-cart";
+const GUEST_CART_SYNC_KEY = "oddwheels:guest-cart-sync";
 
 type GuestCartItem = {
   variant_id: string;
@@ -100,6 +102,33 @@ function writeGuestCart(items: GuestCartItem[]) {
   if (typeof window === "undefined") return;
   const normalized = normalizeGuestCart(items);
   window.localStorage.setItem(GUEST_CART_KEY, JSON.stringify(normalized));
+}
+
+async function syncGuestCart(items: GuestCartItem[]) {
+  const sessionId = getOrCreateGuestSessionId();
+  if (!sessionId) return;
+  const normalized = normalizeGuestCart(items);
+  const payload = normalized.map((item) => ({
+    variant_id: item.variant_id,
+    qty: item.qty,
+    protector_selected: Boolean(item.protector_selected),
+  }));
+  const signature = JSON.stringify(payload);
+  if (typeof window !== "undefined") {
+    const prev = window.localStorage.getItem(GUEST_CART_SYNC_KEY);
+    if (prev === signature) return;
+  }
+  const { error } = await supabase.rpc("sync_guest_cart", {
+    p_session_id: sessionId,
+    p_items: payload,
+  });
+  if (error) {
+    console.error("Failed to sync guest cart", error);
+    return;
+  }
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(GUEST_CART_SYNC_KEY, signature);
+  }
 }
 
 export function useCart() {
@@ -168,6 +197,7 @@ export function useCart() {
       if (changed) {
         writeGuestCart(cleanedItems);
       }
+      void syncGuestCart(cleanedItems);
       setLines(nextLines);
       setLoading(false);
       return;
@@ -273,6 +303,7 @@ export function useCart() {
       }
 
       writeGuestCart([]);
+      void syncGuestCart([]);
     })();
     mergePromise = run;
     try {
@@ -374,6 +405,7 @@ export function useCart() {
           });
         }
         writeGuestCart(guestItems);
+        void syncGuestCart(guestItems);
         await reload();
         if (productId) {
           supabase
@@ -480,6 +512,7 @@ export function useCart() {
         if (!existing) return;
         existing.qty = nextQty;
         writeGuestCart(guestItems);
+        void syncGuestCart(guestItems);
         await reload();
         emitCartUpdated(instanceId.current);
         return;
@@ -498,6 +531,7 @@ export function useCart() {
           (item) => item.variant_id !== lineId
         );
         writeGuestCart(guestItems);
+        void syncGuestCart(guestItems);
         await reload();
         emitCartUpdated(instanceId.current);
         return;
@@ -517,6 +551,7 @@ export function useCart() {
         if (!existing) return;
         existing.protector_selected = selected;
         writeGuestCart(guestItems);
+        void syncGuestCart(guestItems);
         await reload();
         emitCartUpdated(instanceId.current);
         return;

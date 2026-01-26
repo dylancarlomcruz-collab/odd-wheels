@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { resolveEffectivePrice } from "@/lib/pricing";
 
+const GRID_VIEW_STORAGE_KEY = "oddwheels:grid-view";
+
 export default function SearchContent() {
   const sp = useSearchParams();
   const q = sp.get("q") ?? "";
@@ -30,6 +32,34 @@ export default function SearchContent() {
   const [scaleFilter, setScaleFilter] = React.useState("all");
   const [minPrice, setMinPrice] = React.useState("");
   const [maxPrice, setMaxPrice] = React.useState("");
+  const [wideView, setWideView] = React.useState(false);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = window.localStorage.getItem(GRID_VIEW_STORAGE_KEY);
+    setWideView(saved === "wide");
+  }, []);
+
+  const toggleWideView = React.useCallback(() => {
+    setWideView((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          GRID_VIEW_STORAGE_KEY,
+          next ? "wide" : "standard"
+        );
+      }
+      return next;
+    });
+  }, []);
+
+  const productGridClass = React.useMemo(
+    () =>
+      wideView
+        ? "grid grid-cols-4 gap-3 sm:grid-cols-4 sm:gap-4 md:grid-cols-6 lg:grid-cols-8"
+        : "grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4",
+    [wideView]
+  );
 
   const brandOptions = React.useMemo(() => {
     const set = new Set<string>();
@@ -261,9 +291,34 @@ export default function SearchContent() {
 
   return (
     <>
-      <div>
-        <h1 className="text-xl font-semibold">Search</h1>
-        <div className="text-sm text-white/60">Query: "{q}"</div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">Search</h1>
+          <div className="text-sm text-white/60">Query: "{q}"</div>
+        </div>
+        <button
+          type="button"
+          onClick={toggleWideView}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-bg-950/50 text-white/70 transition hover:bg-bg-950/70 hover:text-white"
+          aria-pressed={wideView}
+          aria-label={wideView ? "Standard view" : "Wide view"}
+          title={wideView ? "Standard view" : "Wide view"}
+        >
+          <svg
+            viewBox="0 0 20 20"
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect x="3" y="3" width="5" height="5" />
+            <rect x="12" y="3" width="5" height="5" />
+            <rect x="3" y="12" width="5" height="5" />
+            <rect x="12" y="12" width="5" height="5" />
+          </svg>
+        </button>
       </div>
 
       <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4">
@@ -362,11 +417,12 @@ export default function SearchContent() {
           {closestMatches.length ? (
             <section className="space-y-3">
               <div className="text-lg font-semibold">Closest matches</div>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4">
+              <div className={productGridClass}>
                 {closestMatches.map((p) => (
                   <ProductCard
                     key={p.key}
                     product={p}
+                    wideView={wideView}
                     onAddToCart={(opt) => onAdd(p, opt)}
                     onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
                     onProductClick={(item) => recordClick(item.key)}
@@ -379,11 +435,12 @@ export default function SearchContent() {
           {topSellers.length ? (
             <section className="space-y-3">
               <div className="text-lg font-semibold">Top sellers</div>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4">
+              <div className={productGridClass}>
                 {topSellers.map((p) => (
                   <ProductCard
                     key={p.key}
                     product={p}
+                    wideView={wideView}
                     onAddToCart={(opt) => onAdd(p, opt)}
                     onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
                     onProductClick={(item) => recordClick(item.key)}
@@ -396,11 +453,12 @@ export default function SearchContent() {
           {recentlyViewed.length ? (
             <section className="space-y-3">
               <div className="text-lg font-semibold">Recently viewed</div>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4">
+              <div className={productGridClass}>
                 {recentlyViewed.map((p) => (
                   <ProductCard
                     key={p.key}
                     product={p}
+                    wideView={wideView}
                     onAddToCart={(opt) => onAdd(p, opt)}
                     onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
                     onProductClick={(item) => recordClick(item.key)}
@@ -415,11 +473,12 @@ export default function SearchContent() {
           No items match your filters. Try clearing some filters.
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4">
+        <div className={productGridClass}>
           {filteredProducts.map((p) => (
             <ProductCard
               key={p.key}
               product={p}
+              wideView={wideView}
               onAddToCart={(opt) => onAdd(p, opt)}
               onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
               onProductClick={(item) => recordClick(item.key)}

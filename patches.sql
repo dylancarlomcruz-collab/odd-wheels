@@ -829,8 +829,14 @@ for select using (public.is_staff());
 create table if not exists public.product_clicks (
   product_id uuid primary key references public.products(id) on delete cascade,
   clicks integer not null default 0,
+  auth_clicks integer not null default 0,
+  guest_clicks integer not null default 0,
   last_clicked_at timestamptz not null default now()
 );
+
+alter table public.product_clicks
+  add column if not exists auth_clicks integer not null default 0,
+  add column if not exists guest_clicks integer not null default 0;
 
 alter table public.product_clicks enable row level security;
 
@@ -846,11 +852,27 @@ set search_path = public
 set row_security = off
 as $$
 begin
-  insert into public.product_clicks (product_id, clicks, last_clicked_at)
-  values (p_product_id, 1, now())
+  insert into public.product_clicks (
+    product_id,
+    clicks,
+    auth_clicks,
+    guest_clicks,
+    last_clicked_at
+  )
+  values (
+    p_product_id,
+    1,
+    case when auth.uid() is not null then 1 else 0 end,
+    case when auth.uid() is null then 1 else 0 end,
+    now()
+  )
   on conflict (product_id)
   do update set
     clicks = public.product_clicks.clicks + 1,
+    auth_clicks = public.product_clicks.auth_clicks
+      + case when auth.uid() is not null then 1 else 0 end,
+    guest_clicks = public.product_clicks.guest_clicks
+      + case when auth.uid() is null then 1 else 0 end,
     last_clicked_at = now();
 end;
 $$;
@@ -1157,8 +1179,14 @@ for update using (public.is_staff()) with check (public.is_staff());
 create table if not exists public.product_add_to_cart (
   product_id uuid primary key references public.products(id) on delete cascade,
   adds integer not null default 0,
+  auth_adds integer not null default 0,
+  guest_adds integer not null default 0,
   last_added_at timestamptz not null default now()
 );
+
+alter table public.product_add_to_cart
+  add column if not exists auth_adds integer not null default 0,
+  add column if not exists guest_adds integer not null default 0;
 
 alter table public.product_add_to_cart enable row level security;
 
@@ -1172,11 +1200,27 @@ language plpgsql
 security definer
 as $$
 begin
-  insert into public.product_add_to_cart (product_id, adds, last_added_at)
-  values (p_product_id, 1, now())
+  insert into public.product_add_to_cart (
+    product_id,
+    adds,
+    auth_adds,
+    guest_adds,
+    last_added_at
+  )
+  values (
+    p_product_id,
+    1,
+    case when auth.uid() is not null then 1 else 0 end,
+    case when auth.uid() is null then 1 else 0 end,
+    now()
+  )
   on conflict (product_id)
   do update set
     adds = public.product_add_to_cart.adds + 1,
+    auth_adds = public.product_add_to_cart.auth_adds
+      + case when auth.uid() is not null then 1 else 0 end,
+    guest_adds = public.product_add_to_cart.guest_adds
+      + case when auth.uid() is null then 1 else 0 end,
     last_added_at = now();
 end;
 $$;
@@ -1496,6 +1540,248 @@ begin
   end if;
 end;
 $$;
+
+-- Visitor sessions + per-visitor click/cart tracking
+
+create table if not exists public.user_product_clicks (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  product_id uuid not null references public.products(id) on delete cascade,
+  clicks integer not null default 0,
+  last_clicked_at timestamptz not null default now(),
+  primary key (user_id, product_id)
+);
+
+create table if not exists public.guest_sessions (
+  id uuid primary key,
+  created_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  user_agent text
+);
+
+create table if not exists public.guest_product_clicks (
+  session_id uuid not null references public.guest_sessions(id) on delete cascade,
+  product_id uuid not null references public.products(id) on delete cascade,
+  clicks integer not null default 0,
+  last_clicked_at timestamptz not null default now(),
+  primary key (session_id, product_id)
+);
+
+create table if not exists public.guest_cart_items (
+  session_id uuid not null references public.guest_sessions(id) on delete cascade,
+  variant_id uuid not null references public.product_variants(id) on delete cascade,
+  qty integer not null default 1,
+  protector_selected boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (session_id, variant_id)
+);
+
+create index if not exists idx_user_product_clicks_user
+  on public.user_product_clicks (user_id);
+
+create index if not exists idx_guest_cart_items_session
+  on public.guest_cart_items (session_id);
+
+create index if not exists idx_guest_product_clicks_session
+  on public.guest_product_clicks (session_id);
+
+alter table public.user_product_clicks enable row level security;
+alter table public.guest_sessions enable row level security;
+alter table public.guest_product_clicks enable row level security;
+alter table public.guest_cart_items enable row level security;
+
+drop policy if exists "admin read user product clicks" on public.user_product_clicks;
+create policy "admin read user product clicks" on public.user_product_clicks
+for select using (public.is_admin());
+
+drop policy if exists "admin read guest sessions" on public.guest_sessions;
+create policy "admin read guest sessions" on public.guest_sessions
+for select using (public.is_admin());
+
+drop policy if exists "admin read guest product clicks" on public.guest_product_clicks;
+create policy "admin read guest product clicks" on public.guest_product_clicks
+for select using (public.is_admin());
+
+drop policy if exists "admin read guest cart items" on public.guest_cart_items;
+create policy "admin read guest cart items" on public.guest_cart_items
+for select using (public.is_admin());
+
+create or replace function public.upsert_guest_session(
+  p_session_id uuid,
+  p_user_agent text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_id uuid;
+  v_agent text;
+begin
+  v_id := coalesce(p_session_id, gen_random_uuid());
+  v_agent := nullif(trim(coalesce(p_user_agent, '')), '');
+
+  insert into public.guest_sessions (id, user_agent, last_seen_at)
+  values (v_id, v_agent, now())
+  on conflict (id) do update
+    set last_seen_at = now(),
+        user_agent = coalesce(public.guest_sessions.user_agent, excluded.user_agent);
+
+  return v_id;
+end;
+$$;
+
+revoke execute on function public.upsert_guest_session(uuid, text) from public;
+grant execute on function public.upsert_guest_session(uuid, text) to anon, authenticated;
+
+create or replace function public.sync_guest_cart(
+  p_session_id uuid,
+  p_items jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_count int := 0;
+begin
+  if p_session_id is null then
+    raise exception 'Session id required.';
+  end if;
+
+  perform public.upsert_guest_session(p_session_id, null);
+
+  if p_items is null
+     or jsonb_typeof(p_items) <> 'array'
+     or jsonb_array_length(p_items) = 0 then
+    delete from public.guest_cart_items where session_id = p_session_id;
+    return jsonb_build_object('ok', true, 'lines', 0);
+  end if;
+
+  with raw as (
+    select
+      (value->>'variant_id')::uuid as variant_id,
+      greatest(1, (value->>'qty')::int) as qty,
+      coalesce((value->>'protector_selected')::boolean, false) as protector_selected
+    from jsonb_array_elements(p_items) as value
+    where (value->>'variant_id') is not null
+  ),
+  items as (
+    select
+      variant_id,
+      sum(qty)::int as qty,
+      bool_or(protector_selected) as protector_selected
+    from raw
+    where variant_id is not null
+    group by variant_id
+  ),
+  upserted as (
+    insert into public.guest_cart_items (
+      session_id,
+      variant_id,
+      qty,
+      protector_selected,
+      updated_at
+    )
+    select p_session_id, variant_id, qty, protector_selected, now()
+    from items
+    on conflict (session_id, variant_id) do update
+      set qty = excluded.qty,
+          protector_selected = excluded.protector_selected,
+          updated_at = now()
+    returning 1
+  )
+  select count(*) into v_count from upserted;
+
+  delete from public.guest_cart_items
+  where session_id = p_session_id
+    and variant_id not in (select variant_id from items);
+
+  return jsonb_build_object('ok', true, 'lines', v_count);
+end;
+$$;
+
+revoke execute on function public.sync_guest_cart(uuid, jsonb) from public;
+grant execute on function public.sync_guest_cart(uuid, jsonb) to anon, authenticated;
+
+create or replace function public.increment_product_click_detailed(
+  p_product_id uuid,
+  p_session_id uuid default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_user_id uuid;
+begin
+  if p_product_id is null then
+    raise exception 'Product id required.';
+  end if;
+
+  v_user_id := auth.uid();
+
+  insert into public.product_clicks (
+    product_id,
+    clicks,
+    auth_clicks,
+    guest_clicks,
+    last_clicked_at
+  )
+  values (
+    p_product_id,
+    1,
+    case when v_user_id is not null then 1 else 0 end,
+    case when v_user_id is null then 1 else 0 end,
+    now()
+  )
+  on conflict (product_id)
+  do update set
+    clicks = public.product_clicks.clicks + 1,
+    auth_clicks = public.product_clicks.auth_clicks
+      + case when v_user_id is not null then 1 else 0 end,
+    guest_clicks = public.product_clicks.guest_clicks
+      + case when v_user_id is null then 1 else 0 end,
+    last_clicked_at = now();
+
+  if v_user_id is not null then
+    insert into public.user_product_clicks (
+      user_id,
+      product_id,
+      clicks,
+      last_clicked_at
+    )
+    values (v_user_id, p_product_id, 1, now())
+    on conflict (user_id, product_id) do update
+      set clicks = public.user_product_clicks.clicks + 1,
+          last_clicked_at = now();
+  else
+    if p_session_id is null then
+      return;
+    end if;
+    perform public.upsert_guest_session(p_session_id, null);
+    insert into public.guest_product_clicks (
+      session_id,
+      product_id,
+      clicks,
+      last_clicked_at
+    )
+    values (p_session_id, p_product_id, 1, now())
+    on conflict (session_id, product_id) do update
+      set clicks = public.guest_product_clicks.clicks + 1,
+          last_clicked_at = now();
+  end if;
+end;
+$$;
+
+revoke execute on function public.increment_product_click_detailed(uuid, uuid) from public;
+grant execute on function public.increment_product_click_detailed(uuid, uuid) to anon, authenticated;
 
 -- Announcements pinning
 alter table public.announcements

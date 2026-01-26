@@ -14,8 +14,9 @@ export default function PrivacyPage() {
         </p>
         <p>
           We use cookies and local storage to remember your cart, preferences,
-          and session state. Guest carts are stored locally on your device until
-          you check out, sign in, or clear your browser data.
+          and session state. Guest carts are stored locally and may be synced to
+          our servers for analytics and admin insights until you check out, sign
+          in, or clear your browser data.
         </p>
         <p>
           We also collect limited interaction data, such as product views,

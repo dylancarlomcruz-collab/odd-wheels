@@ -801,7 +801,7 @@ export function SiteHeader() {
                       onClick={() => setSortBy(option.value)}
                       aria-pressed={active}
                       className={[
-                        "inline-flex h-8 w-full items-center justify-center rounded-lg border px-2 text-[10px] font-semibold uppercase tracking-wide transition sm:h-9 sm:px-3 sm:text-[11px]",
+                        "inline-flex h-7 w-full items-center justify-center rounded-lg border px-1.5 text-[9px] font-semibold uppercase leading-none tracking-wide transition sm:h-9 sm:px-3 sm:text-[11px]",
                         active
                           ? "border-amber-400/60 bg-amber-500/20 text-amber-900 dark:text-amber-100"
                           : "border-white/10 bg-bg-950/20 text-white/70 hover:bg-bg-950/40",
@@ -826,7 +826,7 @@ export function SiteHeader() {
                       }}
                       aria-pressed={active}
                       className={[
-                        "inline-flex h-8 w-full items-center justify-center rounded-lg border px-2 text-[10px] font-semibold uppercase tracking-wide transition sm:h-9 sm:px-3 sm:text-[11px]",
+                        "inline-flex h-7 w-full items-center justify-center rounded-lg border px-1.5 text-[9px] font-semibold uppercase leading-none tracking-wide transition sm:h-9 sm:px-3 sm:text-[11px]",
                         active
                           ? "border-amber-400/60 bg-amber-500/20 text-amber-900 dark:text-amber-100"
                           : "border-white/10 bg-bg-950/20 text-white/70 hover:bg-bg-950/40",
@@ -835,11 +835,11 @@ export function SiteHeader() {
                       <span className="inline-flex items-center justify-center gap-1">
                         <span>Price</span>
                         {!active ? (
-                          <ArrowUpDown className="h-3.5 w-3.5" />
+                          <ArrowUpDown className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                         ) : priceDir === "asc" ? (
-                          <ArrowUp className="h-3.5 w-3.5" />
+                          <ArrowUp className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                         ) : (
-                          <ArrowDown className="h-3.5 w-3.5" />
+                          <ArrowDown className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                         )}
                       </span>
                     </button>

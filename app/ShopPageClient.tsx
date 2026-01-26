@@ -29,6 +29,7 @@ const LIMITED_SECTION_COUNTS: Record<string, number> = {
   because: 4,
 };
 const RECENT_REFRESH_MS = 1000 * 60 * 30;
+const GRID_VIEW_STORAGE_KEY = "oddwheels:grid-view";
 const CANONICAL_BRAND_LABELS: Record<string, string> = {
   minigt: "Mini GT",
   kaidohouse: "Kaido House",
@@ -118,6 +119,7 @@ export default function ShopPageClient() {
   const [clickMap, setClickMap] = React.useState<Record<string, number>>({});
   const [addMap, setAddMap] = React.useState<Record<string, number>>({});
   const [cartMap, setCartMap] = React.useState<Record<string, number>>({});
+  const [wideView, setWideView] = React.useState(false);
   const [salesMap, setSalesMap] = React.useState<Record<string, number>>({});
   const [topSellerIds, setTopSellerIds] = React.useState<string[]>([]);
   const [backInStockIds, setBackInStockIds] = React.useState<string[]>([]);
@@ -130,6 +132,25 @@ export default function ShopPageClient() {
   const resultsRef = React.useRef<HTMLDivElement | null>(null);
   const lastScrolledQuery = React.useRef<string>("");
   const lastRecentRefresh = React.useRef<number>(0);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = window.localStorage.getItem(GRID_VIEW_STORAGE_KEY);
+    setWideView(saved === "wide");
+  }, []);
+
+  const toggleWideView = React.useCallback(() => {
+    setWideView((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          GRID_VIEW_STORAGE_KEY,
+          next ? "wide" : "standard"
+        );
+      }
+      return next;
+    });
+  }, []);
 
   React.useEffect(() => {
     let mounted = true;
@@ -816,8 +837,8 @@ export default function ShopPageClient() {
           style={{ top: "var(--shop-header-height, 0px)" }}
         >
           <div className="relative -mx-2 overflow-hidden border-y border-sky-500/20 bg-bg-950/80 backdrop-blur sm:-mx-4">
-            <div className="mx-auto flex max-w-6xl items-center px-2 py-2 sm:px-4">
-              <div className="w-full">
+            <div className="mx-auto flex max-w-6xl items-center gap-2 px-2 py-2 sm:px-4">
+              <div className="min-w-0 flex-1">
                 <div
                   className={[
                     "grid w-full gap-1 sm:gap-2",
@@ -854,6 +875,29 @@ export default function ShopPageClient() {
                   ) : null}
                 </div>
               </div>
+              <button
+                type="button"
+                onClick={toggleWideView}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-bg-950/50 text-white/70 transition hover:bg-bg-950/70 hover:text-white"
+                aria-pressed={wideView}
+                aria-label={wideView ? "Standard view" : "Wide view"}
+                title={wideView ? "Standard view" : "Wide view"}
+              >
+                <svg
+                  viewBox="0 0 20 20"
+                  className="h-4 w-4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect x="3" y="3" width="5" height="5" />
+                  <rect x="12" y="3" width="5" height="5" />
+                  <rect x="3" y="12" width="5" height="5" />
+                  <rect x="12" y="12" width="5" height="5" />
+                </svg>
+              </button>
             </div>
           </div>
           {showAllBrands ? (
@@ -883,7 +927,13 @@ export default function ShopPageClient() {
         </div>
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
+      <div
+        className={
+          wideView
+            ? "mt-3 grid grid-cols-4 gap-2 sm:grid-cols-4 sm:gap-4 md:grid-cols-6 lg:grid-cols-8"
+            : "mt-3 grid grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4"
+        }
+      >
         {mainSection ? (
           <>
             <div className="col-span-full flex flex-col gap-2 pt-2 sm:flex-row sm:items-center sm:justify-between">
@@ -943,6 +993,7 @@ export default function ShopPageClient() {
                     <ProductCard
                       key={`${section.key}-${p.key}`}
                       product={p}
+                      wideView={wideView}
                       onAddToCart={(opt) => onAdd(p, opt)}
                       onImageClick={
                         isAdmin
@@ -962,6 +1013,7 @@ export default function ShopPageClient() {
                   <ProductCard
                     key={`all-${p.key}`}
                     product={p}
+                    wideView={wideView}
                     onAddToCart={(opt) => onAdd(p, opt)}
                     onImageClick={
                       isAdmin

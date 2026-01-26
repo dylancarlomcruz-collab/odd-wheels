@@ -15,6 +15,7 @@ import { toast } from "@/components/ui/toast";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { formatConditionLabel } from "@/lib/conditions";
 import { supabase } from "@/lib/supabase/browser";
+import { getOrCreateGuestSessionId } from "@/lib/guestSession";
 import { recordRecentView } from "@/lib/recentViews";
 import { resolveEffectivePrice } from "@/lib/pricing";
 
@@ -46,8 +47,12 @@ export default function ProductDetailPage() {
           // ignore if not authenticated
         }
       );
+    const sessionId = getOrCreateGuestSessionId();
     supabase
-      .rpc("increment_product_click", { p_product_id: product.id })
+      .rpc("increment_product_click_detailed", {
+        p_product_id: product.id,
+        p_session_id: sessionId,
+      })
       .then(
         () => undefined,
         () => {

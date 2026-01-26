@@ -10,6 +10,7 @@ import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
 import { getOptionPricing, getProductEffectiveRange } from "@/lib/pricing";
 import { formatTitle } from "@/lib/text";
 import { supabase } from "@/lib/supabase/browser";
+import { getOrCreateGuestSessionId } from "@/lib/guestSession";
 
 type ConditionOption = {
   id: string; // this is the PRODUCT ROW ID for that condition
@@ -35,6 +36,29 @@ type PreviewEntry = {
   product: ShopProduct;
   selectedId: string;
 };
+
+const COMPACT_CONDITION_LABELS: Record<string, string> = {
+  sealed: "SEALED",
+  resealed: "RESEAL",
+  near_mint: "NM",
+  unsealed: "UNSEAL",
+  with_issues: "ISSUES",
+  sealed_blister: "BLISTER",
+  unsealed_blister: "BLISTER",
+  blistered: "BLISTER",
+};
+
+function getCompactConditionLabel(
+  value: string | null | undefined,
+  shipClass?: string | null
+) {
+  const key = String(value ?? "").toLowerCase();
+  const label =
+    COMPACT_CONDITION_LABELS[key] ?? String(value ?? "-").toUpperCase();
+  const suffix =
+    String(shipClass ?? "").toUpperCase() === "DIORAMA" ? "DIO" : null;
+  return suffix ? `${label} ${suffix}` : label;
+}
 
 export type ShopProduct = {
   key: string;
@@ -78,6 +102,7 @@ export default function ProductCard({
   onProductClick,
   socialProof,
   relatedPool,
+  wideView = false,
 }: {
   product: ShopProduct;
   onAddToCart: (option: ConditionOption) => void | Promise<void>;
@@ -89,6 +114,7 @@ export default function ProductCard({
   onProductClick?: (product: ShopProduct) => void | Promise<void>;
   socialProof?: SocialProof;
   relatedPool?: ShopProduct[] | null;
+  wideView?: boolean;
 }) {
   const [selectedId, setSelectedId] = React.useState<string>(
     product.options[0]?.id ?? "",
@@ -227,6 +253,10 @@ export default function ProductCard({
     upper: true,
     shipClass: selected?.ship_class,
   });
+  const compactConditionLabel = getCompactConditionLabel(
+    selected?.condition ?? "-",
+    selected?.ship_class
+  );
   const proofBits = [
     socialProof?.inCarts ? `${socialProof.inCarts} in carts` : null,
     socialProof?.soldThisWeek
@@ -369,7 +399,11 @@ export default function ProductCard({
   async function logProductPreview(productId: string) {
     if (!productId) return;
     try {
-      await supabase.rpc("increment_product_click", { p_product_id: productId });
+      const sessionId = getOrCreateGuestSessionId();
+      await supabase.rpc("increment_product_click_detailed", {
+        p_product_id: productId,
+        p_session_id: sessionId,
+      });
     } catch (e) {
       console.error("Failed to log product click", e);
     }
@@ -511,27 +545,27 @@ export default function ProductCard({
             <div className="text-white/50 text-sm">No image</div>
           )}
           {hasSale ? (
-            <span className="absolute left-2 top-2 rounded-full border border-rose-300/60 bg-rose-500/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow">
+            <span className="absolute left-2 top-2 rounded-full border border-rose-300/60 bg-rose-500/80 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white shadow sm:px-2 sm:text-[10px]">
               On Sale
             </span>
           ) : null}
         </button>
 
-        <div className="p-3 sm:p-4">
+        <div className="p-2.5 sm:p-4">
           <button
             type="button"
             onClick={openPreview}
-            className="min-h-[2.8rem] text-left text-sm leading-snug sm:min-h-[3.2rem] sm:text-base text-white font-semibold line-clamp-2"
+            className="min-h-[2.4rem] text-left text-[13px] leading-snug text-white font-semibold line-clamp-3 sm:min-h-[3.2rem] sm:text-base sm:line-clamp-2"
           >
             {product.title}
           </button>
 
-          <div className="mt-2 sm:mt-3 flex min-h-[1.4rem] items-center justify-between gap-2">
-            <div className="text-price text-sm sm:text-base whitespace-nowrap">
+          <div className="mt-1.5 sm:mt-3 flex min-h-[1.2rem] items-center justify-between gap-2">
+            <div className="text-price text-[13px] sm:text-base whitespace-nowrap">
               {strikePrice ? (
                 <div className="flex items-baseline gap-2">
                   <span>{displayPrice}</span>
-                  <span className="text-[11px] text-white/40 line-through">
+                  <span className="text-[10px] text-white/40 line-through">
                     {strikePrice}
                   </span>
                 </div>
@@ -539,33 +573,40 @@ export default function ProductCard({
                 displayPrice
               )}
             </div>
-            <div className="min-w-0 text-right text-[11px] sm:text-xs text-white/60 truncate">
-              {conditionLabel}
-            </div>
+            {!wideView ? (
+              <div className="min-w-0 text-right text-[10px] text-white/60 truncate sm:text-xs">
+                <span className="sm:hidden">{compactConditionLabel}</span>
+                <span className="hidden sm:inline">{conditionLabel}</span>
+              </div>
+            ) : null}
           </div>
 
-          <div className="mt-2 sm:mt-3">
-            <div className="min-h-[1.2rem]">
-              {onlyOneLeft ? (
-                <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700 dark:border-rose-400/40 dark:bg-rose-500/20 dark:text-rose-200">
-                  Only 1 left
-                </span>
-              ) : lowStock ? (
-                <div className="text-[11px] sm:text-xs font-semibold text-amber-700 dark:text-amber-200/90">
-                  Almost sold out.
-                </div>
-              ) : primaryProof ? (
-                <span className="inline-flex items-center rounded-full border border-white/10 bg-bg-900/60 px-2 py-0.5 text-[11px] sm:text-xs text-white/60">
-                  {primaryProof}
-                </span>
-              ) : (
-                <span className="invisible text-[11px] sm:text-xs">placeholder</span>
-              )}
+          {!wideView ? (
+            <div className="mt-1.5 sm:mt-3">
+              <div className="min-h-[1rem]">
+                {onlyOneLeft ? (
+                  <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-rose-700 dark:border-rose-400/40 dark:bg-rose-500/20 dark:text-rose-200 sm:px-2 sm:text-[10px]">
+                    <span className="sm:hidden">1 left</span>
+                    <span className="hidden sm:inline">Only 1 left</span>
+                  </span>
+                ) : lowStock ? (
+                  <div className="text-[10px] font-semibold text-amber-700 dark:text-amber-200/90 sm:text-xs">
+                    <span className="sm:hidden">Low stock</span>
+                    <span className="hidden sm:inline">Almost sold out.</span>
+                  </div>
+                ) : primaryProof ? (
+                  <span className="inline-flex items-center rounded-full border border-white/10 bg-bg-900/60 px-1.5 py-0.5 text-[10px] text-white/60 sm:px-2 sm:text-xs">
+                    {primaryProof}
+                  </span>
+                ) : (
+                  <span className="invisible text-[11px] sm:text-xs">placeholder</span>
+                )}
+              </div>
             </div>
-          </div>
+          ) : null}
 
-          <div className="mt-2 sm:mt-3 space-y-2">
-            <div className="flex min-h-[2rem] flex-nowrap gap-2 overflow-x-auto pb-0.5">
+          <div className="mt-1.5 sm:mt-3 space-y-2">
+            <div className="flex min-h-[1.6rem] flex-nowrap gap-1.5 overflow-x-auto pb-0.5">
               {product.options.map((o) => {
                 const isSelected = o.id === selectedId;
                 return (
@@ -577,23 +618,28 @@ export default function ProductCard({
                       setHasPicked(true);
                     }}
                     className={[
-                      "rounded-full border px-2 py-0.5 text-[11px] sm:px-3 sm:py-1 sm:text-xs transition",
+                      "rounded-full border px-1.5 py-0.5 text-[10px] sm:px-3 sm:py-1 sm:text-xs transition",
                       isSelected
                         ? "bg-sky-200 text-sky-900 border-sky-300 dark:bg-sky-500/20 dark:text-sky-100 dark:border-sky-400/40"
                         : "border-white/20 bg-bg-900/60 text-white/80 hover:bg-bg-900/80 dark:border-white/10 dark:bg-paper/5 dark:text-white/70 dark:hover:bg-paper/10",
                     ].join(" ")}
                   >
-                                  {formatConditionLabel(o.condition, {
-                                    upper: true,
-                                    shipClass: o.ship_class,
-                                  })}
+                    <span className="sm:hidden">
+                      {getCompactConditionLabel(o.condition, o.ship_class)}
+                    </span>
+                    <span className="hidden sm:inline">
+                      {formatConditionLabel(o.condition, {
+                        upper: true,
+                        shipClass: o.ship_class,
+                      })}
+                    </span>
                   </button>
                 );
               })}
             </div>
 
             <button
-              className="w-full rounded-xl px-3 py-2.5 text-sm sm:px-4 sm:py-2 bg-amber-600 hover:bg-amber-500 text-black font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full rounded-xl px-3 py-2 text-[12px] font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50 sm:px-4 sm:py-2 sm:text-sm bg-amber-600 hover:bg-amber-500"
               disabled={isOut}
               onClick={() => selected && onAddToCart(selected)}
             >

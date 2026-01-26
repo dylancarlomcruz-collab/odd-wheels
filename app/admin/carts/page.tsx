@@ -52,6 +52,22 @@ type ProductClickRow = {
   } | null;
 };
 
+type VisitorItem = {
+  name: string;
+  qty: number;
+};
+
+type VisitorRow = {
+  id: string;
+  kind: "ACCOUNT" | "GUEST";
+  label: string;
+  clicks: number;
+  cartLines: number;
+  cartQty: number;
+  items: VisitorItem[];
+  lastActivity: string | null;
+};
+
 function peso(n: number) {
   try {
     return new Intl.NumberFormat("en-PH", {
@@ -95,6 +111,17 @@ function formatLogDate(value: string) {
   return Number.isNaN(d.getTime()) ? value : d.toLocaleString("en-PH");
 }
 
+function shortId(value: string) {
+  if (!value) return "";
+  return value.slice(0, 8);
+}
+
+function maxDate(a: string | null, b: string | null) {
+  if (!a) return b;
+  if (!b) return a;
+  return a > b ? a : b;
+}
+
 export default function AdminCartInsightsPage() {
   const [days, setDays] = React.useState("30");
   const [limit, setLimit] = React.useState("20");
@@ -110,6 +137,9 @@ export default function AdminCartInsightsPage() {
   const [topClicks, setTopClicks] = React.useState<ProductClickRow[]>([]);
   const [topClicksLoading, setTopClicksLoading] = React.useState(false);
   const [topClicksError, setTopClicksError] = React.useState<string | null>(null);
+  const [visitorRows, setVisitorRows] = React.useState<VisitorRow[]>([]);
+  const [visitorLoading, setVisitorLoading] = React.useState(false);
+  const [visitorError, setVisitorError] = React.useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -250,9 +280,281 @@ export default function AdminCartInsightsPage() {
     setTopClicksLoading(false);
   }
 
+  async function loadVisitors() {
+    setVisitorLoading(true);
+    setVisitorError(null);
+
+    try {
+      const [cartRes, guestCartRes, userClickRes, guestClickRes] = await Promise.all([
+        supabase
+          .from("cart_items")
+          .select(
+            "id,user_id,variant_id,qty,created_at, variant:product_variants(id,condition,price,qty, product:products(id,title,brand,model,variation,image_urls))"
+          )
+          .order("created_at", { ascending: false })
+          .limit(5000),
+        supabase
+          .from("guest_cart_items")
+          .select(
+            "session_id,variant_id,qty,updated_at, variant:product_variants(id,condition,price,qty, product:products(id,title,brand,model,variation,image_urls))"
+          )
+          .order("updated_at", { ascending: false })
+          .limit(5000),
+        supabase
+          .from("user_product_clicks")
+          .select("user_id,clicks,last_clicked_at")
+          .order("last_clicked_at", { ascending: false })
+          .limit(5000),
+        supabase
+          .from("guest_product_clicks")
+          .select("session_id,clicks,last_clicked_at")
+          .order("last_clicked_at", { ascending: false })
+          .limit(5000),
+      ]);
+
+      if (cartRes.error) throw cartRes.error;
+      if (guestCartRes.error) throw guestCartRes.error;
+      if (userClickRes.error) throw userClickRes.error;
+      if (guestClickRes.error) throw guestClickRes.error;
+
+      const cartLines = (cartRes.data as any[]) ?? [];
+      const guestCartLines = (guestCartRes.data as any[]) ?? [];
+      const userClicks = (userClickRes.data as any[]) ?? [];
+      const guestClicks = (guestClickRes.data as any[]) ?? [];
+
+      const userIds = new Set<string>();
+      cartLines.forEach((line) => {
+        const id = String(line?.user_id ?? "").trim();
+        if (id) userIds.add(id);
+      });
+      userClicks.forEach((row) => {
+        const id = String(row?.user_id ?? "").trim();
+        if (id) userIds.add(id);
+      });
+
+      const sessionIds = new Set<string>();
+      guestCartLines.forEach((line) => {
+        const id = String(line?.session_id ?? "").trim();
+        if (id) sessionIds.add(id);
+      });
+      guestClicks.forEach((row) => {
+        const id = String(row?.session_id ?? "").trim();
+        if (id) sessionIds.add(id);
+      });
+
+      const [profilesRes, guestSessionsRes] = await Promise.all([
+        userIds.size
+          ? supabase
+              .from("profiles")
+              .select("id,full_name,username")
+              .in("id", Array.from(userIds))
+          : Promise.resolve({ data: [] }),
+        sessionIds.size
+          ? supabase
+              .from("guest_sessions")
+              .select("id,last_seen_at,created_at")
+              .in("id", Array.from(sessionIds))
+          : Promise.resolve({ data: [] }),
+      ]);
+
+      const profiles = (profilesRes as any)?.data ?? [];
+      const guestSessions = (guestSessionsRes as any)?.data ?? [];
+
+      const profileMap = new Map<string, { full_name?: string; username?: string }>();
+      profiles.forEach((row: any) => {
+        if (!row?.id) return;
+        profileMap.set(String(row.id), {
+          full_name: row.full_name ?? "",
+          username: row.username ?? "",
+        });
+      });
+
+      const guestSessionMap = new Map<string, { last_seen_at?: string | null }>();
+      guestSessions.forEach((row: any) => {
+        if (!row?.id) return;
+        guestSessionMap.set(String(row.id), {
+          last_seen_at: row.last_seen_at ?? null,
+        });
+      });
+
+      const userClickMap = new Map<string, { clicks: number; last: string | null }>();
+      userClicks.forEach((row) => {
+        const userId = String(row?.user_id ?? "").trim();
+        if (!userId) return;
+        const clicks = Number(row?.clicks ?? 0);
+        const last = row?.last_clicked_at ? String(row.last_clicked_at) : null;
+        const current = userClickMap.get(userId) ?? { clicks: 0, last: null };
+        current.clicks += clicks;
+        current.last = maxDate(current.last, last);
+        userClickMap.set(userId, current);
+      });
+
+      const guestClickMap = new Map<string, { clicks: number; last: string | null }>();
+      guestClicks.forEach((row) => {
+        const sessionId = String(row?.session_id ?? "").trim();
+        if (!sessionId) return;
+        const clicks = Number(row?.clicks ?? 0);
+        const last = row?.last_clicked_at ? String(row.last_clicked_at) : null;
+        const current = guestClickMap.get(sessionId) ?? { clicks: 0, last: null };
+        current.clicks += clicks;
+        current.last = maxDate(current.last, last);
+        guestClickMap.set(sessionId, current);
+      });
+
+      const authMap = new Map<
+        string,
+        VisitorRow & { itemMap: Map<string, number> }
+      >();
+      for (const line of cartLines) {
+        const userId = String(line?.user_id ?? "").trim();
+        if (!userId) continue;
+        const qty = Number(line?.qty ?? 0);
+        const variant = line?.variant ?? null;
+        const product = variant?.product ?? null;
+        const itemName = buildItemLabel(product);
+        const current =
+          authMap.get(userId) ??
+          ({
+            id: userId,
+            kind: "ACCOUNT",
+            label: "",
+            clicks: 0,
+            cartLines: 0,
+            cartQty: 0,
+            items: [],
+            lastActivity: null,
+            itemMap: new Map<string, number>(),
+          } as VisitorRow & { itemMap: Map<string, number> });
+
+        current.cartLines += 1;
+        current.cartQty += qty;
+        current.itemMap.set(itemName, (current.itemMap.get(itemName) ?? 0) + qty);
+        current.lastActivity = maxDate(
+          current.lastActivity,
+          line?.created_at ? String(line.created_at) : null
+        );
+        authMap.set(userId, current);
+      }
+
+      const authRows: VisitorRow[] = [];
+      const authIds = new Set<string>([...authMap.keys(), ...userClickMap.keys()]);
+      authIds.forEach((userId) => {
+        const base = authMap.get(userId) ?? ({
+          id: userId,
+          kind: "ACCOUNT",
+          label: "",
+          clicks: 0,
+          cartLines: 0,
+          cartQty: 0,
+          items: [],
+          lastActivity: null,
+          itemMap: new Map<string, number>(),
+        } as VisitorRow & { itemMap: Map<string, number> });
+        const profile = profileMap.get(userId);
+        const displayName =
+          profile?.full_name?.trim() ||
+          profile?.username?.trim() ||
+          `User ${shortId(userId)}`;
+        const clickInfo = userClickMap.get(userId);
+        base.label = displayName;
+        base.clicks = clickInfo?.clicks ?? 0;
+        base.lastActivity = maxDate(base.lastActivity, clickInfo?.last ?? null);
+        base.items = Array.from(base.itemMap.entries()).map(([name, qty]) => ({
+          name,
+          qty,
+        }));
+        authRows.push(base);
+      });
+
+      const guestMap = new Map<
+        string,
+        VisitorRow & { itemMap: Map<string, number> }
+      >();
+      for (const line of guestCartLines) {
+        const sessionId = String(line?.session_id ?? "").trim();
+        if (!sessionId) continue;
+        const qty = Number(line?.qty ?? 0);
+        const variant = line?.variant ?? null;
+        const product = variant?.product ?? null;
+        const itemName = buildItemLabel(product);
+        const current =
+          guestMap.get(sessionId) ??
+          ({
+            id: sessionId,
+            kind: "GUEST",
+            label: "",
+            clicks: 0,
+            cartLines: 0,
+            cartQty: 0,
+            items: [],
+            lastActivity: null,
+            itemMap: new Map<string, number>(),
+          } as VisitorRow & { itemMap: Map<string, number> });
+
+        current.cartLines += 1;
+        current.cartQty += qty;
+        current.itemMap.set(itemName, (current.itemMap.get(itemName) ?? 0) + qty);
+        current.lastActivity = maxDate(
+          current.lastActivity,
+          line?.updated_at ? String(line.updated_at) : null
+        );
+        guestMap.set(sessionId, current);
+      }
+
+      const guestRows: VisitorRow[] = [];
+      const guestIds = new Set<string>([
+        ...guestMap.keys(),
+        ...guestClickMap.keys(),
+      ]);
+      guestIds.forEach((sessionId) => {
+        const base = guestMap.get(sessionId) ?? ({
+          id: sessionId,
+          kind: "GUEST",
+          label: "",
+          clicks: 0,
+          cartLines: 0,
+          cartQty: 0,
+          items: [],
+          lastActivity: null,
+          itemMap: new Map<string, number>(),
+        } as VisitorRow & { itemMap: Map<string, number> });
+        const clickInfo = guestClickMap.get(sessionId);
+        const sessionInfo = guestSessionMap.get(sessionId);
+        base.label = `Guest ${shortId(sessionId)}`;
+        base.clicks = clickInfo?.clicks ?? 0;
+        base.lastActivity = maxDate(base.lastActivity, clickInfo?.last ?? null);
+        base.lastActivity = maxDate(
+          base.lastActivity,
+          sessionInfo?.last_seen_at ?? null
+        );
+        base.items = Array.from(base.itemMap.entries()).map(([name, qty]) => ({
+          name,
+          qty,
+        }));
+        guestRows.push(base);
+      });
+
+      const guestOnly = guestRows.sort((a, b) => {
+        if (!a.lastActivity && !b.lastActivity) return b.clicks - a.clicks;
+        if (!a.lastActivity) return 1;
+        if (!b.lastActivity) return -1;
+        return b.lastActivity.localeCompare(a.lastActivity);
+      });
+
+      setVisitorRows(guestOnly);
+    } catch (e: any) {
+      console.error(e);
+      setVisitorError(e?.message ?? "Failed to load visitor carts.");
+      setVisitorRows([]);
+    } finally {
+      setVisitorLoading(false);
+    }
+  }
+
   function refreshAll() {
     void load();
     void loadTopClicks();
+    void loadVisitors();
   }
 
   return (
@@ -487,6 +789,90 @@ export default function AdminCartInsightsPage() {
                   );
                 })
               ) : null}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 font-semibold">
+                <Users className="h-4 w-4 text-emerald-200" />
+                Guest carts
+              </div>
+              <Button
+                variant="ghost"
+                onClick={loadVisitors}
+                disabled={visitorLoading}
+              >
+                {visitorLoading ? "Refreshing..." : "Refresh"}
+              </Button>
+            </div>
+            <div className="mt-1 text-xs text-white/60">
+              Shows guest sessions only, with total clicks and current cart contents.
+            </div>
+            <div className="mt-3 space-y-2">
+              {visitorError ? (
+                <div className="text-sm text-red-200">{visitorError}</div>
+              ) : null}
+              {visitorLoading && visitorRows.length === 0 ? (
+                <div className="text-sm text-white/60">Loading visitor carts...</div>
+              ) : null}
+              {!visitorLoading && visitorRows.length === 0 ? (
+                <div className="text-sm text-white/60">No visitor carts found.</div>
+              ) : null}
+              {visitorRows.map((row) => {
+                const itemsPreview = row.items.slice(0, 3);
+                const remaining = row.items.length - itemsPreview.length;
+                const itemSummary = itemsPreview
+                  .map((item) => `${item.qty}× ${item.name}`)
+                  .join(" · ");
+                return (
+                  <div
+                    key={`${row.kind}-${row.id}`}
+                    className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-white/10 bg-paper/5 px-3 py-2 sm:py-3"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="font-medium truncate">{row.label}</div>
+                        <Badge
+                          className={
+                            row.kind === "GUEST"
+                              ? "border-amber-500/30 text-amber-200"
+                              : "border-sky-500/30 text-sky-200"
+                          }
+                        >
+                          {row.kind === "GUEST" ? "Guest" : "Account"}
+                        </Badge>
+                        {row.lastActivity ? (
+                          <span className="text-xs text-white/50">
+                            Last activity: {formatLogDate(row.lastActivity)}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="text-xs text-white/60">
+                        {row.cartLines > 0
+                          ? `${row.cartLines} line(s) · ${row.cartQty} total qty`
+                          : "Cart empty"}
+                      </div>
+                      {itemSummary ? (
+                        <div className="text-xs text-white/50">
+                          {itemSummary}
+                          {remaining > 0 ? ` · +${remaining} more` : ""}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="flex items-center gap-6 text-right">
+                      <div>
+                        <div className="flex items-center justify-end gap-1 text-xs text-white/60">
+                          <MousePointerClick className="h-3 w-3" />
+                          Clicks
+                        </div>
+                        <div className="text-lg font-semibold">{row.clicks}</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </CardBody>
