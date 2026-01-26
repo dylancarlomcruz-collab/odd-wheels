@@ -27,10 +27,6 @@ type MediaItem = {
   preview: string;
 };
 
-const ANNOUNCEMENT_IMAGE_WIDTH = 940;
-const ANNOUNCEMENT_IMAGE_HEIGHT = 788;
-const ANNOUNCEMENT_IMAGE_RATIO = ANNOUNCEMENT_IMAGE_WIDTH / ANNOUNCEMENT_IMAGE_HEIGHT;
-
 function formatDate(value: string | null | undefined) {
   if (!value) return "-";
   const d = new Date(value);
@@ -49,12 +45,15 @@ export default function AnnouncementsPage() {
   const [error, setError] = React.useState<string | null>(null);
   const [expandedId, setExpandedId] = React.useState<string | null>(null);
   const [lightboxUrl, setLightboxUrl] = React.useState<string | null>(null);
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [editTitle, setEditTitle] = React.useState("");
+  const [editBody, setEditBody] = React.useState("");
+  const [savingEdit, setSavingEdit] = React.useState(false);
 
   const [title, setTitle] = React.useState("");
   const [body, setBody] = React.useState("");
   const [media, setMedia] = React.useState<MediaItem[]>([]);
   const [dragIndex, setDragIndex] = React.useState<number | null>(null);
-  const [processingMedia, setProcessingMedia] = React.useState(false);
   const [posting, setPosting] = React.useState(false);
   const [postError, setPostError] = React.useState<string | null>(null);
   const bodyRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -101,79 +100,14 @@ export default function AnnouncementsPage() {
     };
   }, [media]);
 
-  async function cropAnnouncementImage(file: File): Promise<MediaItem> {
-    const url = URL.createObjectURL(file);
-    try {
-      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const image = new Image();
-        image.onload = () => resolve(image);
-        image.onerror = () => reject(new Error("Failed to load image."));
-        image.src = url;
-      });
-
-      const sourceRatio = img.width / img.height;
-      let sx = 0;
-      let sy = 0;
-      let sw = img.width;
-      let sh = img.height;
-
-      if (sourceRatio > ANNOUNCEMENT_IMAGE_RATIO) {
-        sw = Math.round(img.height * ANNOUNCEMENT_IMAGE_RATIO);
-        sx = Math.round((img.width - sw) / 2);
-      } else if (sourceRatio < ANNOUNCEMENT_IMAGE_RATIO) {
-        sh = Math.round(img.width / ANNOUNCEMENT_IMAGE_RATIO);
-        sy = Math.round((img.height - sh) / 2);
-      }
-
-      const canvas = document.createElement("canvas");
-      canvas.width = ANNOUNCEMENT_IMAGE_WIDTH;
-      canvas.height = ANNOUNCEMENT_IMAGE_HEIGHT;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("Canvas not available.");
-
-      ctx.drawImage(
-        img,
-        sx,
-        sy,
-        sw,
-        sh,
-        0,
-        0,
-        ANNOUNCEMENT_IMAGE_WIDTH,
-        ANNOUNCEMENT_IMAGE_HEIGHT
-      );
-
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob(
-          (output) => (output ? resolve(output) : reject(new Error("Image crop failed."))),
-          "image/jpeg",
-          0.9
-        );
-      });
-
-      const baseName = file.name.replace(/\.[^/.]+$/, "");
-      const croppedFile = new File([blob], `${baseName}-940x788.jpg`, { type: blob.type });
-      const preview = URL.createObjectURL(croppedFile);
-      return { file: croppedFile, preview };
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-  }
-
-  async function onAddMedia(files: FileList | null) {
+  function onAddMedia(files: FileList | null) {
     if (!files?.length) return;
-    setProcessingMedia(true);
     setPostError(null);
-    try {
-      const next = await Promise.all(
-        Array.from(files).map((file) => cropAnnouncementImage(file))
-      );
-      setMedia((prev) => [...prev, ...next]);
-    } catch (err: any) {
-      setPostError(err?.message ?? "Failed to process images.");
-    } finally {
-      setProcessingMedia(false);
-    }
+    const next = Array.from(files).map((file) => ({
+      file,
+      preview: URL.createObjectURL(file),
+    }));
+    setMedia((prev) => [...prev, ...next]);
   }
 
   function removeMedia(index: number) {
@@ -240,7 +174,7 @@ export default function AnnouncementsPage() {
             <img
               src={url}
               alt={`Announcement image ${match[1]}`}
-              className="w-full aspect-[940/788] object-cover"
+              className="w-full h-auto object-contain"
             />
           </button>
         );
@@ -272,7 +206,6 @@ export default function AnnouncementsPage() {
 
   async function submitAnnouncement() {
     if (!isAdmin) return;
-    if (processingMedia) return;
     const trimmedTitle = title.trim();
     const trimmedBody = body.trim();
 
@@ -318,6 +251,38 @@ export default function AnnouncementsPage() {
       return;
     }
     await loadAnnouncements(true);
+  }
+
+  function startEdit(announcement: Announcement) {
+    if (!isAdmin) return;
+    setEditingId(announcement.id);
+    setEditTitle(announcement.title ?? "");
+    setEditBody(announcement.body ?? "");
+    setExpandedId(announcement.id);
+  }
+
+  async function saveEdit(id: string) {
+    if (!isAdmin) return;
+    setSavingEdit(true);
+    setError(null);
+    try {
+      const trimmedTitle = editTitle.trim();
+      const trimmedBody = editBody.trim();
+      const { error: updateError } = await supabase
+        .from("announcements")
+        .update({
+          title: trimmedTitle || null,
+          body: trimmedBody || "",
+        })
+        .eq("id", id);
+      if (updateError) throw updateError;
+      setEditingId(null);
+      await loadAnnouncements(true);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to update announcement.");
+    } finally {
+      setSavingEdit(false);
+    }
   }
 
   async function togglePinned(announcement: Announcement) {
@@ -388,7 +353,7 @@ export default function AnnouncementsPage() {
             <label className="block text-sm text-white/80">
               Photos
               <span className="ml-2 text-[11px] text-white/50">
-                Auto-cropped to 940x788px. Use placeholders to position them.
+                Original ratio and quality preserved. Use placeholders to position them.
               </span>
               <input
                 type="file"
@@ -424,7 +389,7 @@ export default function AnnouncementsPage() {
                     <img
                       src={item.preview}
                       alt={`Upload ${index + 1}`}
-                      className="w-full aspect-[940/788] object-cover"
+                      className="w-full h-auto object-contain"
                     />
                     <div className="absolute left-2 top-2 rounded-full bg-black/70 px-2 py-1 text-[10px] text-white">
                       Image {index + 1}
@@ -447,12 +412,9 @@ export default function AnnouncementsPage() {
                 ))}
               </div>
             ) : null}
-            {processingMedia ? (
-              <div className="text-xs text-white/50">Processing images...</div>
-            ) : null}
             {postError ? <div className="text-xs text-red-200">{postError}</div> : null}
             <div className="flex items-center justify-end">
-              <Button onClick={submitAnnouncement} disabled={posting || processingMedia}>
+              <Button onClick={submitAnnouncement} disabled={posting}>
                 {posting ? "Posting..." : "Post announcement"}
               </Button>
             </div>
@@ -479,6 +441,7 @@ export default function AnnouncementsPage() {
             <div className="space-y-4">
               {announcements.map((announcement) => {
                 const isExpanded = expandedId === announcement.id;
+                const isEditing = editingId === announcement.id;
                 return (
                   <div
                     key={announcement.id}
@@ -491,6 +454,7 @@ export default function AnnouncementsPage() {
                       )
                     }
                     onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget) return;
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
                         setExpandedId((prev) =>
@@ -499,82 +463,151 @@ export default function AnnouncementsPage() {
                       }
                     }}
                   >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <div className="text-sm font-semibold">
-                        {announcement.title || "Announcement"}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm font-semibold">
+                          {announcement.title || "Announcement"}
+                        </div>
+                        {announcement.pinned ? (
+                          <Badge className="border-amber-400/40 text-amber-200">Pinned</Badge>
+                        ) : null}
+                        {!announcement.is_active ? (
+                          <Badge className="border-red-500/30 text-red-200">Hidden</Badge>
+                        ) : null}
                       </div>
-                      {announcement.pinned ? (
-                        <Badge className="border-amber-400/40 text-amber-200">Pinned</Badge>
+                      <div className="text-xs text-white/50">
+                        {formatDate(announcement.created_at)}
+                      </div>
+                    </div>
+                  {isEditing ? (
+                    <div
+                      className="mt-3 space-y-3"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <Input
+                        label="Title (optional)"
+                        value={editTitle}
+                        onChange={(event) => setEditTitle(event.target.value)}
+                        placeholder="Announcement title"
+                      />
+                      <Textarea
+                        label="Message"
+                        value={editBody}
+                        onChange={(event) => setEditBody(event.target.value)}
+                        placeholder="Write your announcement..."
+                      />
+                    </div>
+                  ) : (
+                    <div
+                      className={
+                        isExpanded
+                          ? "mt-3 space-y-3"
+                          : "mt-3 space-y-3 max-h-[420px] overflow-hidden"
+                      }
+                    >
+                      {announcement.body ? (
+                        (() => {
+                          const inline = /\{image:\d+\}/.test(announcement.body ?? "");
+                          const urls = announcement.image_urls ?? [];
+                          return inline ? (
+                            renderBodyWithImages(announcement.body, urls)
+                          ) : (
+                            <div
+                              className={
+                                isExpanded
+                                  ? "text-sm text-white/80 whitespace-pre-wrap"
+                                  : "text-sm text-white/80 whitespace-pre-wrap line-clamp-4"
+                              }
+                            >
+                              {announcement.body}
+                            </div>
+                          );
+                        })()
                       ) : null}
-                      {!announcement.is_active ? (
-                        <Badge className="border-red-500/30 text-red-200">Hidden</Badge>
+                      {announcement.image_urls?.length &&
+                      !/\{image:\d+\}/.test(announcement.body ?? "") ? (
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                          {announcement.image_urls.map((url, index) => (
+                            <button
+                              key={url}
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setLightboxUrl(url);
+                              }}
+                              className="overflow-hidden rounded-xl border border-white/10 bg-black/20 text-left"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={url}
+                                alt={`Announcement ${index + 1}`}
+                                className="w-full h-auto object-contain"
+                              />
+                            </button>
+                          ))}
+                        </div>
                       ) : null}
                     </div>
-                    <div className="text-xs text-white/50">
-                      {formatDate(announcement.created_at)}
-                    </div>
-                  </div>
-                  <div className={isExpanded ? "mt-3 space-y-3" : "mt-3 space-y-3 max-h-[420px] overflow-hidden"}>
-                    {announcement.body ? (
-                      (() => {
-                        const inline = /\{image:\d+\}/.test(announcement.body ?? "");
-                        const urls = announcement.image_urls ?? [];
-                        return inline ? (
-                          renderBodyWithImages(announcement.body, urls)
+                  )}
+                    {!isExpanded ? (
+                      <div className="mt-2 text-xs text-white/40">
+                        Click to view full post
+                      </div>
+                    ) : null}
+                    {isAdmin ? (
+                      <div className="mt-3 flex justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            togglePinned(announcement);
+                          }}
+                        >
+                          {announcement.pinned ? "Unpin" : "Pin"}
+                        </Button>
+                        {isEditing ? (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setEditingId(null);
+                              }}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                saveEdit(announcement.id);
+                              }}
+                              disabled={savingEdit}
+                            >
+                              {savingEdit ? "Saving..." : "Save"}
+                            </Button>
+                          </>
                         ) : (
-                          <div className={isExpanded ? "text-sm text-white/80 whitespace-pre-wrap" : "text-sm text-white/80 whitespace-pre-wrap line-clamp-4"}>
-                            {announcement.body}
-                          </div>
-                        );
-                      })()
-                    ) : null}
-                    {announcement.image_urls?.length &&
-                    !/\{image:\d+\}/.test(announcement.body ?? "") ? (
-                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                        {announcement.image_urls.map((url, index) => (
-                          <button
-                            key={url}
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setLightboxUrl(url);
-                            }}
-                            className="overflow-hidden rounded-xl border border-white/10 bg-black/20 text-left"
-                          >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={url}
-                              alt={`Announcement ${index + 1}`}
-                              className="w-full aspect-[940/788] object-cover"
-                            />
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                  {!isExpanded ? (
-                    <div className="mt-2 text-xs text-white/40">
-                      Click to view full post
-                    </div>
-                  ) : null}
-                      {isAdmin ? (
-                        <div className="mt-3 flex justify-end gap-2">
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => togglePinned(announcement)}
-                            onMouseDown={(event) => event.stopPropagation()}
-                            onClickCapture={(event) => event.stopPropagation()}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              startEdit(announcement);
+                            }}
                           >
-                            {announcement.pinned ? "Unpin" : "Pin"}
+                            Edit
                           </Button>
-                          <Button
-                            variant="danger"
-                            size="sm"
-                            onClick={() => removeAnnouncement(announcement.id)}
-                            onMouseDown={(event) => event.stopPropagation()}
-                            onClickCapture={(event) => event.stopPropagation()}
+                        )}
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            removeAnnouncement(announcement.id);
+                          }}
                         >
                           Delete
                         </Button>
