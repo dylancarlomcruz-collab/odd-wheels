@@ -603,13 +603,6 @@ export default function ShopPageClient() {
   }, [recentEntries, productById, sortedProducts]);
 
   async function recordProductClick(productId: string) {
-    try {
-      await supabase.rpc("increment_product_click", {
-        product_id: productId,
-      });
-    } catch (e) {
-      console.error("Failed to record click", e);
-    }
     supabase
       .rpc("record_recent_view", { p_product_id: productId })
       .then(

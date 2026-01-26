@@ -9,6 +9,7 @@ import { formatConditionLabel } from "@/lib/conditions";
 import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
 import { getOptionPricing, getProductEffectiveRange } from "@/lib/pricing";
 import { formatTitle } from "@/lib/text";
+import { supabase } from "@/lib/supabase/browser";
 
 type ConditionOption = {
   id: string; // this is the PRODUCT ROW ID for that condition
@@ -105,6 +106,8 @@ export default function ProductCard({
   const issueTouchStartX = React.useRef<number | null>(null);
   const issueTouchStartY = React.useRef<number | null>(null);
   const previewScrollRef = React.useRef<HTMLDivElement | null>(null);
+  const cardRef = React.useRef<HTMLDivElement | null>(null);
+  const loggedPreviewIds = React.useRef(new Set<string>());
 
   const selected = React.useMemo(
     () =>
@@ -330,12 +333,61 @@ export default function ProductCard({
     setIssueIndex(0);
   }, [selectedId]);
 
+  React.useEffect(() => {
+    const node = cardRef.current;
+    if (!node) return;
+
+    if (typeof IntersectionObserver === "undefined") {
+      void logProductPreviewOnce(product.key);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          observer.disconnect();
+          void logProductPreviewOnce(product.key);
+          break;
+        }
+      },
+      { root: null, rootMargin: "0px 0px -20% 0px", threshold: 0.25 }
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [product.key]);
+
   function closePreview() {
     setIsOpen(false);
     setPreviewStack([]);
     setActiveIndex(0);
     setIssueOpen(false);
     setIssueIndex(0);
+  }
+
+  async function logProductPreview(productId: string) {
+    if (!productId) return;
+    try {
+      await supabase.rpc("increment_product_click", { p_product_id: productId });
+    } catch (e) {
+      console.error("Failed to log product click", e);
+    }
+    supabase
+      .rpc("record_recent_view", { p_product_id: productId })
+      .then(
+        () => undefined,
+        () => {
+          // ignore if not authenticated
+        }
+      );
+  }
+
+  function logProductPreviewOnce(productId: string) {
+    if (!productId) return;
+    if (loggedPreviewIds.current.has(productId)) return;
+    loggedPreviewIds.current.add(productId);
+    void logProductPreview(productId);
   }
 
   function openPreview() {
@@ -347,6 +399,7 @@ export default function ProductCard({
     setPreviewStack([{ product, selectedId: nextSelectedId }]);
     setIsOpen(true);
     recordRecentView(product.key);
+    void logProductPreviewOnce(product.key);
     onProductClick?.(product);
   }
 
@@ -360,6 +413,7 @@ export default function ProductCard({
       { product: item, selectedId: item.options[0]?.id ?? "" },
     ]);
     recordRecentView(item.key);
+    void logProductPreviewOnce(item.key);
     onProductClick?.(item);
   }
 
@@ -426,11 +480,15 @@ export default function ProductCard({
 
   return (
     <>
-      <div className="rounded-xl sm:rounded-2xl overflow-hidden bg-bg-900/70 dark:bg-paper/5 border border-white/20 dark:border-white/10 shadow-sm">
+      <div
+        ref={cardRef}
+        className="rounded-xl sm:rounded-2xl overflow-hidden bg-bg-900/70 dark:bg-paper/5 border border-white/20 dark:border-white/10 shadow-sm"
+      >
         <button
           type="button"
           onClick={() => {
             if (onImageClick) {
+              onProductClick?.(product);
               onImageClick(product, cardImage);
               return;
             }

@@ -47,7 +47,7 @@ export default function ProductDetailPage() {
         }
       );
     supabase
-      .rpc("increment_product_click", { product_id: product.id })
+      .rpc("increment_product_click", { p_product_id: product.id })
       .then(
         () => undefined,
         () => {

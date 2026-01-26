@@ -253,11 +253,6 @@ export default function SearchContent() {
 
   async function recordClick(productId: string) {
     try {
-      await supabase.rpc("increment_product_click", { product_id: productId });
-    } catch (err) {
-      console.error("Failed to log product click", err);
-    }
-    try {
       await supabase.rpc("record_recent_view", { p_product_id: productId });
     } catch {
       // ignore if not authenticated
