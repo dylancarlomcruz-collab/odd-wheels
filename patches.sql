@@ -15,6 +15,20 @@ for insert with check (bucket_id = 'sell-trade-uploads' and auth.role() = 'authe
 alter table public.cart_items
   add column if not exists protector_selected boolean not null default false;
 
+-- Price charm: round down to prices ending in 9 for display
+update public.product_variants
+set
+  price = case
+    when price is null then null
+    when price < 9 then price
+    else (floor((price - 9) / 10) * 10 + 9)
+  end,
+  sale_price = case
+    when sale_price is null then null
+    when sale_price < 9 then sale_price
+    else (floor((sale_price - 9) / 10) * 10 + 9)
+  end;
+
 -- Shipping workflow patches
 
 alter table public.settings

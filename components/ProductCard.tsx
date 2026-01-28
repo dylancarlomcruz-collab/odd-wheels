@@ -606,7 +606,7 @@ export default function ProductCard({
           ) : null}
 
           <div className="mt-1.5 sm:mt-3 space-y-2">
-            <div className="flex min-h-[1.6rem] flex-nowrap gap-1.5 overflow-x-auto pb-0.5">
+            <div className="flex flex-wrap gap-1">
               {product.options.map((o) => {
                 const isSelected = o.id === selectedId;
                 return (
@@ -618,7 +618,7 @@ export default function ProductCard({
                       setHasPicked(true);
                     }}
                     className={[
-                      "rounded-full border px-1.5 py-0.5 text-[10px] sm:px-3 sm:py-1 sm:text-xs transition",
+                      "rounded-full border px-1.5 py-0.5 text-[9px] leading-none sm:px-2 sm:py-0.5 sm:text-[10px] transition",
                       isSelected
                         ? "bg-sky-200 text-sky-900 border-sky-300 dark:bg-sky-500/20 dark:text-sky-100 dark:border-sky-400/40"
                         : "border-white/20 bg-bg-900/60 text-white/80 hover:bg-bg-900/80 dark:border-white/10 dark:bg-paper/5 dark:text-white/70 dark:hover:bg-paper/10",

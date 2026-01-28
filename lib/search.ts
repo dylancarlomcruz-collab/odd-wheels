@@ -15,6 +15,80 @@ const MODEL_SYNONYMS: Array<{ pattern: RegExp; append: string }> = [
   { pattern: /\bgtr\b/i, append: "gt-r" },
 ];
 
+const SMART_SYNONYM_GROUPS: Array<{
+  name: string;
+  triggers: string[];
+  expands: string[];
+}> = [
+  {
+    name: "lbwk",
+    triggers: [
+      "lbwk",
+      "lb-works",
+      "lb works",
+      "lb",
+      "liberty",
+      "liberty walk",
+      "libertywalk",
+    ],
+    expands: [
+      "lbwk",
+      "lb-works",
+      "lb works",
+      "liberty",
+      "liberty walk",
+      "libertywalk",
+    ],
+  },
+  {
+    name: "rwb",
+    triggers: [
+      "rwb",
+      "rauh welt",
+      "rauh-welt",
+      "rauh welt begriff",
+      "rauh-welt begriff",
+      "rauhwelt",
+      "rauhwelt begriff",
+      "rauh",
+      "welt",
+      "begriff",
+    ],
+    expands: [
+      "rwb",
+      "rauh welt",
+      "rauh-welt",
+      "rauh welt begriff",
+      "rauh-welt begriff",
+      "rauhwelt",
+      "rauhwelt begriff",
+      "rauh",
+      "welt",
+      "begriff",
+    ],
+  },
+];
+
+const MAX_EXPANDED_TERMS = 20;
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasTrigger(normalized: string, terms: string[]) {
+  for (const term of terms) {
+    const clean = normalizeSearchTerm(term);
+    if (!clean) continue;
+    if (clean.includes(" ") || clean.includes("-")) {
+      if (normalized.includes(clean)) return true;
+      continue;
+    }
+    const regex = new RegExp(`\\b${escapeRegExp(clean)}\\b`);
+    if (regex.test(normalized)) return true;
+  }
+  return false;
+}
+
 export function normalizeSearchTerm(value: string) {
   const raw = String(value ?? "");
   const base = raw
@@ -40,6 +114,12 @@ export function expandSearchTerms(value: string) {
   terms.add(raw);
   terms.add(normalized);
 
+  SMART_SYNONYM_GROUPS.forEach((group) => {
+    if (hasTrigger(normalized, group.triggers)) {
+      group.expands.forEach((term) => terms.add(term));
+    }
+  });
+
   for (const rule of MODEL_SYNONYMS) {
     if (rule.pattern.test(normalized)) {
       terms.add(`${normalized} ${rule.append}`.trim());
@@ -50,11 +130,14 @@ export function expandSearchTerms(value: string) {
   return Array.from(terms)
     .map((term) => term.trim())
     .filter(Boolean)
-    .slice(0, 6);
+    .slice(0, MAX_EXPANDED_TERMS);
 }
 
 function sanitizeIlikeTerm(term: string) {
-  return term.replace(/[%,()]/g, " ").replace(/\s+/g, " ").trim();
+  return term
+    .replace(/[%,()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function buildSearchOr(terms: string[]) {
@@ -120,7 +203,10 @@ export function rememberSearchTerm(term: string) {
     ts: Date.now(),
   };
   try {
-    window.localStorage.setItem("oddwheels:last_search", JSON.stringify(payload));
+    window.localStorage.setItem(
+      "oddwheels:last_search",
+      JSON.stringify(payload),
+    );
     const history = readSearchHistory();
     const now = Date.now();
     const existing = history.find((entry) => entry.term === normalized);
@@ -134,7 +220,10 @@ export function rememberSearchTerm(term: string) {
       .slice()
       .sort((a, b) => b.count - a.count || b.lastUsed - a.lastUsed)
       .slice(0, 12);
-    window.localStorage.setItem("oddwheels:search_history", JSON.stringify(next));
+    window.localStorage.setItem(
+      "oddwheels:search_history",
+      JSON.stringify(next),
+    );
   } catch {
     // ignore
   }

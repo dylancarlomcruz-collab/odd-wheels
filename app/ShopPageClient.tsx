@@ -2,12 +2,14 @@
 
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { SlidersHorizontal, X } from "lucide-react";
 import ProductCard, { type ShopProduct } from "@/components/ProductCard";
 import { supabase } from "@/lib/supabase/browser";
 import { useCart } from "@/hooks/useCart";
 import { toast } from "@/components/ui/toast";
 import { collapseVariants, type VariantRow } from "@/lib/shopProducts";
 import { readRecentViewEntries } from "@/lib/recentViews";
+import { formatConditionLabel, isBlisterCondition } from "@/lib/conditions";
 import {
   buildProductSearchText,
   buildSearchTermTokens,
@@ -50,11 +52,84 @@ const BRAND_BUTTON_STYLES = {
   idle:
     "bg-bg-950/40 text-white/70 border-white/10 hover:bg-sky-500/10 hover:text-sky-900 dark:hover:text-sky-100",
 };
+const FILTER_CHIP_STYLES = {
+  active:
+    "border-amber-400/60 bg-amber-400/20 text-amber-100 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.15)]",
+  idle:
+    "border-white/10 bg-bg-950/50 text-white/70 hover:bg-bg-950/70 hover:text-white",
+};
 
 function normalizeBrandKey(value: string | null | undefined) {
   return String(value ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
+}
+
+const BOXED_TRUESCALES_BRANDS = new Set([
+  "minigt",
+  "kaidohouse",
+  "kaido",
+  "bmc",
+  "bmcreations",
+  "poprace",
+]);
+const TOMICA_BRANDS = new Set([
+  "tomica",
+  "tlvn",
+  "tlv",
+  "tomicalimitedvintage",
+  "tomicalimitedvintageneo",
+]);
+const HOT_WHEELS_BRANDS = ["hotwheels", "hotwheel"];
+const TRUCK_KEYWORDS = ["truck", "trucks", "pickup", "hauler", "semi", "tractor", "rig", "lorry"];
+const TRUESCALE_KEYWORDS = ["truescale", "true scale", "tsm", "acrylic"];
+
+function matchesKeyword(text: string, keyword: string) {
+  const padded = ` ${text} `;
+  return padded.includes(` ${keyword} `);
+}
+
+function matchesAnyKeyword(text: string, keywords: string[]) {
+  for (const keyword of keywords) {
+    if (matchesKeyword(text, keyword)) return true;
+  }
+  return false;
+}
+
+function matchesCategory(product: any, category: string) {
+  const brandKey = normalizeBrandKey(product?.brand);
+  const text = buildProductSearchText(product);
+  switch (category) {
+    case "boxed-truescales":
+      return BOXED_TRUESCALES_BRANDS.has(brandKey);
+    case "tomicas":
+      return TOMICA_BRANDS.has(brandKey);
+    case "hot-wheels":
+      return HOT_WHEELS_BRANDS.some((key) => brandKey.includes(key));
+    case "trucks":
+      return matchesAnyKeyword(text, TRUCK_KEYWORDS);
+    case "dioramas":
+      return (
+        matchesKeyword(text, "diorama") ||
+        (product?.options ?? []).some(
+          (opt: any) => String(opt?.ship_class ?? "").toLowerCase() === "diorama"
+        )
+      );
+    case "truescales":
+      return (
+        matchesAnyKeyword(text, TRUESCALE_KEYWORDS) ||
+        (product?.options ?? []).some((opt: any) => {
+          const shipClass = String(opt?.ship_class ?? "").toLowerCase();
+          return shipClass.includes("acrylic") || shipClass.includes("truescale");
+        })
+      );
+    case "blistered":
+      return (product?.options ?? []).some((opt: any) =>
+        isBlisterCondition(opt?.condition_raw)
+      );
+    default:
+      return true;
+  }
 }
 
 function getBrandButtonClasses(active: boolean, joined: boolean) {
@@ -66,6 +141,20 @@ function getBrandButtonClasses(active: boolean, joined: boolean) {
       : "rounded-lg",
     toneClasses,
   ].join(" ");
+}
+
+function getFilterChipClasses(active: boolean) {
+  return [
+    "inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold leading-none transition",
+    active ? FILTER_CHIP_STYLES.active : FILTER_CHIP_STYLES.idle,
+  ].join(" ");
+}
+
+function toggleValue(list: string[], value: string) {
+  if (list.includes(value)) {
+    return list.filter((item) => item !== value);
+  }
+  return [...list, value];
 }
 
 function getMoreButtonClasses(joined: boolean) {
@@ -111,6 +200,13 @@ export default function ShopPageClient() {
   const [adminEditProduct, setAdminEditProduct] =
     React.useState<AdminProduct | null>(null);
   const [brandTab, setBrandTab] = React.useState<string>(BRAND_ALL_KEY);
+  const [filtersOpen, setFiltersOpen] = React.useState(false);
+  const [selectedCategories, setSelectedCategories] = React.useState<string[]>(
+    []
+  );
+  const [selectedConditions, setSelectedConditions] = React.useState<string[]>(
+    []
+  );
   const [showAllBrands, setShowAllBrands] = React.useState(false);
   const [brandColumns, setBrandColumns] = React.useState(BRAND_COLUMN_DEFAULT);
   const [expandedSections, setExpandedSections] = React.useState<
@@ -355,6 +451,32 @@ export default function ShopPageClient() {
     return { byCount, byLabel, labelByKey };
   }, [shopProducts]);
 
+  const conditionOptions = React.useMemo(
+    () => [
+      { key: "sealed", label: formatConditionLabel("sealed") },
+      { key: "unsealed", label: formatConditionLabel("unsealed") },
+      { key: "near_mint", label: formatConditionLabel("near_mint") },
+      { key: "with_issues", label: formatConditionLabel("with_issues") },
+    ],
+    []
+  );
+
+  const categoryOptions = React.useMemo(
+    () => [
+      {
+        key: "boxed-truescales",
+        label: "Boxed truescales",
+      },
+      { key: "tomicas", label: "Tomicas" },
+      { key: "hot-wheels", label: "Hot Wheels" },
+      { key: "trucks", label: "Trucks" },
+      { key: "dioramas", label: "Dioramas" },
+      { key: "truescales", label: "Truescales" },
+      { key: "blistered", label: "Blistered" },
+    ],
+    []
+  );
+
   const productById = React.useMemo(() => {
     const map = new Map<string, (typeof shopProducts)[number]>();
     for (const p of shopProducts) {
@@ -411,6 +533,10 @@ export default function ShopPageClient() {
     return [{ key: BRAND_ALL_KEY, label: "All" }, ...list];
   }, [brandStats]);
 
+  const activeFilterCount = React.useMemo(() => {
+    return selectedCategories.length + selectedConditions.length;
+  }, [selectedCategories.length, selectedConditions.length]);
+
   const maxVisibleBrands = React.useMemo(() => {
     const reserveMore = allBrandTabs.length > brandColumns;
     return Math.max(1, brandColumns - (reserveMore ? 1 : 0));
@@ -461,11 +587,36 @@ export default function ShopPageClient() {
   }, [sortedProducts, searchTermTokens]);
 
   const filtered = React.useMemo(() => {
-    if (brandTab === BRAND_ALL_KEY) return searchFiltered;
-    return searchFiltered.filter(
-      (p) => normalizeBrandKey(p.brand) === brandTab
-    );
-  }, [searchFiltered, brandTab]);
+    const applyBrandTab = selectedCategories.length === 0;
+    const brandKeys =
+      applyBrandTab && brandTab !== BRAND_ALL_KEY ? new Set([brandTab]) : null;
+    const conditionKeys = selectedConditions.length
+      ? new Set(selectedConditions)
+      : null;
+    const categoryKeys = selectedCategories.length
+      ? new Set(selectedCategories)
+      : null;
+
+    return searchFiltered.filter((p) => {
+      if (brandKeys) {
+        const brandKey = normalizeBrandKey(p.brand);
+        if (!brandKeys.has(brandKey)) return false;
+      }
+      if (conditionKeys) {
+        const matchesCondition = p.options?.some((opt) =>
+          conditionKeys.has(String((opt as any).condition_raw ?? ""))
+        );
+        if (!matchesCondition) return false;
+      }
+      if (categoryKeys) {
+        const matchesCategoryFilter = Array.from(categoryKeys).some((key) =>
+          matchesCategory(p, key)
+        );
+        if (!matchesCategoryFilter) return false;
+      }
+      return true;
+    });
+  }, [searchFiltered, brandTab, selectedCategories, selectedConditions]);
 
   const sortedFiltered = React.useMemo(() => {
     if (sortBy === "relevance") return filtered;
@@ -778,7 +929,11 @@ export default function ShopPageClient() {
     () => feedSections.reduce((sum, section) => sum + section.items.length, 0),
     [feedSections]
   );
-  const allowSuggestions = sortBy === "relevance";
+  const allowSuggestions =
+    sortBy === "relevance" &&
+    selectedCategories.length === 0 &&
+    selectedConditions.length === 0 &&
+    brandTab === BRAND_ALL_KEY;
   const mainSection = React.useMemo(() => {
     return (
       feedSections.find((section) => section.key === "all") ??
@@ -855,7 +1010,10 @@ export default function ShopPageClient() {
                     <button
                       key={b.key}
                       type="button"
-                      onClick={() => setBrandTab(b.key)}
+                      onClick={() => {
+                        setBrandTab(b.key);
+                        if (selectedCategories.length) setSelectedCategories([]);
+                      }}
                       className={getBrandButtonClasses(
                         b.key === brandTab,
                         false
@@ -875,6 +1033,21 @@ export default function ShopPageClient() {
                   ) : null}
                 </div>
               </div>
+              <button
+                type="button"
+                onClick={() => setFiltersOpen((prev) => !prev)}
+                className="relative inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-bg-950/50 text-white/70 transition hover:bg-bg-950/70 hover:text-white"
+                aria-expanded={filtersOpen}
+                aria-controls="shop-filters-panel"
+                aria-label={filtersOpen ? "Close filters" : "Open filters"}
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                {activeFilterCount ? (
+                  <span className="absolute -right-1 -top-1 rounded-full border border-amber-400/40 bg-amber-400/20 px-1.5 py-0.5 text-[9px] text-amber-100">
+                    {activeFilterCount}
+                  </span>
+                ) : null}
+              </button>
               <button
                 type="button"
                 onClick={toggleWideView}
@@ -911,6 +1084,7 @@ export default function ShopPageClient() {
                       onClick={() => {
                         setBrandTab(b.key);
                         setShowAllBrands(false);
+                        if (selectedCategories.length) setSelectedCategories([]);
                       }}
                       className={getBrandButtonClasses(
                         b.key === brandTab,
@@ -920,6 +1094,91 @@ export default function ShopPageClient() {
                       {b.label}
                     </button>
                   ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {filtersOpen ? (
+            <div
+              id="shop-filters-panel"
+              className="-mx-2 border-b border-white/10 bg-bg-900/95 px-2 py-2 sm:-mx-4 sm:px-4"
+            >
+              <div className="mx-auto max-w-6xl space-y-1.5">
+                <div className="flex items-center justify-end gap-2">
+                  <div className="flex items-center gap-2">
+                    {activeFilterCount ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCategories([]);
+                          setSelectedConditions([]);
+                        }}
+                        className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-bg-950/50 px-2 py-1 text-[10px] uppercase tracking-wide text-white/60 hover:bg-bg-950/70 hover:text-white"
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => setFiltersOpen(false)}
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-bg-950/50 text-white/60 hover:bg-bg-950/70 hover:text-white"
+                      aria-label="Close filters"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <div className="space-y-1">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-white/50">
+                      Categories
+                    </div>
+                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                      {categoryOptions.map((category) => (
+                        <button
+                          key={category.key}
+                          type="button"
+                          className={getFilterChipClasses(
+                            selectedCategories.includes(category.key)
+                          )}
+                          onClick={() => {
+                            setSelectedCategories((prev) => {
+                              const next = toggleValue(prev, category.key);
+                              if (next.length) setBrandTab(BRAND_ALL_KEY);
+                              return next;
+                            });
+                          }}
+                        >
+                          <span>{category.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-white/50">
+                      Condition
+                    </div>
+                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                      {conditionOptions.map((condition) => (
+                        <button
+                          key={condition.key}
+                          type="button"
+                          className={getFilterChipClasses(
+                            selectedConditions.includes(condition.key)
+                          )}
+                          onClick={() =>
+                            setSelectedConditions((prev) =>
+                              toggleValue(prev, condition.key)
+                            )
+                          }
+                        >
+                          <span>{condition.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -946,9 +1205,8 @@ export default function ShopPageClient() {
             </div>
             {(() => {
               const nodes: React.ReactNode[] = [];
-              const suggestionQueue = allowSuggestions
-                ? suggestionSections.slice()
-                : [];
+              const suggestionQueue =
+                allowSuggestions && !hasSearch ? suggestionSections.slice() : [];
               const insertAfter = [8, 20, 32, 44];
               const resolvedInsertAfter = insertAfter.length
                 ? insertAfter
@@ -1033,6 +1291,11 @@ export default function ShopPageClient() {
               });
               while (suggestionQueue.length) {
                 renderSectionBlock(suggestionQueue.shift()!);
+              }
+              if (hasSearch && suggestionSections.length) {
+                suggestionSections.forEach((section) => {
+                  renderSectionBlock(section);
+                });
               }
               return nodes;
             })()}
