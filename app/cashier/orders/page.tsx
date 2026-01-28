@@ -143,8 +143,13 @@ export default function CashierOrdersPage() {
     window.setTimeout(() => setCopiedId((cur) => (cur === o.id ? null : cur)), 1200);
   }
 
-  const pendingApproval = orders.filter((o) => o.status === "PENDING_APPROVAL");
-  const paymentSubmitted = orders.filter((o) => o.status === "PAYMENT_SUBMITTED");
+  const actionableOrders = orders.filter((o) =>
+    ["PENDING_APPROVAL", "PENDING_STAFF_APPROVAL", "PAYMENT_SUBMITTED", "PAYMENT_REVIEW"].includes(
+      String(o.status ?? "").toUpperCase()
+    )
+  );
+  const pendingApproval = actionableOrders.filter((o) => o.status === "PENDING_APPROVAL");
+  const paymentSubmitted = actionableOrders.filter((o) => o.status === "PAYMENT_SUBMITTED");
 
   return (
     <div className="space-y-6">
@@ -154,7 +159,7 @@ export default function CashierOrdersPage() {
             <div className="text-xl font-semibold">Orders & Approvals</div>
             <div className="text-sm text-white/60">Approve orders, approve receipts. Includes POS + WEB orders.</div>
           </div>
-          <Badge>{orders.length}</Badge>
+          <Badge>{actionableOrders.length}</Badge>
         </CardHeader>
 
         <CardBody className="space-y-6">
@@ -171,11 +176,11 @@ export default function CashierOrdersPage() {
 
           {loading ? (
             <div className="text-white/60">Loading...</div>
-          ) : orders.length === 0 ? (
+          ) : actionableOrders.length === 0 ? (
             <div className="text-white/60">No orders.</div>
           ) : (
             <div className="space-y-3">
-              {orders.map((o: any) => {
+              {actionableOrders.map((o: any) => {
                 const details = parseJsonMaybe(o.shipping_details) ?? {};
                 const method = String(details.method ?? o.shipping_method ?? "").toUpperCase();
                 const isCop = method === "LBC" && Boolean(details.cop);

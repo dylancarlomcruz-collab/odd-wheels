@@ -85,14 +85,27 @@ export default function AdminSalesPage() {
       const startISO = `${from}T00:00:00`;
       const endISO = `${to}T23:59:59`;
 
-      const { data: o, error } = await supabase
+      let { data: o, error } = await supabase
         .from("orders")
         .select("id,created_at,total,channel,payment_status")
-        .eq("payment_status", "PAID")
+        .or("payment_status.eq.PAID,channel.eq.POS")
         .gte("created_at", startISO)
         .lte("created_at", endISO)
         .order("created_at", { ascending: true })
         .limit(5000);
+
+      if (error && String(error.message ?? "").includes("channel")) {
+        const retry = await supabase
+          .from("orders")
+          .select("id,created_at,total,channel,payment_status")
+          .eq("payment_status", "PAID")
+          .gte("created_at", startISO)
+          .lte("created_at", endISO)
+          .order("created_at", { ascending: true })
+          .limit(5000);
+        o = retry.data;
+        error = retry.error;
+      }
 
       if (error) throw error;
 
@@ -117,7 +130,7 @@ export default function AdminSalesPage() {
       }
 
       const itemSelect =
-        "order_id,variant_id,item_name,qty,line_total,cost_each,product_variant:product_variants(id,cost,product:products(id,title,brand,model,variation,image_urls))";
+        "order_id,variant_id,item_id,item_name,qty,line_total,unit_price,price_each,cost_each,product_variant:product_variants(id,cost,price,product:products(id,title,brand,model,variation,image_urls))";
 
       const { data: items, error: iErr } = await supabase
         .from("order_items")
@@ -128,6 +141,27 @@ export default function AdminSalesPage() {
       if (iErr) throw iErr;
 
       const rows = (items as any[]) ?? [];
+      const missingVariantIds = Array.from(
+        new Set(
+          rows
+            .filter((it) => !it?.product_variant && it?.item_id)
+            .map((it) => String(it.item_id))
+            .filter(Boolean)
+        )
+      );
+
+      const fallbackVariants = new Map<string, any>();
+      if (missingVariantIds.length) {
+        const { data: vRows, error: vErr } = await supabase
+          .from("product_variants")
+          .select("id,cost,price,product:products(id,title,brand,model,variation,image_urls)")
+          .in("id", missingVariantIds)
+          .limit(10000);
+        if (vErr) throw vErr;
+        (vRows as any[] | null)?.forEach((v) => {
+          if (v?.id) fallbackVariants.set(String(v.id), v);
+        });
+      }
       const imap = new Map<string, { key: string; name: string; qty: number; sales: number; cogs: number; profit: number }>();
       const omap = new Map<string, { revenue: number; cogs: number }>();
       let revenueTotal = 0;
@@ -137,9 +171,25 @@ export default function AdminSalesPage() {
         const name = buildItemLabel(it);
         const qtyRaw = Number(it.qty ?? 0);
         const qty = Number.isFinite(qtyRaw) ? qtyRaw : 0;
-        const salesRaw = Number(it.line_total ?? 0);
-        const sales = Number.isFinite(salesRaw) ? salesRaw : 0;
-        const costEachRaw = Number(it?.cost_each ?? it?.product_variant?.cost ?? 0);
+        const lineTotalRaw = Number(it.line_total ?? 0);
+        const unitRaw = Number(
+          it?.price_each ??
+            it?.unit_price ??
+            it?.product_variant?.price ??
+            fallbackVariants.get(String(it?.item_id ?? ""))?.price ??
+            0
+        );
+        const safeUnit = Number.isFinite(unitRaw) ? unitRaw : 0;
+        const sales =
+          Number.isFinite(lineTotalRaw) && lineTotalRaw > 0
+            ? lineTotalRaw
+            : safeUnit * qty;
+        const costEachRaw = Number(
+          it?.cost_each ??
+            it?.product_variant?.cost ??
+            fallbackVariants.get(String(it?.item_id ?? ""))?.cost ??
+            0
+        );
         const costEach = Number.isFinite(costEachRaw) ? costEachRaw : 0;
         const itemCogs = qty * costEach;
         revenueTotal += sales;
@@ -227,7 +277,9 @@ export default function AdminSalesPage() {
                 <BarChart3 className="h-5 w-5 text-amber-300" />
                 Sales Report
               </div>
-              <div className="text-sm text-white/60">PAID orders only (payment_status = PAID)</div>
+              <div className="text-sm text-white/60">
+                PAID orders + POS channel (payment_status = PAID OR channel = POS)
+              </div>
             </div>
             <Badge className="border-amber-500/30 text-amber-200">{orders.length} orders</Badge>
           </CardHeader>

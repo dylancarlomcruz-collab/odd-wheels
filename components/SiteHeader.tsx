@@ -202,6 +202,18 @@ export function SiteHeader() {
 
   function submitSearch(e: React.FormEvent) {
     e.preventDefault();
+    if (!q.trim()) {
+      if (typeof window !== "undefined") {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("q");
+        const next = `${url.pathname}${url.search}`;
+        router.push(next);
+      }
+      setQ("");
+      setActiveSearch(null);
+      setActiveIndex(-1);
+      return;
+    }
     runSearch(q, "shop");
   }
 

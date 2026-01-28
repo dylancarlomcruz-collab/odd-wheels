@@ -84,6 +84,22 @@ function variantLabel(v: Variant) {
   return `${formatCondition(v.condition)} | ${peso(Number(v.price ?? 0))} | Qty ${Number(v.qty ?? 0)}${barcode}`;
 }
 
+function resolveOrderId(data: any): string | null {
+  if (!data) return null;
+  if (typeof data === "string" || typeof data === "number") return String(data);
+  if (typeof data === "object") {
+    return (
+      data.order_id ??
+      data.orderId ??
+      data.id ??
+      data.order?.id ??
+      data.data?.id ??
+      null
+    );
+  }
+  return null;
+}
+
 const BARCODE_CONTROL_KEYS = new Set([
   "Backspace",
   "Delete",
@@ -451,7 +467,32 @@ export default function CashierPOSPage() {
 
       if (error) throw error;
 
-      alert(`POS order created: ${String(data).slice(0, 8)}`);
+      const orderId = resolveOrderId(data);
+      if (!orderId) throw new Error("POS order created, but order id is missing.");
+
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) throw new Error("Staff session not found. Please sign in again.");
+
+      const res = await fetch("/api/pos/complete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ orderId }),
+      });
+
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(payload?.error ?? "POS order created, but completion failed.");
+      }
+
+      toast({
+        title: "POS completed",
+        message: `Order #${orderId.slice(0, 8)} marked as sold.`,
+        intent: "success",
+      });
 
       setCart([]);
       setSearch("");
