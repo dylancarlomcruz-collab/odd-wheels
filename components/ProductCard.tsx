@@ -555,12 +555,21 @@ export default function ProductCard({
           <button
             type="button"
             onClick={openPreview}
-            className="min-h-[2.4rem] text-left text-[13px] leading-snug text-white font-semibold line-clamp-3 sm:min-h-[3.2rem] sm:text-base sm:line-clamp-2"
+            className={
+              wideView
+                ? "min-h-[1.9rem] max-h-[1.9rem] text-left text-[10px] leading-snug text-white font-semibold line-clamp-2 overflow-hidden sm:min-h-[2.3rem] sm:max-h-[2.3rem] sm:text-xs"
+                : "min-h-[3rem] text-left text-base leading-normal text-white font-semibold line-clamp-2 sm:min-h-[3.5rem] sm:text-lg"
+            }
           >
             {product.title}
           </button>
 
-          <div className="mt-1.5 sm:mt-3 flex min-h-[1.2rem] items-center justify-between gap-2">
+          <div
+            className={[
+              "flex min-h-[1.2rem] items-center justify-between gap-2",
+              wideView ? "mt-1" : "mt-1.5 sm:mt-3",
+            ].join(" ")}
+          >
             <div className="text-price text-[13px] sm:text-base whitespace-nowrap">
               {strikePrice ? (
                 <div className="flex items-baseline gap-2">
@@ -605,7 +614,12 @@ export default function ProductCard({
             </div>
           ) : null}
 
-          <div className="mt-1.5 sm:mt-3 space-y-2">
+          <div
+            className={[
+              "space-y-2",
+              wideView ? "mt-1 space-y-1" : "mt-1.5 sm:mt-3",
+            ].join(" ")}
+          >
             <div className="flex flex-wrap gap-1">
               {product.options.map((o) => {
                 const isSelected = o.id === selectedId;

@@ -31,7 +31,7 @@ const LIMITED_SECTION_COUNTS: Record<string, number> = {
   because: 4,
 };
 const RECENT_REFRESH_MS = 1000 * 60 * 30;
-const GRID_VIEW_STORAGE_KEY = "oddwheels:grid-view";
+const TOUR_STORAGE_KEY = "oddwheels:shop-tour";
 const CANONICAL_BRAND_LABELS: Record<string, string> = {
   minigt: "Mini GT",
   kaidohouse: "Kaido House",
@@ -57,6 +57,13 @@ const FILTER_CHIP_STYLES = {
     "border-amber-400/60 bg-amber-400/20 text-amber-100 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.15)]",
   idle:
     "border-white/10 bg-bg-950/50 text-white/70 hover:bg-bg-950/70 hover:text-white",
+};
+
+type TourStep = {
+  key: string;
+  selector: string;
+  title: string;
+  body: string;
 };
 
 function normalizeBrandKey(value: string | null | undefined) {
@@ -213,6 +220,18 @@ export default function ShopPageClient() {
   const [addMap, setAddMap] = React.useState<Record<string, number>>({});
   const [cartMap, setCartMap] = React.useState<Record<string, number>>({});
   const [wideView, setWideView] = React.useState(false);
+  const [tourPromptOpen, setTourPromptOpen] = React.useState(false);
+  const [tourActive, setTourActive] = React.useState(false);
+  const [tourStepIndex, setTourStepIndex] = React.useState(0);
+  const [tourTarget, setTourTarget] = React.useState<{
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const [tourTooltipStyle, setTourTooltipStyle] =
+    React.useState<React.CSSProperties | null>(null);
+  const lastTourStepKey = React.useRef<string | null>(null);
   const [salesMap, setSalesMap] = React.useState<Record<string, number>>({});
   const [topSellerIds, setTopSellerIds] = React.useState<string[]>([]);
   const [backInStockIds, setBackInStockIds] = React.useState<string[]>([]);
@@ -225,22 +244,152 @@ export default function ShopPageClient() {
   const resultsRef = React.useRef<HTMLDivElement | null>(null);
   const lastScrolledQuery = React.useRef<string>("");
   const lastRecentRefresh = React.useRef<number>(0);
+  const tourSteps = React.useMemo<TourStep[]>(
+    () => [
+      {
+        key: "search",
+        selector: "[data-tour='shop-search']",
+        title: "Search",
+        body: "Find items by brand, model, or keywords.",
+      },
+      {
+        key: "sort",
+        selector: "[data-tour='shop-sort']",
+        title: "Sort",
+        body: "Sort by relevance, newest, popularity, or price.",
+      },
+      {
+        key: "brands",
+        selector: "[data-tour='shop-brands']",
+        title: "Brands",
+        body: "Filter the shop by your favorite brand.",
+      },
+      {
+        key: "filters",
+        selector: "[data-tour='shop-filters']",
+        title: "Filters",
+        body: "Open category and condition filters.",
+      },
+      {
+        key: "view",
+        selector: "[data-tour='shop-view']",
+        title: "View toggle",
+        body: "Switch between standard and wide grid views.",
+      },
+    ],
+    []
+  );
+
+  const setTourStatus = React.useCallback((value: string) => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(TOUR_STORAGE_KEY, value);
+  }, []);
+
+  const startTour = React.useCallback(() => {
+    setTourPromptOpen(false);
+    setTourActive(true);
+    setTourStepIndex(0);
+    setTourStatus("started");
+  }, [setTourStatus]);
+
+  const endTour = React.useCallback(
+    (value: string) => {
+      setTourActive(false);
+      setTourPromptOpen(false);
+      setTourStatus(value);
+    },
+    [setTourStatus]
+  );
+
+  const findTourTarget = React.useCallback((selector: string) => {
+    if (typeof document === "undefined") return null;
+    const nodes = Array.from(document.querySelectorAll(selector)) as HTMLElement[];
+    if (!nodes.length) return null;
+    const visible = nodes.find((node) => node.offsetParent !== null && node.getClientRects().length);
+    return visible ?? nodes[0];
+  }, []);
+
+  const updateTourTarget = React.useCallback(() => {
+    if (!tourActive) return;
+    const step = tourSteps[tourStepIndex];
+    if (!step) return;
+    const target = findTourTarget(step.selector);
+    if (!target) {
+      setTourTarget(null);
+      setTourTooltipStyle(null);
+      return;
+    }
+    const rect = target.getBoundingClientRect();
+    const pad = 4;
+    setTourTarget({
+      top: Math.max(0, rect.top - pad),
+      left: Math.max(0, rect.left - pad),
+      width: rect.width + pad * 2,
+      height: rect.height + pad * 2,
+    });
+    const placement = rect.top > window.innerHeight * 0.6 ? "top" : "bottom";
+    const maxWidth = Math.min(320, window.innerWidth - 24);
+    const left = Math.min(
+      Math.max(rect.left + rect.width / 2 - maxWidth / 2, 12),
+      window.innerWidth - maxWidth - 12
+    );
+    const top = placement === "bottom" ? rect.bottom + 12 : rect.top - 12;
+    setTourTooltipStyle({
+      left,
+      top,
+      width: maxWidth,
+      transform: placement === "bottom" ? "translateY(0)" : "translateY(-100%)",
+    });
+  }, [findTourTarget, tourActive, tourStepIndex, tourSteps]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
-    const saved = window.localStorage.getItem(GRID_VIEW_STORAGE_KEY);
-    setWideView(saved === "wide");
+    const status = window.localStorage.getItem(TOUR_STORAGE_KEY);
+    if (!status) {
+      setTourPromptOpen(true);
+      return;
+    }
+    if (status === "started") {
+      setTourActive(true);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (!tourActive) return;
+    const handle = () => updateTourTarget();
+    handle();
+    window.addEventListener("resize", handle);
+    window.addEventListener("scroll", handle, true);
+    return () => {
+      window.removeEventListener("resize", handle);
+      window.removeEventListener("scroll", handle, true);
+    };
+  }, [tourActive, tourStepIndex, updateTourTarget]);
+
+  React.useEffect(() => {
+    if (!tourActive) return;
+    const step = tourSteps[tourStepIndex];
+    if (!step || lastTourStepKey.current === step.key) return;
+    lastTourStepKey.current = step.key;
+    const target = findTourTarget(step.selector);
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
+    const padding = 80;
+    const outOfView =
+      rect.top < padding || rect.bottom > window.innerHeight - padding;
+    if (outOfView) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [findTourTarget, tourActive, tourStepIndex, tourSteps]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    setWideView(false);
   }, []);
 
   const toggleWideView = React.useCallback(() => {
     setWideView((prev) => {
       const next = !prev;
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(
-          GRID_VIEW_STORAGE_KEY,
-          next ? "wide" : "standard"
-        );
-      }
       return next;
     });
   }, []);
@@ -947,9 +1096,120 @@ export default function ShopPageClient() {
       ),
     [feedSections]
   );
+  const activeTourStep = tourSteps[tourStepIndex] ?? null;
+  const tourIsLastStep = tourStepIndex >= tourSteps.length - 1;
+  const tourTooltipFallback = {
+    left: "50%",
+    top: "50%",
+    width: "min(320px, 90vw)",
+    transform: "translate(-50%, -50%)",
+  } as React.CSSProperties;
+  const tourTooltipInlineStyle = tourTooltipStyle ?? tourTooltipFallback;
+  const advanceTour = React.useCallback(() => {
+    if (tourIsLastStep) {
+      endTour("done");
+      return;
+    }
+    setTourStepIndex((prev) => Math.min(prev + 1, tourSteps.length - 1));
+  }, [endTour, tourIsLastStep, tourSteps.length]);
 
   return (
     <>
+      {tourPromptOpen ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center px-4">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/60"
+            onClick={() => endTour("dismissed")}
+            aria-label="Dismiss tour prompt"
+          />
+          <div className="relative z-[71] w-full max-w-sm rounded-2xl border border-white/10 bg-bg-900/95 p-4 shadow-soft">
+            <div className="text-sm font-semibold text-white">
+              Want a quick tour?
+            </div>
+            <div className="mt-1 text-xs text-white/70">
+              See what each button does on the shop page.
+            </div>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => endTour("dismissed")}
+                className="rounded-full border border-white/10 bg-bg-950/40 px-3 py-1.5 text-xs text-white/70 hover:bg-bg-950/60"
+              >
+                No thanks
+              </button>
+              <button
+                type="button"
+                onClick={startTour}
+                className="rounded-full border border-amber-400/60 bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-100 hover:bg-amber-500/30"
+              >
+                Yes, show me
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {tourActive && activeTourStep ? (
+        <div className="fixed inset-0 z-[80]" onClick={advanceTour}>
+          <div className="absolute inset-0 bg-black/60" />
+          {tourTarget ? (
+            <div
+              className="absolute rounded-2xl border-2 border-amber-400/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)]"
+              style={{
+                top: tourTarget.top,
+                left: tourTarget.left,
+                width: tourTarget.width,
+                height: tourTarget.height,
+              }}
+            />
+          ) : null}
+          <div
+            className="absolute z-[82] rounded-2xl border border-white/10 bg-bg-900/95 p-4 shadow-soft"
+            style={tourTooltipInlineStyle}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[10px] uppercase tracking-wide text-white/50">
+                  Shop tour
+                </div>
+                <div className="text-sm font-semibold text-white">
+                  {activeTourStep.title}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => endTour("dismissed")}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-bg-950/40 text-white/70 hover:bg-bg-950/60"
+                aria-label="Close tour"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="mt-2 text-xs text-white/70">
+              {activeTourStep.body}
+            </div>
+            <div className="mt-4 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => endTour("dismissed")}
+                className="text-xs text-white/60 hover:text-white"
+              >
+                Skip
+              </button>
+              <button
+                type="button"
+                onClick={advanceTour}
+                className="rounded-full border border-amber-400/60 bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-100 hover:bg-amber-500/30"
+              >
+                {tourIsLastStep ? "Done" : "Next"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <main className="px-2 py-4 sm:px-4 sm:py-6">
       {loading ? <div className="text-white/60">Loading...</div> : null}
       {err ? <div className="text-red-300">{err}</div> : null}
@@ -994,6 +1254,7 @@ export default function ShopPageClient() {
             <div className="mx-auto flex max-w-6xl items-center gap-2 px-2 py-2 sm:px-4">
               <div className="min-w-0 flex-1">
                 <div
+                  data-tour="shop-brands"
                   className={[
                     "grid w-full gap-1 sm:gap-2",
                     brandColumns >= 8
@@ -1041,6 +1302,7 @@ export default function ShopPageClient() {
               <button
                 type="button"
                 onClick={() => setFiltersOpen((prev) => !prev)}
+                data-tour="shop-filters"
                 className="relative inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-bg-950/50 text-white/70 transition hover:bg-bg-950/70 hover:text-white"
                 aria-expanded={filtersOpen}
                 aria-controls="shop-filters-panel"
@@ -1056,6 +1318,7 @@ export default function ShopPageClient() {
               <button
                 type="button"
                 onClick={toggleWideView}
+                data-tour="shop-view"
                 className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-bg-950/50 text-white/70 transition hover:bg-bg-950/70 hover:text-white"
                 aria-pressed={wideView}
                 aria-label={wideView ? "Standard view" : "Wide view"}
@@ -1198,6 +1461,7 @@ export default function ShopPageClient() {
       </div>
 
       <div
+        data-tour="shop-grid"
         className={
           wideView
             ? "mt-3 grid grid-cols-4 gap-2 sm:grid-cols-4 sm:gap-4 md:grid-cols-6 lg:grid-cols-8"

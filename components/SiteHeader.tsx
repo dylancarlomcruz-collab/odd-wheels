@@ -504,6 +504,7 @@ export function SiteHeader() {
                   onChange={(e) => setQ(e.target.value)}
                   onFocus={() => setActiveSearch("desktop")}
                   onKeyDown={(e) => onSearchKeyDown(e, suggestions)}
+                  data-tour="shop-search"
                   className="h-9 px-3 text-sm sm:h-10 sm:px-4 sm:text-base"
                 />
               </div>
@@ -694,6 +695,7 @@ export function SiteHeader() {
                 onChange={(e) => setQ(e.target.value)}
                 onFocus={() => setActiveSearch("mobile")}
                 onKeyDown={(e) => onSearchKeyDown(e, suggestions)}
+                data-tour="shop-search"
                 className="h-9 px-3 text-sm sm:h-10 sm:px-4 sm:text-base"
               />
             </div>
@@ -803,7 +805,7 @@ export function SiteHeader() {
         <div className="border-t border-white/10 bg-bg-900/90">
           <div className="mx-auto max-w-6xl px-3 py-2 sm:px-4">
             <div className="w-full">
-              <div className="grid grid-cols-4 gap-1 sm:gap-2">
+              <div className="grid grid-cols-4 gap-1 sm:gap-2" data-tour="shop-sort">
                 {SHOP_SORT_OPTIONS.map((option) => {
                   const active = option.value === sortBy;
                   return (
