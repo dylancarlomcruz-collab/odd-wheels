@@ -116,13 +116,10 @@ function matchesCategory(product: any, category: string) {
         )
       );
     case "truescales":
-      return (
-        matchesAnyKeyword(text, TRUESCALE_KEYWORDS) ||
-        (product?.options ?? []).some((opt: any) => {
-          const shipClass = String(opt?.ship_class ?? "").toLowerCase();
-          return shipClass.includes("acrylic") || shipClass.includes("truescale");
-        })
-      );
+      return (product?.options ?? []).some((opt: any) => {
+        const shipClass = String(opt?.ship_class ?? "").toUpperCase();
+        return shipClass === "ACRYLIC_TRUE_SCALE";
+      });
     case "blistered":
       return (product?.options ?? []).some((opt: any) =>
         isBlisterCondition(opt?.condition_raw)
@@ -199,7 +196,7 @@ export default function ShopPageClient() {
   const [reloadToken, setReloadToken] = React.useState(0);
   const [adminEditProduct, setAdminEditProduct] =
     React.useState<AdminProduct | null>(null);
-  const [brandTab, setBrandTab] = React.useState<string>(BRAND_ALL_KEY);
+  const [selectedBrands, setSelectedBrands] = React.useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [selectedCategories, setSelectedCategories] = React.useState<string[]>(
     []
@@ -258,7 +255,7 @@ export default function ShopPageClient() {
       const { data, error } = await supabase
         .from("product_variants")
         .select(
-          "id,condition,issue_notes,issue_photo_urls,public_notes,price,sale_price,discount_percent,qty, product:products(id,title,brand,model,variation,image_urls,is_active,created_at)"
+          "id,condition,issue_notes,issue_photo_urls,public_notes,ship_class,price,sale_price,discount_percent,qty, product:products(id,title,brand,model,variation,image_urls,is_active,created_at)"
         )
         .gt("qty", 0)
         .order("created_at", { ascending: false });
@@ -289,7 +286,7 @@ export default function ShopPageClient() {
 
   React.useEffect(() => {
     if (searchQuery) {
-      setBrandTab(BRAND_ALL_KEY);
+      setSelectedBrands([]);
       setShowAllBrands(false);
     }
   }, [searchQuery]);
@@ -589,7 +586,7 @@ export default function ShopPageClient() {
   const filtered = React.useMemo(() => {
     const applyBrandTab = selectedCategories.length === 0;
     const brandKeys =
-      applyBrandTab && brandTab !== BRAND_ALL_KEY ? new Set([brandTab]) : null;
+      applyBrandTab && selectedBrands.length ? new Set(selectedBrands) : null;
     const conditionKeys = selectedConditions.length
       ? new Set(selectedConditions)
       : null;
@@ -616,7 +613,7 @@ export default function ShopPageClient() {
       }
       return true;
     });
-  }, [searchFiltered, brandTab, selectedCategories, selectedConditions]);
+  }, [searchFiltered, selectedBrands, selectedCategories, selectedConditions]);
 
   const sortedFiltered = React.useMemo(() => {
     if (sortBy === "relevance") return filtered;
@@ -871,8 +868,10 @@ export default function ShopPageClient() {
     let shownProductIds = new Set<string>();
 
     const applyBrandFilter = (items: ShopProduct[]) => {
-      if (brandTab === BRAND_ALL_KEY) return items;
-      return items.filter((p) => normalizeBrandKey(p.brand) === brandTab);
+      if (!selectedBrands.length) return items;
+      return items.filter((p) =>
+        selectedBrands.includes(normalizeBrandKey(p.brand))
+      );
     };
 
     const pushSection = (key: string, title: string, items: ShopProduct[]) => {
@@ -913,7 +912,7 @@ export default function ShopPageClient() {
     pushSection("back", "Back in stock", backInStock);
     return sections;
   }, [
-    brandTab,
+    selectedBrands,
     hasSearch,
     sortedFiltered,
     sortedProducts,
@@ -933,7 +932,7 @@ export default function ShopPageClient() {
     sortBy === "relevance" &&
     selectedCategories.length === 0 &&
     selectedConditions.length === 0 &&
-    brandTab === BRAND_ALL_KEY;
+    selectedBrands.length === 0;
   const mainSection = React.useMemo(() => {
     return (
       feedSections.find((section) => section.key === "all") ??
@@ -1010,14 +1009,20 @@ export default function ShopPageClient() {
                     <button
                       key={b.key}
                       type="button"
-                      onClick={() => {
-                        setBrandTab(b.key);
-                        if (selectedCategories.length) setSelectedCategories([]);
-                      }}
-                      className={getBrandButtonClasses(
-                        b.key === brandTab,
-                        false
-                      )}
+                        onClick={() => {
+                          if (b.key === BRAND_ALL_KEY) {
+                            setSelectedBrands([]);
+                          } else {
+                            setSelectedBrands((prev) => toggleValue(prev, b.key));
+                          }
+                          if (selectedCategories.length) setSelectedCategories([]);
+                        }}
+                        className={getBrandButtonClasses(
+                          b.key === BRAND_ALL_KEY
+                            ? selectedBrands.length === 0
+                            : selectedBrands.includes(b.key),
+                          false
+                        )}
                     >
                       {b.label}
                     </button>
@@ -1081,15 +1086,21 @@ export default function ShopPageClient() {
                     <button
                       key={b.key}
                       type="button"
-                      onClick={() => {
-                        setBrandTab(b.key);
-                        setShowAllBrands(false);
-                        if (selectedCategories.length) setSelectedCategories([]);
-                      }}
-                      className={getBrandButtonClasses(
-                        b.key === brandTab,
-                        false
-                      )}
+                        onClick={() => {
+                          if (b.key === BRAND_ALL_KEY) {
+                            setSelectedBrands([]);
+                          } else {
+                            setSelectedBrands((prev) => toggleValue(prev, b.key));
+                          }
+                          setShowAllBrands(false);
+                          if (selectedCategories.length) setSelectedCategories([]);
+                        }}
+                        className={getBrandButtonClasses(
+                          b.key === BRAND_ALL_KEY
+                            ? selectedBrands.length === 0
+                            : selectedBrands.includes(b.key),
+                          false
+                        )}
                     >
                       {b.label}
                     </button>
@@ -1145,7 +1156,7 @@ export default function ShopPageClient() {
                           onClick={() => {
                             setSelectedCategories((prev) => {
                               const next = toggleValue(prev, category.key);
-                              if (next.length) setBrandTab(BRAND_ALL_KEY);
+                              if (next.length) setSelectedBrands([]);
                               return next;
                             });
                           }}
