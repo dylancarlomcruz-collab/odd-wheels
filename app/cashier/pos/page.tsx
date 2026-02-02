@@ -649,7 +649,7 @@ export default function CashierPOSPage() {
                         key={p.id}
                         type="button"
                         onClick={() => loadProductVariants(p)}
-                        className={`text-left rounded-xl border px-3 py-2 flex gap-3 ${
+                        className={`w-full text-left rounded-xl border px-3 py-2 flex gap-3 ${
                           isSelected
                             ? "border-accent-500/60 bg-accent-500/10"
                             : "border-white/10 bg-paper/5 hover:bg-paper/10"
@@ -668,7 +668,7 @@ export default function CashierPOSPage() {
 
                         <div className="min-w-0 flex-1">
                           <div className="font-medium flex items-center justify-between gap-3">
-                            <span className="truncate">{p.title}</span>
+                            <span className="line-clamp-1">{p.title}</span>
                             <span
                               className={
                                 p.is_active
@@ -679,7 +679,7 @@ export default function CashierPOSPage() {
                               {p.is_active ? "ACTIVE" : "SOLD OUT"}
                             </span>
                           </div>
-                          <div className="text-xs text-white/60">
+                          <div className="text-xs text-white/60 line-clamp-1">
                             {p.brand ?? "-"}
                             {p.model ? ` | ${p.model}` : ""}
                             {p.variation ? ` | ${p.variation}` : ""}
@@ -710,14 +710,14 @@ export default function CashierPOSPage() {
                           key={v.id}
                           className="rounded-lg border border-white/10 bg-bg-900/50 p-3 flex items-center justify-between gap-3"
                         >
-                          <div className="min-w-0">
-                            <div className="text-sm font-medium">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium line-clamp-1">
                               {formatCondition(v.condition)}
                             </div>
-                            <div className="text-xs text-white/60">
+                            <div className="text-xs text-white/60 line-clamp-1">
                               {v.barcode ? `Barcode: ${v.barcode}` : "No barcode"}
                             </div>
-                            <div className="text-xs text-white/60">
+                            <div className="text-xs text-white/60 line-clamp-1">
                               {peso(Number(v.price ?? 0))} | Stock {v.qty}
                             </div>
                           </div>
@@ -791,17 +791,17 @@ export default function CashierPOSPage() {
                 <div className="rounded-xl border border-white/10 bg-paper/5 p-3 space-y-2">
                   <div className="text-sm font-medium">Barcode matches</div>
                   <div className="grid gap-2">
-                    {barcodeMatches.map((v) => {
-                      const img = firstImg(v.product.image_urls);
-                      return (
-                        <button
-                          key={v.id}
-                          type="button"
-                          className="text-left rounded-lg border border-white/10 bg-bg-900/50 hover:bg-paper/10 px-3 py-2 flex gap-3"
-                          onClick={() => {
-                            if (Number(v.qty ?? 0) <= 0) return;
-                            addVariantToCart(v, v.product);
-                            setBarcode("");
+                      {barcodeMatches.map((v) => {
+                        const img = firstImg(v.product.image_urls);
+                        return (
+                          <button
+                            key={v.id}
+                            type="button"
+                            className="w-full text-left rounded-lg border border-white/10 bg-bg-900/50 hover:bg-paper/10 px-3 py-2 flex gap-3"
+                            onClick={() => {
+                              if (Number(v.qty ?? 0) <= 0) return;
+                              addVariantToCart(v, v.product);
+                              setBarcode("");
                             setBarcodeHint(null);
                             setBarcodeMatches([]);
                             barcodeRef.current?.focus();
@@ -818,17 +818,17 @@ export default function CashierPOSPage() {
                             ) : null}
                           </div>
                           <div className="min-w-0 flex-1">
-                            <div className="font-medium truncate">
+                            <div className="font-medium line-clamp-1">
                               {v.product.title}
                             </div>
-                            <div className="text-xs text-white/60">
+                            <div className="text-xs text-white/60 line-clamp-1">
                               {v.product.brand ?? "-"}
                               {v.product.model ? ` | ${v.product.model}` : ""}
                               {v.product.variation
                                 ? ` | ${v.product.variation}`
                                 : ""}
                             </div>
-                            <div className="text-xs text-white/60 mt-1">
+                            <div className="text-xs text-white/60 mt-1 line-clamp-1">
                               {formatCondition(v.condition)} | {peso(Number(v.price ?? 0))} | Stock {v.qty}
                               {v.barcode ? ` | ${v.barcode}` : ""}
                             </div>
@@ -864,7 +864,7 @@ export default function CashierPOSPage() {
                       className="rounded-xl border border-white/10 bg-paper/5 p-3 space-y-3"
                     >
                       <div className="flex items-center justify-between gap-3">
-                        <div className="flex gap-3 min-w-0">
+                        <div className="flex gap-3 min-w-0 flex-1">
                           <div className="h-12 w-12 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
                             {l.image ? (
                               // eslint-disable-next-line @next/next/no-img-element
@@ -876,10 +876,10 @@ export default function CashierPOSPage() {
                             ) : null}
                           </div>
                           <div className="min-w-0">
-                            <div className="font-medium truncate">
+                            <div className="font-medium line-clamp-1">
                               {l.title}
                             </div>
-                            <div className="text-xs text-white/60">
+                            <div className="text-xs text-white/60 line-clamp-1">
                               {l.condition} | {peso(l.unit_price)} | Stock {l.stock}
                               {l.barcode ? ` | ${l.barcode}` : ""}
                             </div>

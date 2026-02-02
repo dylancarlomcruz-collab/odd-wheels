@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { Button } from "@/components/ui/Button";
+import type { ShipClass } from "@/lib/shipping/config";
 
 const PICKUP_DAYS = [
   { key: "MON", label: "Monday" },
@@ -17,6 +18,27 @@ const PICKUP_DAYS = [
   { key: "SAT", label: "Saturday" },
   { key: "SUN", label: "Sunday" },
 ] as const;
+
+const FREE_SHIPPING_COURIERS = [
+  { value: "JNT", label: "J&T" },
+  { value: "LBC", label: "LBC" },
+  { value: "LALAMOVE", label: "Lalamove" },
+] as const;
+
+const SHIP_CLASS_OPTIONS: ShipClass[] = [
+  "MINI_GT",
+  "KAIDO",
+  "POPRACE",
+  "ACRYLIC_TRUE_SCALE",
+  "TRUCKS",
+  "BLISTER",
+  "TOMICA",
+  "HOT_WHEELS_MAINLINE",
+  "HOT_WHEELS_PREMIUM",
+  "LOOSE_NO_BOX",
+  "LALAMOVE",
+  "DIORAMA",
+];
 
 type PickupDayKey = (typeof PICKUP_DAYS)[number]["key"];
 type PickupScheduleState = Record<
@@ -93,6 +115,34 @@ function buildPickupScheduleSummary(payload: Record<string, string[]>) {
   return lines.join("\n");
 }
 
+function normalizeList(values?: Array<string | null | undefined> | null) {
+  return (values ?? [])
+    .map((value) => String(value ?? "").trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function formatShipClassLabel(value: string) {
+  switch (value) {
+    case "ACRYLIC_TRUE_SCALE":
+      return "Acrylic True-Scale";
+    case "HOT_WHEELS_MAINLINE":
+      return "Hot Wheels Mainline";
+    case "HOT_WHEELS_PREMIUM":
+      return "Hot Wheels Premium";
+    case "LOOSE_NO_BOX":
+      return "Loose (No Box)";
+    default:
+      return value.replace(/_/g, " ");
+  }
+}
+
+function toggleListValue<T extends string>(values: T[], value: T, next: boolean) {
+  if (next) {
+    return values.includes(value) ? values : [...values, value];
+  }
+  return values.filter((v) => v !== value);
+}
+
 export default function AdminSettingsPage() {
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
@@ -102,6 +152,8 @@ export default function AdminSettingsPage() {
   const [priorityAvailable, setPriorityAvailable] = React.useState(false);
   const [priorityNote, setPriorityNote] = React.useState("");
   const [freeShippingThreshold, setFreeShippingThreshold] = React.useState("");
+  const [freeShippingCouriers, setFreeShippingCouriers] = React.useState<string[]>([]);
+  const [freeShippingShipClasses, setFreeShippingShipClasses] = React.useState<ShipClass[]>([]);
   const [protectorStockMainline, setProtectorStockMainline] = React.useState("");
   const [protectorStockPremium, setProtectorStockPremium] = React.useState("");
   const [pickupSchedule, setPickupSchedule] = React.useState<PickupScheduleState>(
@@ -111,6 +163,14 @@ export default function AdminSettingsPage() {
   const [headerLogoUrl, setHeaderLogoUrl] = React.useState("");
   const [logoUploading, setLogoUploading] = React.useState(false);
   const [logoMsg, setLogoMsg] = React.useState<string | null>(null);
+  const freeShippingCourierSet = React.useMemo(
+    () => new Set(FREE_SHIPPING_COURIERS.map((c) => c.value)),
+    []
+  );
+  const freeShippingShipClassSet = React.useMemo(
+    () => new Set(SHIP_CLASS_OPTIONS),
+    []
+  );
 
   async function load() {
     setLoading(true);
@@ -127,6 +187,14 @@ export default function AdminSettingsPage() {
           ? String(data.free_shipping_threshold)
           : ""
       );
+      const courierValues = normalizeList((data as any).free_shipping_couriers);
+      setFreeShippingCouriers(
+        courierValues.filter((value) => freeShippingCourierSet.has(value))
+      );
+      const shipClassValues = normalizeList((data as any).free_shipping_ship_classes).filter(
+        (value) => freeShippingShipClassSet.has(value as ShipClass)
+      ) as ShipClass[];
+      setFreeShippingShipClasses(shipClassValues);
       const fallbackProtector =
         data.protector_stock !== null && data.protector_stock !== undefined
           ? Number(data.protector_stock)
@@ -189,6 +257,12 @@ export default function AdminSettingsPage() {
       priority_shipping_available: priorityAvailable,
       priority_shipping_note: priorityNote || null,
       free_shipping_threshold: threshold,
+      free_shipping_couriers: freeShippingCouriers.length
+        ? freeShippingCouriers
+        : null,
+      free_shipping_ship_classes: freeShippingShipClasses.length
+        ? freeShippingShipClasses
+        : null,
       protector_stock_mainline: protectorMainlineValue,
       protector_stock_premium: protectorPremiumValue,
       protector_stock: protectorMainlineValue + protectorPremiumValue,
@@ -302,7 +376,48 @@ export default function AdminSettingsPage() {
             onChange={(e) => setFreeShippingThreshold(e.target.value)}
             inputMode="decimal"
             placeholder="e.g. 2000"
+            hint="Set 0 to disable free shipping."
           />
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+            <div className="font-semibold">Free Shipping Rules</div>
+            <div className="text-sm text-white/60">
+              Restrict free shipping by courier or item type. Leave empty to allow all.
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm text-white/70">Eligible couriers</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {FREE_SHIPPING_COURIERS.map((courier) => (
+                  <Checkbox
+                    key={courier.value}
+                    checked={freeShippingCouriers.includes(courier.value)}
+                    onChange={(checked) =>
+                      setFreeShippingCouriers((prev) =>
+                        toggleListValue(prev, courier.value, checked)
+                      )
+                    }
+                    label={courier.label}
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm text-white/70">Eligible ship classes</div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {SHIP_CLASS_OPTIONS.map((shipClass) => (
+                  <Checkbox
+                    key={shipClass}
+                    checked={freeShippingShipClasses.includes(shipClass)}
+                    onChange={(checked) =>
+                      setFreeShippingShipClasses((prev) =>
+                        toggleListValue(prev, shipClass, checked)
+                      )
+                    }
+                    label={formatShipClassLabel(shipClass)}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
           <div className="grid gap-3 md:grid-cols-2">
             <Input
               label="Protector stock (Hot Wheels Mainline)"

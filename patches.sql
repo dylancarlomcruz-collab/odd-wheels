@@ -38,6 +38,10 @@ alter table public.settings
   add column if not exists free_shipping_threshold numeric not null default 0;
 
 alter table public.settings
+  add column if not exists free_shipping_couriers text[],
+  add column if not exists free_shipping_ship_classes text[];
+
+alter table public.settings
   add column if not exists protector_stock int not null default 0;
 
 alter table public.settings
@@ -1470,6 +1474,10 @@ create table if not exists public.vouchers (
   kind text not null default 'FREE_SHIPPING',
   min_subtotal numeric not null default 0,
   shipping_cap numeric not null default 0,
+  discount_amount numeric,
+  discount_percent numeric,
+  include_ship_classes text[],
+  exclude_ship_classes text[],
   starts_at timestamptz,
   expires_at timestamptz,
   is_active boolean not null default true,
@@ -1477,6 +1485,12 @@ create table if not exists public.vouchers (
   max_redemptions int,
   created_at timestamptz not null default now()
 );
+
+alter table public.vouchers
+  add column if not exists discount_amount numeric,
+  add column if not exists discount_percent numeric,
+  add column if not exists include_ship_classes text[],
+  add column if not exists exclude_ship_classes text[];
 
 create table if not exists public.voucher_wallet (
   id uuid primary key default gen_random_uuid(),
@@ -1951,9 +1965,13 @@ set row_security = off
 as $$
 declare
   v_voucher public.vouchers%rowtype;
-  v_discount numeric := 0;
   v_now timestamptz := now();
   v_tier text;
+  v_base_total numeric := 0;
+  v_shipping_discount numeric := 0;
+  v_order_discount numeric := 0;
+  v_kind text;
+  v_percent numeric := 0;
 begin
   if new.id is null then
     new.id := gen_random_uuid();
@@ -1969,18 +1987,16 @@ begin
   new.shipping_discount := 0;
   new.discount_total := 0;
 
-  if new.voucher_id is null then
-    new.total := coalesce(new.subtotal, 0)
-      + coalesce(new.shipping_fee, 0)
-      + coalesce(new.cop_fee, 0)
-      + coalesce(new.lalamove_fee, 0)
-      + coalesce(new.priority_fee, 0)
-      + coalesce(new.insurance_fee, 0);
-    return new;
-  end if;
+  v_base_total := coalesce(new.subtotal, 0)
+    + coalesce(new.shipping_fee, 0)
+    + coalesce(new.cop_fee, 0)
+    + coalesce(new.lalamove_fee, 0)
+    + coalesce(new.priority_fee, 0)
+    + coalesce(new.insurance_fee, 0);
 
-  if coalesce(new.shipping_fee, 0) <= 0 then
-    raise exception 'Voucher not eligible for zero shipping fee.';
+  if new.voucher_id is null then
+    new.total := v_base_total;
+    return new;
   end if;
 
   select * into v_voucher
@@ -1990,10 +2006,6 @@ begin
 
   if not found then
     raise exception 'Voucher unavailable.';
-  end if;
-
-  if coalesce(v_voucher.kind, '') <> 'FREE_SHIPPING' then
-    raise exception 'Voucher type not supported.';
   end if;
 
   if v_voucher.starts_at is not null and v_voucher.starts_at > v_now then
@@ -2008,20 +2020,48 @@ begin
     raise exception 'Subtotal does not meet voucher minimum.';
   end if;
 
-  v_discount := least(
-    coalesce(new.shipping_fee, 0),
-    coalesce(v_voucher.shipping_cap, 0)
-  );
+  v_kind := upper(trim(coalesce(v_voucher.kind, '')));
 
-  new.shipping_discount := v_discount;
-  new.discount_total := v_discount;
-  new.total := coalesce(new.subtotal, 0)
-    + coalesce(new.shipping_fee, 0)
-    + coalesce(new.cop_fee, 0)
-    + coalesce(new.lalamove_fee, 0)
-    + coalesce(new.priority_fee, 0)
-    + coalesce(new.insurance_fee, 0)
-    - v_discount;
+  if v_kind in ('FREE_SHIPPING', 'SHIPPING_DISCOUNT') then
+    if coalesce(new.shipping_fee, 0) <= 0 then
+      raise exception 'Voucher not eligible for zero shipping fee.';
+    end if;
+  end if;
+
+  if v_kind = 'FREE_SHIPPING' then
+    if coalesce(v_voucher.shipping_cap, 0) > 0 then
+      v_shipping_discount := least(
+        coalesce(new.shipping_fee, 0),
+        coalesce(v_voucher.shipping_cap, 0)
+      );
+    else
+      v_shipping_discount := coalesce(new.shipping_fee, 0);
+    end if;
+  elsif v_kind = 'SHIPPING_DISCOUNT' then
+    v_shipping_discount := least(
+      coalesce(new.shipping_fee, 0),
+      coalesce(v_voucher.shipping_cap, 0)
+    );
+
+    if v_shipping_discount <= 0 then
+      raise exception 'Shipping discount amount required.';
+    end if;
+  elsif v_kind = 'ORDER_DISCOUNT' then
+    if coalesce(v_voucher.discount_amount, 0) > 0 then
+      v_order_discount := least(coalesce(new.subtotal, 0), v_voucher.discount_amount);
+    elsif coalesce(v_voucher.discount_percent, 0) > 0 then
+      v_percent := least(greatest(v_voucher.discount_percent, 0), 100);
+      v_order_discount := round(coalesce(new.subtotal, 0) * (v_percent / 100.0), 2);
+    else
+      raise exception 'Voucher discount not configured.';
+    end if;
+  else
+    raise exception 'Voucher type not supported.';
+  end if;
+
+  new.shipping_discount := v_shipping_discount;
+  new.discount_total := v_order_discount + v_shipping_discount;
+  new.total := greatest(v_base_total - v_order_discount - v_shipping_discount, 0);
 
   return new;
 end;
@@ -2221,6 +2261,305 @@ begin
   return v_count;
   end;
   $$;
+
+create or replace function public.fn_admin_grant_voucher(
+  p_kind text,
+  p_title text default null,
+  p_code text default null,
+  p_discount_amount numeric default null,
+  p_discount_percent numeric default null,
+  p_include_ship_classes text[] default null,
+  p_exclude_ship_classes text[] default null,
+  p_shipping_cap numeric default null,
+  p_min_subtotal numeric default 0,
+  p_starts_at timestamptz default null,
+  p_expires_at timestamptz default null,
+  p_is_active boolean default true,
+  p_max_per_user int default null,
+  p_max_redemptions int default null,
+  p_user_ids uuid[] default null,
+  p_grant_all boolean default false,
+  p_per_user int default 1,
+  p_wallet_expires_at timestamptz default null,
+  p_voucher_id uuid default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_kind text;
+  v_voucher public.vouchers%rowtype;
+  v_voucher_id uuid;
+  v_created boolean := false;
+  v_updated boolean := false;
+  v_granted int := 0;
+  v_per_user int := 1;
+  v_existing_total int := 0;
+  v_remaining_redemptions int;
+  v_effective_shipping_cap numeric;
+  v_effective_discount_amount numeric;
+  v_effective_discount_percent numeric;
+  v_effective_max_per_user int;
+  v_effective_max_redemptions int;
+  v_wallet_expires_at timestamptz;
+  v_include_classes text[];
+  v_exclude_classes text[];
+begin
+  if not public.is_admin() then
+    raise exception 'Not authorized';
+  end if;
+
+  v_kind := upper(trim(coalesce(p_kind, '')));
+  if v_kind not in ('ORDER_DISCOUNT', 'SHIPPING_DISCOUNT', 'FREE_SHIPPING') then
+    raise exception 'Invalid voucher kind.';
+  end if;
+
+  if p_voucher_id is not null then
+    select * into v_voucher from public.vouchers where id = p_voucher_id;
+    if not found then
+      raise exception 'Voucher not found: %', p_voucher_id;
+    end if;
+  elsif p_code is not null then
+    select * into v_voucher from public.vouchers where code = p_code;
+  end if;
+
+  v_effective_discount_amount := coalesce(p_discount_amount, v_voucher.discount_amount);
+  v_effective_discount_percent := coalesce(p_discount_percent, v_voucher.discount_percent);
+  v_effective_shipping_cap := coalesce(p_shipping_cap, v_voucher.shipping_cap);
+  v_effective_max_per_user := coalesce(p_max_per_user, v_voucher.max_per_user);
+  v_effective_max_redemptions := coalesce(p_max_redemptions, v_voucher.max_redemptions);
+
+  if p_include_ship_classes is not null then
+    select array_agg(distinct upper(trim(c))) into v_include_classes
+    from unnest(p_include_ship_classes) as c
+    where c is not null and length(trim(c)) > 0;
+    if v_include_classes is null then
+      v_include_classes := '{}'::text[];
+    end if;
+  end if;
+
+  if p_exclude_ship_classes is not null then
+    select array_agg(distinct upper(trim(c))) into v_exclude_classes
+    from unnest(p_exclude_ship_classes) as c
+    where c is not null and length(trim(c)) > 0;
+    if v_exclude_classes is null then
+      v_exclude_classes := '{}'::text[];
+    end if;
+  end if;
+
+  if v_kind = 'ORDER_DISCOUNT' then
+    if coalesce(v_effective_discount_amount, 0) > 0 and coalesce(v_effective_discount_percent, 0) > 0 then
+      raise exception 'Provide discount amount or percent, not both.';
+    end if;
+    if coalesce(v_effective_discount_amount, 0) <= 0 and coalesce(v_effective_discount_percent, 0) <= 0 then
+      raise exception 'Discount amount or percent required.';
+    end if;
+    if coalesce(v_effective_discount_percent, 0) < 0 or coalesce(v_effective_discount_percent, 0) > 100 then
+      raise exception 'Discount percent must be between 0 and 100.';
+    end if;
+  elsif v_kind = 'SHIPPING_DISCOUNT' then
+    if coalesce(v_effective_shipping_cap, 0) <= 0 then
+      raise exception 'Shipping discount amount required.';
+    end if;
+  end if;
+
+  if v_voucher.id is null then
+    insert into public.vouchers (
+      code,
+      title,
+      kind,
+      min_subtotal,
+      shipping_cap,
+      discount_amount,
+      discount_percent,
+      include_ship_classes,
+      exclude_ship_classes,
+      starts_at,
+      expires_at,
+      is_active,
+      max_per_user,
+      max_redemptions
+    )
+    values (
+      p_code,
+      p_title,
+      v_kind,
+      coalesce(p_min_subtotal, 0),
+      coalesce(p_shipping_cap, 0),
+      p_discount_amount,
+      p_discount_percent,
+      v_include_classes,
+      v_exclude_classes,
+      p_starts_at,
+      p_expires_at,
+      coalesce(p_is_active, true),
+      p_max_per_user,
+      p_max_redemptions
+    )
+    returning id into v_voucher_id;
+
+    v_created := true;
+  else
+    v_voucher_id := v_voucher.id;
+
+    update public.vouchers
+      set code = coalesce(p_code, code),
+          title = coalesce(p_title, title),
+          kind = v_kind,
+          min_subtotal = coalesce(p_min_subtotal, min_subtotal),
+          shipping_cap = coalesce(p_shipping_cap, shipping_cap),
+          discount_amount = coalesce(p_discount_amount, discount_amount),
+          discount_percent = coalesce(p_discount_percent, discount_percent),
+          include_ship_classes = coalesce(v_include_classes, include_ship_classes),
+          exclude_ship_classes = coalesce(v_exclude_classes, exclude_ship_classes),
+          starts_at = coalesce(p_starts_at, starts_at),
+          expires_at = coalesce(p_expires_at, expires_at),
+          is_active = coalesce(p_is_active, is_active),
+          max_per_user = coalesce(p_max_per_user, max_per_user),
+          max_redemptions = coalesce(p_max_redemptions, max_redemptions)
+    where id = v_voucher_id;
+
+    v_updated := true;
+  end if;
+
+  if not coalesce(p_grant_all, false)
+     and (p_user_ids is null or array_length(p_user_ids, 1) is null) then
+    return jsonb_build_object(
+      'ok', true,
+      'voucher_id', v_voucher_id,
+      'created', v_created,
+      'updated', v_updated,
+      'granted', 0
+    );
+  end if;
+
+  v_per_user := greatest(1, coalesce(p_per_user, 1));
+  v_wallet_expires_at := coalesce(
+    p_wallet_expires_at,
+    (select expires_at from public.vouchers where id = v_voucher_id)
+  );
+
+  if v_effective_max_redemptions is not null then
+    select count(*) into v_existing_total
+    from public.voucher_wallet
+    where voucher_id = v_voucher_id
+      and coalesce(status, 'AVAILABLE') <> 'EXPIRED';
+
+    v_remaining_redemptions := v_effective_max_redemptions - v_existing_total;
+    if v_remaining_redemptions <= 0 then
+      return jsonb_build_object(
+        'ok', true,
+        'voucher_id', v_voucher_id,
+        'created', v_created,
+        'updated', v_updated,
+        'granted', 0,
+        'maxed_out', true
+      );
+    end if;
+  end if;
+
+  with target_users as (
+    select distinct p.id as user_id
+    from public.profiles p
+    where coalesce(p_grant_all, false)
+    union
+    select distinct u as user_id
+    from unnest(p_user_ids) as u
+    where not coalesce(p_grant_all, false)
+      and p_user_ids is not null
+      and u is not null
+  ),
+  existing as (
+    select user_id, count(*)::int as existing
+    from public.voucher_wallet
+    where voucher_id = v_voucher_id
+      and coalesce(status, 'AVAILABLE') <> 'EXPIRED'
+    group by user_id
+  ),
+  limits as (
+    select t.user_id,
+           case
+             when v_effective_max_per_user is null then v_per_user
+             else greatest(0, least(v_per_user, v_effective_max_per_user - coalesce(e.existing, 0)))
+           end as grant_count
+    from target_users t
+    left join existing e on e.user_id = t.user_id
+  ),
+  rows as (
+    select l.user_id
+    from limits l
+    join lateral generate_series(1, l.grant_count) gs on true
+  ),
+  capped as (
+    select user_id
+    from rows
+    order by user_id
+    limit coalesce(v_remaining_redemptions, 2147483647)
+  ),
+  ins as (
+    insert into public.voucher_wallet (user_id, voucher_id, expires_at)
+    select user_id, v_voucher_id, v_wallet_expires_at
+    from capped
+    on conflict do nothing
+    returning 1
+  )
+  select count(*) into v_granted from ins;
+
+  return jsonb_build_object(
+    'ok', true,
+    'voucher_id', v_voucher_id,
+    'created', v_created,
+    'updated', v_updated,
+    'granted', v_granted
+  );
+end;
+$$;
+
+revoke execute on function public.fn_admin_grant_voucher(
+  text,
+  text,
+  text,
+  numeric,
+  numeric,
+  text[],
+  text[],
+  numeric,
+  numeric,
+  timestamptz,
+  timestamptz,
+  boolean,
+  int,
+  int,
+  uuid[],
+  boolean,
+  int,
+  timestamptz,
+  uuid
+) from public;
+grant execute on function public.fn_admin_grant_voucher(
+  text,
+  text,
+  text,
+  numeric,
+  numeric,
+  text[],
+  text[],
+  numeric,
+  numeric,
+  timestamptz,
+  timestamptz,
+  boolean,
+  int,
+  int,
+  uuid[],
+  boolean,
+  int,
+  timestamptz,
+  uuid
+) to authenticated;
 
 drop function if exists public.fn_grant_monthly_vouchers(timestamptz);
 

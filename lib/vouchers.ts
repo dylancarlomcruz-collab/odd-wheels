@@ -1,4 +1,4 @@
-export type VoucherKind = "FREE_SHIPPING";
+export type VoucherKind = "FREE_SHIPPING" | "SHIPPING_DISCOUNT" | "ORDER_DISCOUNT";
 
 export type Voucher = {
   id: string;
@@ -7,6 +7,8 @@ export type Voucher = {
   kind: VoucherKind | string;
   min_subtotal: number;
   shipping_cap: number;
+  include_ship_classes?: string[] | null;
+  exclude_ship_classes?: string[] | null;
   starts_at?: string | null;
   expires_at?: string | null;
   is_active?: boolean;
@@ -26,6 +28,7 @@ type EligibilityInput = {
   walletExpiresAt?: string | null;
   subtotal: number;
   shippingFee: number;
+  shipClasses?: Array<string | null | undefined>;
   now?: Date;
 };
 
@@ -38,6 +41,17 @@ export type VoucherEligibility = {
 function toNumber(value: number) {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeShipClass(value: string | null | undefined) {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  return normalized.length ? normalized : null;
+}
+
+function normalizeShipClassList(values?: Array<string | null | undefined> | null) {
+  return (values ?? [])
+    .map((value) => normalizeShipClass(value))
+    .filter((value): value is string => Boolean(value));
 }
 
 function isExpired(dateValue?: string | null, now = new Date()) {
@@ -75,6 +89,7 @@ export function getVoucherEligibility({
   walletExpiresAt,
   subtotal,
   shippingFee,
+  shipClasses,
   now = new Date(),
 }: EligibilityInput): VoucherEligibility {
   const fee = Math.max(0, toNumber(shippingFee));
@@ -89,6 +104,35 @@ export function getVoucherEligibility({
   }
   if (isExpired(voucher.expires_at, now) || isExpired(walletExpiresAt, now)) {
     return { eligible: false, discount: 0, reason: "Voucher expired." };
+  }
+  const includeClasses = normalizeShipClassList(voucher.include_ship_classes);
+  const excludeClasses = normalizeShipClassList(voucher.exclude_ship_classes);
+  const normalizedShipClasses = (shipClasses ?? []).map(
+    (value) => normalizeShipClass(value) ?? "MINI_GT"
+  );
+  if (includeClasses.length) {
+    const allIncluded = normalizedShipClasses.every((value) =>
+      includeClasses.includes(value)
+    );
+    if (!allIncluded) {
+      return {
+        eligible: false,
+        discount: 0,
+        reason: "Contains ineligible items.",
+      };
+    }
+  }
+  if (excludeClasses.length) {
+    const hasExcluded = normalizedShipClasses.some((value) =>
+      excludeClasses.includes(value)
+    );
+    if (hasExcluded) {
+      return {
+        eligible: false,
+        discount: 0,
+        reason: "Contains excluded items.",
+      };
+    }
   }
   if (toNumber(subtotal) < toNumber(voucher.min_subtotal)) {
     return { eligible: false, discount: 0, reason: "Min spend not met." };

@@ -10,7 +10,7 @@ export default function CashierLayout({ children }: { children: React.ReactNode 
             <div className="mb-3 text-sm text-white/60">Cashier Panel</div>
             <CashierNav />
           </aside>
-          <section>{children}</section>
+          <section className="min-w-0">{children}</section>
         </div>
       </main>
     </RequireRole>

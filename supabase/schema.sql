@@ -112,6 +112,8 @@ create table if not exists public.settings (
   priority_shipping_available boolean not null default false,
     priority_shipping_note text,
     free_shipping_threshold numeric not null default 0,
+    free_shipping_couriers text[],
+    free_shipping_ship_classes text[],
     pickup_schedule_text text,
     pickup_schedule jsonb not null default '{}'::jsonb,
     pickup_unavailable boolean not null default false,
@@ -129,6 +131,8 @@ insert into public.settings (
   priority_shipping_available,
     priority_shipping_note,
     free_shipping_threshold,
+    free_shipping_couriers,
+    free_shipping_ship_classes,
     pickup_schedule_text,
     pickup_schedule,
     pickup_unavailable,
@@ -144,6 +148,8 @@ values (
   false,
   'Admin can enable priority shipping anytime.',
   0,
+  null,
+  null,
   '10:00 AM - 1:00 PM
 2:00 PM - 6:00 PM',
   '{

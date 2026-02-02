@@ -145,6 +145,27 @@ function getItemPrice(it: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function formatShippingContainer(method: string, details: any) {
+  const raw = details?.package ?? details?.pack ?? details?.container ?? null;
+  const value = String(raw ?? "").trim();
+  if (!value) return null;
+  const normalized = value.toUpperCase();
+
+  if (method === "JNT") {
+    if (normalized === "SMALL") return "J&T Small pouch";
+    if (normalized === "MEDIUM") return "J&T Medium pouch";
+  }
+
+  if (method === "LBC") {
+    if (normalized === "N_SAKTO") return "LBC N-Sakto";
+    if (normalized === "MINIBOX") return "LBC Minibox";
+    if (normalized === "SMALL_BOX") return "LBC Small Box";
+    if (normalized === "MEDIUM_APPROVAL") return "LBC Medium Box (approval)";
+  }
+
+  return normalized.replace(/_/g, " ");
+}
+
 const STATUS_META: Record<
   string,
   {
@@ -265,6 +286,19 @@ export default function AdminOrdersPage() {
     window.setTimeout(() => setCopiedId((cur) => (cur === o.id ? null : cur)), 1200);
   }
 
+  async function onCopyPhone(phone: string) {
+    const value = String(phone ?? "").trim();
+    if (!value) return;
+
+    const ok = await copyText(value);
+    if (!ok) {
+      toast({ intent: "error", message: "Copy failed. Your browser blocked clipboard access." });
+      return;
+    }
+
+    toast({ intent: "success", message: "Phone copied." });
+  }
+
   const pendingApproval = orders.filter((o) => o.status === "PENDING_APPROVAL");
   const paymentSubmitted = orders.filter((o) => o.status === "PAYMENT_SUBMITTED");
   const awaitingPayment = orders.filter((o) => o.status === "AWAITING_PAYMENT");
@@ -357,6 +391,10 @@ export default function AdminOrdersPage() {
                 const shippingMethod = String(
                   o.shipping_method ?? details.method ?? "-"
                 ).toUpperCase();
+                const shippingContainer = formatShippingContainer(
+                  shippingMethod,
+                  details
+                );
                 const customerName =
                   details.receiver_name ||
                   [details.first_name, details.last_name].filter(Boolean).join(" ") ||
@@ -421,7 +459,19 @@ export default function AdminOrdersPage() {
                             <div className="text-xs uppercase tracking-wide text-white/50">Customer</div>
                             <div className="mt-1 font-medium">{customerName}</div>
                             {customerPhone ? (
-                              <div className="text-sm text-white/70">{customerPhone}</div>
+                              <div className="mt-1 flex items-center gap-2">
+                                <span className="text-sm text-white/70">{customerPhone}</span>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 px-0"
+                                  title="Copy phone number"
+                                  aria-label="Copy phone number"
+                                  onClick={() => onCopyPhone(customerPhone)}
+                                >
+                                  <ClipboardCopy className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
                             ) : null}
                           </div>
                           <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
@@ -429,6 +479,11 @@ export default function AdminOrdersPage() {
                             <div className="mt-1 text-sm text-white/80">
                               Shipping: <span className="text-white">{shippingMethod}</span>
                             </div>
+                            {shippingContainer ? (
+                              <div className="mt-1 text-sm text-white/80">
+                                Container: <span className="text-white">{shippingContainer}</span>
+                              </div>
+                            ) : null}
                             <div className="mt-1 font-semibold">Total: {peso(Number(o.total ?? 0))}</div>
                           </div>
                         </div>

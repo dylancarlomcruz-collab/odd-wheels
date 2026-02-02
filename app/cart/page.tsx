@@ -24,6 +24,32 @@ import {
   protectorUnitFee,
 } from "@/lib/addons";
 
+function normalizeValue(value: string | null | undefined) {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  return normalized.length ? normalized : null;
+}
+
+function normalizeList(values?: Array<string | null | undefined> | null) {
+  return (values ?? [])
+    .map((value) => normalizeValue(value))
+    .filter((value): value is string => Boolean(value));
+}
+
+function normalizeShipClasses(values: Array<string | null | undefined>) {
+  return values.map((value) => normalizeValue(value) ?? "MINI_GT");
+}
+
+function formatCourierLabel(value: string) {
+  switch (value) {
+    case "JNT":
+      return "J&T";
+    case "LALAMOVE":
+      return "Lalamove";
+    default:
+      return value;
+  }
+}
+
 function CartContent() {
   const { lines, loading, updateQty, updateProtector, remove, add } = useCart();
   const { settings } = useSettings();
@@ -132,6 +158,36 @@ function CartContent() {
   const freeShippingThreshold = Number(settings?.free_shipping_threshold ?? 0);
   const freeShippingGap =
     freeShippingThreshold > 0 ? freeShippingThreshold - selectedSubtotal : 0;
+  const freeShippingCouriers = React.useMemo(
+    () => normalizeList(settings?.free_shipping_couriers),
+    [settings?.free_shipping_couriers]
+  );
+  const freeShippingShipClasses = React.useMemo(
+    () => normalizeList(settings?.free_shipping_ship_classes),
+    [settings?.free_shipping_ship_classes]
+  );
+  const selectedShipClasses = React.useMemo(
+    () => normalizeShipClasses(selectedLines.map((line) => line.variant.ship_class)),
+    [selectedLines]
+  );
+  const cartHasIneligibleItems =
+    freeShippingShipClasses.length > 0 &&
+    selectedShipClasses.some((value) => !freeShippingShipClasses.includes(value));
+  const freeShippingCourierLabel = freeShippingCouriers.length
+    ? freeShippingCouriers.map(formatCourierLabel).join(", ")
+    : null;
+  const freeShippingHasRestrictions =
+    freeShippingCouriers.length > 0 || freeShippingShipClasses.length > 0;
+  const freeShippingNote = React.useMemo(() => {
+    if (!freeShippingHasRestrictions) return "";
+    if (freeShippingCourierLabel && freeShippingShipClasses.length) {
+      return `Free shipping applies to ${freeShippingCourierLabel} and eligible items only.`;
+    }
+    if (freeShippingCourierLabel) {
+      return `Free shipping applies to ${freeShippingCourierLabel} only.`;
+    }
+    return "Free shipping applies to eligible items only.";
+  }, [freeShippingHasRestrictions, freeShippingCourierLabel, freeShippingShipClasses.length]);
   const cartProductIds = React.useMemo(
     () => new Set(lines.map((line) => line.variant.product.id).filter(Boolean)),
     [lines],
@@ -300,11 +356,18 @@ function CartContent() {
               <span className="text-price">{formatPHP(freeShippingGap)}</span>{" "}
               more to unlock free shipping.
             </span>
+          ) : cartHasIneligibleItems ? (
+            <span className="text-white/70">
+              Subtotal met, but some items aren't eligible for free shipping.
+            </span>
           ) : (
             <span className="text-accent-700 dark:text-accent-200">
               You unlocked free shipping for this cart.
             </span>
           )}
+          {freeShippingNote ? (
+            <div className="mt-1 text-xs text-white/50">{freeShippingNote}</div>
+          ) : null}
         </div>
       ) : null}
 

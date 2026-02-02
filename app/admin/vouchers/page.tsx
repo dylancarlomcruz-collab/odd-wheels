@@ -4,8 +4,10 @@ import * as React from "react";
 import { supabase } from "@/lib/supabase/browser";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import { Checkbox } from "@/components/ui/Checkbox";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import type { ShipClass } from "@/lib/shipping/config";
 
 type VoucherRow = {
   id: string;
@@ -14,6 +16,8 @@ type VoucherRow = {
   kind: string;
   min_subtotal: number;
   shipping_cap: number;
+  include_ship_classes: string[] | null;
+  exclude_ship_classes: string[] | null;
   starts_at: string | null;
   expires_at: string | null;
   is_active: boolean;
@@ -24,6 +28,8 @@ type VoucherForm = {
   title: string;
   min_subtotal: string;
   shipping_cap: string;
+  include_ship_classes: ShipClass[];
+  exclude_ship_classes: ShipClass[];
   starts_at: string;
   expires_at: string;
   is_active: boolean;
@@ -34,10 +40,49 @@ const EMPTY_FORM: VoucherForm = {
   title: "",
   min_subtotal: "0",
   shipping_cap: "0",
+  include_ship_classes: [],
+  exclude_ship_classes: [],
   starts_at: "",
   expires_at: "",
   is_active: true,
 };
+
+const SHIP_CLASS_OPTIONS: ShipClass[] = [
+  "MINI_GT",
+  "KAIDO",
+  "POPRACE",
+  "ACRYLIC_TRUE_SCALE",
+  "TRUCKS",
+  "BLISTER",
+  "TOMICA",
+  "HOT_WHEELS_MAINLINE",
+  "HOT_WHEELS_PREMIUM",
+  "LOOSE_NO_BOX",
+  "LALAMOVE",
+  "DIORAMA",
+];
+
+function formatShipClassLabel(value: string) {
+  switch (value) {
+    case "ACRYLIC_TRUE_SCALE":
+      return "Acrylic True-Scale";
+    case "HOT_WHEELS_MAINLINE":
+      return "Hot Wheels Mainline";
+    case "HOT_WHEELS_PREMIUM":
+      return "Hot Wheels Premium";
+    case "LOOSE_NO_BOX":
+      return "Loose (No Box)";
+    default:
+      return value.replace(/_/g, " ");
+  }
+}
+
+function toggleListValue<T extends string>(values: T[], value: T, next: boolean) {
+  if (next) {
+    return values.includes(value) ? values : [...values, value];
+  }
+  return values.filter((v) => v !== value);
+}
 
 function toDatetimeLocal(value: string | null | undefined) {
   if (!value) return "";
@@ -61,6 +106,12 @@ function buildPayload(form: VoucherForm) {
     kind: "FREE_SHIPPING",
     min_subtotal: Math.max(0, Number(form.min_subtotal) || 0),
     shipping_cap: Math.max(0, Number(form.shipping_cap) || 0),
+    include_ship_classes: form.include_ship_classes.length
+      ? form.include_ship_classes
+      : null,
+    exclude_ship_classes: form.exclude_ship_classes.length
+      ? form.exclude_ship_classes
+      : null,
     starts_at: fromDatetimeLocal(form.starts_at),
     expires_at: fromDatetimeLocal(form.expires_at),
     is_active: Boolean(form.is_active),
@@ -73,6 +124,8 @@ function mapVoucherToForm(row: VoucherRow): VoucherForm {
     title: row.title ?? "",
     min_subtotal: String(row.min_subtotal ?? 0),
     shipping_cap: String(row.shipping_cap ?? 0),
+    include_ship_classes: (row.include_ship_classes ?? []) as ShipClass[],
+    exclude_ship_classes: (row.exclude_ship_classes ?? []) as ShipClass[],
     starts_at: toDatetimeLocal(row.starts_at),
     expires_at: toDatetimeLocal(row.expires_at),
     is_active: Boolean(row.is_active),
@@ -101,7 +154,9 @@ export default function AdminVouchersPage() {
     setError(null);
     const { data, error: loadError } = await supabase
       .from("vouchers")
-      .select("id,code,title,kind,min_subtotal,shipping_cap,starts_at,expires_at,is_active")
+      .select(
+        "id,code,title,kind,min_subtotal,shipping_cap,include_ship_classes,exclude_ship_classes,starts_at,expires_at,is_active"
+      )
       .order("created_at", { ascending: false });
 
     if (loadError) {
@@ -285,6 +340,57 @@ export default function AdminVouchersPage() {
                 }
               />
             </div>
+            <div className="space-y-2">
+              <div className="text-xs uppercase text-white/50">
+                Include ship classes
+              </div>
+              <div className="flex flex-wrap gap-3">
+                {SHIP_CLASS_OPTIONS.map((shipClass) => (
+                  <Checkbox
+                    key={`create-include-${shipClass}`}
+                    checked={newVoucher.include_ship_classes.includes(shipClass)}
+                    onChange={(next) =>
+                      setNewVoucher((prev) => ({
+                        ...prev,
+                        include_ship_classes: toggleListValue(
+                          prev.include_ship_classes,
+                          shipClass,
+                          next
+                        ),
+                      }))
+                    }
+                    label={formatShipClassLabel(shipClass)}
+                  />
+                ))}
+              </div>
+              <div className="text-xs text-white/50">
+                Leave empty to allow all classes. Exclude overrides include.
+              </div>
+            </div>
+            <div className="space-y-2">
+              <div className="text-xs uppercase text-white/50">
+                Exclude ship classes
+              </div>
+              <div className="flex flex-wrap gap-3">
+                {SHIP_CLASS_OPTIONS.map((shipClass) => (
+                  <Checkbox
+                    key={`create-exclude-${shipClass}`}
+                    checked={newVoucher.exclude_ship_classes.includes(shipClass)}
+                    onChange={(next) =>
+                      setNewVoucher((prev) => ({
+                        ...prev,
+                        exclude_ship_classes: toggleListValue(
+                          prev.exclude_ship_classes,
+                          shipClass,
+                          next
+                        ),
+                      }))
+                    }
+                    label={formatShipClassLabel(shipClass)}
+                  />
+                ))}
+              </div>
+            </div>
             <label className="flex items-center gap-2 text-sm text-white/70">
               <input
                 type="checkbox"
@@ -398,6 +504,63 @@ export default function AdminVouchersPage() {
                             }))
                           }
                         />
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-xs uppercase text-white/50">
+                          Include ship classes
+                        </div>
+                        <div className="flex flex-wrap gap-3">
+                          {SHIP_CLASS_OPTIONS.map((shipClass) => (
+                            <Checkbox
+                              key={`edit-include-${voucher.id}-${shipClass}`}
+                              checked={draft.include_ship_classes.includes(shipClass)}
+                              onChange={(next) =>
+                                setDrafts((prev) => ({
+                                  ...prev,
+                                  [voucher.id]: {
+                                    ...draft,
+                                    include_ship_classes: toggleListValue(
+                                      draft.include_ship_classes,
+                                      shipClass,
+                                      next
+                                    ),
+                                  },
+                                }))
+                              }
+                              label={formatShipClassLabel(shipClass)}
+                            />
+                          ))}
+                        </div>
+                        <div className="text-xs text-white/50">
+                          Leave empty to allow all classes. Exclude overrides include.
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-xs uppercase text-white/50">
+                          Exclude ship classes
+                        </div>
+                        <div className="flex flex-wrap gap-3">
+                          {SHIP_CLASS_OPTIONS.map((shipClass) => (
+                            <Checkbox
+                              key={`edit-exclude-${voucher.id}-${shipClass}`}
+                              checked={draft.exclude_ship_classes.includes(shipClass)}
+                              onChange={(next) =>
+                                setDrafts((prev) => ({
+                                  ...prev,
+                                  [voucher.id]: {
+                                    ...draft,
+                                    exclude_ship_classes: toggleListValue(
+                                      draft.exclude_ship_classes,
+                                      shipClass,
+                                      next
+                                    ),
+                                  },
+                                }))
+                              }
+                              label={formatShipClassLabel(shipClass)}
+                            />
+                          ))}
+                        </div>
                       </div>
                       <label className="flex items-center gap-2 text-sm text-white/70">
                         <input

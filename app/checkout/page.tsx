@@ -47,6 +47,7 @@ import {
   shipCountsFromLines,
 } from "@/lib/shipping/logic";
 import { suggestedInsuranceFee } from "@/lib/shipping/config";
+import { getFreeShippingEligibility } from "@/lib/shipping/freeShipping";
 import { resolveEffectivePrice } from "@/lib/pricing";
 import { protectorUnitFee } from "@/lib/addons";
 import {
@@ -314,6 +315,7 @@ type VoucherModalProps = {
   onClose: () => void;
   subtotal: number;
   shippingFee: number;
+  shipClasses: Array<string | null | undefined>;
 };
 
 type JntLocationModalProps = {
@@ -480,6 +482,7 @@ function VoucherModal({
   onClose,
   subtotal,
   shippingFee,
+  shipClasses,
 }: VoucherModalProps) {
   React.useEffect(() => {
     if (!open || typeof document === "undefined") return undefined;
@@ -523,6 +526,7 @@ function VoucherModal({
                     walletExpiresAt: wallet.expires_at ?? null,
                     subtotal,
                     shippingFee,
+                    shipClasses,
                   });
                   const isSelected = selectedId === wallet.id;
                   return (
@@ -942,7 +946,7 @@ function CheckoutContent() {
       const { data, error } = await supabase
         .from("voucher_wallet")
         .select(
-          "id,status,claimed_at,used_at,expires_at,voucher:vouchers(id,code,title,kind,min_subtotal,shipping_cap,starts_at,expires_at,is_active)",
+          "id,status,claimed_at,used_at,expires_at,voucher:vouchers(id,code,title,kind,min_subtotal,shipping_cap,include_ship_classes,exclude_ship_classes,starts_at,expires_at,is_active)",
         )
         .eq("user_id", user.id)
         .order("claimed_at", { ascending: false });
@@ -1377,6 +1381,33 @@ function CheckoutContent() {
     [voucherWallet, selectedVoucherWalletId],
   );
 
+  const freeShippingEligibility = React.useMemo(
+    () =>
+      getFreeShippingEligibility({
+        subtotal: itemsSubtotal,
+        shippingFee: fees.shipping_fee,
+        shippingMethod,
+        shipClasses: (selectedLines ?? []).map((line) => line.variant.ship_class),
+        settings: {
+          threshold: Number(settings?.free_shipping_threshold ?? 0),
+          couriers: settings?.free_shipping_couriers ?? null,
+          ship_classes: settings?.free_shipping_ship_classes ?? null,
+        },
+      }),
+    [
+      itemsSubtotal,
+      fees.shipping_fee,
+      shippingMethod,
+      selectedLines,
+      settings?.free_shipping_threshold,
+      settings?.free_shipping_couriers,
+      settings?.free_shipping_ship_classes,
+    ],
+  );
+  const autoFreeShippingDiscount = freeShippingEligibility.eligible
+    ? freeShippingEligibility.discount
+    : 0;
+
   const voucherEligibility = React.useMemo(() => {
     if (!selectedVoucher) return null;
     return getVoucherEligibility({
@@ -1384,12 +1415,18 @@ function CheckoutContent() {
       walletExpiresAt: selectedVoucher.expires_at ?? null,
       subtotal: itemsSubtotal,
       shippingFee: fees.shipping_fee,
+      shipClasses: (selectedLines ?? []).map((line) => line.variant.ship_class),
     });
-  }, [selectedVoucher, itemsSubtotal, fees.shipping_fee]);
+  }, [selectedVoucher, itemsSubtotal, fees.shipping_fee, selectedLines]);
 
-  const shippingDiscount = voucherEligibility?.eligible
+  const voucherDiscount = voucherEligibility?.eligible
     ? voucherEligibility.discount
     : 0;
+  const shippingDiscount = Math.max(autoFreeShippingDiscount, voucherDiscount);
+  const shippingDiscountLabel =
+    autoFreeShippingDiscount > 0 && autoFreeShippingDiscount >= voucherDiscount
+      ? "Free shipping"
+      : "Shipping discount";
 
   React.useEffect(() => {
     if (!selectedVoucherWalletId) {
@@ -1459,7 +1496,7 @@ function CheckoutContent() {
     }
 
     if (shippingDiscount > 0) {
-      out.push({ label: "Shipping discount", amount: -shippingDiscount });
+      out.push({ label: shippingDiscountLabel, amount: -shippingDiscount });
     }
     if (fees.cop_fee > 0)
       out.push({ label: "LBC COP convenience fee", amount: fees.cop_fee });
@@ -1489,6 +1526,8 @@ function CheckoutContent() {
     shippingMethod,
     region,
     fees,
+    shippingDiscount,
+    shippingDiscountLabel,
     insuranceSelected,
     suggestedInsurance,
     lbcCop,
@@ -2337,6 +2376,7 @@ function CheckoutContent() {
         onClose={() => setVoucherOpen(false)}
         subtotal={itemsSubtotal}
         shippingFee={fees.shipping_fee}
+        shipClasses={(selectedLines ?? []).map((line) => line.variant.ship_class)}
       />
       <LalamoveMapPickerModal
         open={lalamoveMapPickerOpen}

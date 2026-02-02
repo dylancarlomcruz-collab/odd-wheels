@@ -123,6 +123,9 @@ function matchesCategory(product: any, category: string) {
         )
       );
     case "truescales":
+      if (brandKey.includes("inno64")) {
+        return false;
+      }
       return (product?.options ?? []).some((opt: any) => {
         const shipClass = String(opt?.ship_class ?? "").toUpperCase();
         return shipClass === "ACRYLIC_TRUE_SCALE";
@@ -733,9 +736,7 @@ export default function ShopPageClient() {
   }, [sortedProducts, searchTermTokens]);
 
   const filtered = React.useMemo(() => {
-    const applyBrandTab = selectedCategories.length === 0;
-    const brandKeys =
-      applyBrandTab && selectedBrands.length ? new Set(selectedBrands) : null;
+    const brandKeys = selectedBrands.length ? new Set(selectedBrands) : null;
     const conditionKeys = selectedConditions.length
       ? new Set(selectedConditions)
       : null;
@@ -839,7 +840,7 @@ export default function ShopPageClient() {
   }, [lastSearch, shopProducts]);
 
   const forYou = React.useMemo(() => {
-    const picks: typeof shopProducts = [];
+    const picks: ShopProduct[] = [];
     const seen = new Set<string>();
     const recentProducts = recentEntries
       .map((entry) => productById.get(entry.id))
@@ -1273,10 +1274,10 @@ export default function ShopPageClient() {
                         onClick={() => {
                           if (b.key === BRAND_ALL_KEY) {
                             setSelectedBrands([]);
+                            setShowAllBrands(false);
                           } else {
                             setSelectedBrands((prev) => toggleValue(prev, b.key));
                           }
-                          if (selectedCategories.length) setSelectedCategories([]);
                         }}
                         className={getBrandButtonClasses(
                           b.key === BRAND_ALL_KEY
@@ -1355,8 +1356,6 @@ export default function ShopPageClient() {
                           } else {
                             setSelectedBrands((prev) => toggleValue(prev, b.key));
                           }
-                          setShowAllBrands(false);
-                          if (selectedCategories.length) setSelectedCategories([]);
                         }}
                         className={getBrandButtonClasses(
                           b.key === BRAND_ALL_KEY
@@ -1419,7 +1418,6 @@ export default function ShopPageClient() {
                           onClick={() => {
                             setSelectedCategories((prev) => {
                               const next = toggleValue(prev, category.key);
-                              if (next.length) setSelectedBrands([]);
                               return next;
                             });
                           }}
