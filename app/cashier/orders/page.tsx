@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { ClipboardCopy } from "lucide-react";
 import { supabase } from "@/lib/supabase/browser";
 import { useAllOrders } from "@/hooks/useAllOrders";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
@@ -143,6 +144,19 @@ export default function CashierOrdersPage() {
     window.setTimeout(() => setCopiedId((cur) => (cur === o.id ? null : cur)), 1200);
   }
 
+  async function onCopyPhone(phone: string) {
+    const value = String(phone ?? "").trim();
+    if (!value) return;
+
+    const ok = await copyText(value);
+    if (!ok) {
+      toast({ intent: "error", message: "Copy failed. Your browser blocked clipboard access." });
+      return;
+    }
+
+    toast({ intent: "success", message: "Phone copied." });
+  }
+
   const actionableOrders = orders.filter((o) =>
     ["PENDING_APPROVAL", "PENDING_STAFF_APPROVAL", "PAYMENT_SUBMITTED", "PAYMENT_REVIEW"].includes(
       String(o.status ?? "").toUpperCase()
@@ -185,6 +199,7 @@ export default function CashierOrdersPage() {
                 const method = String(details.method ?? o.shipping_method ?? "").toUpperCase();
                 const isCop = method === "LBC" && Boolean(details.cop);
                 const items = itemsByOrderId[o.id] ?? [];
+                const customerPhone = o.contact ?? o.customer_phone ?? "";
 
                 return (
                   <div key={o.id} className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
@@ -204,7 +219,21 @@ export default function CashierOrdersPage() {
                         <div className="text-xs text-white/60">Customer</div>
                         <div className="font-medium">{o.customer_name ?? "—"}</div>
                         <div className="text-sm text-white/70">
-                          {(o.contact ?? o.customer_phone) ? <div>{o.contact ?? o.customer_phone}</div> : null}
+                          {customerPhone ? (
+                            <div className="mt-1 flex items-center gap-2">
+                              <span>{customerPhone}</span>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 px-0"
+                                title="Copy phone number"
+                                aria-label="Copy phone number"
+                                onClick={() => onCopyPhone(customerPhone)}
+                              >
+                                <ClipboardCopy className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          ) : null}
                           {o.address ? <div className="mt-1">{o.address}</div> : null}
                         </div>
                       </div>

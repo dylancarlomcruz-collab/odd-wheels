@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ScrollText } from "lucide-react";
+import { ClipboardCopy, ScrollText } from "lucide-react";
 import { useAllOrders } from "@/hooks/useAllOrders";
 import { useNotices } from "@/hooks/useNotices";
 import { supabase } from "@/lib/supabase/browser";
@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { formatConditionLabel } from "@/lib/conditions";
+import { toast } from "@/components/ui/toast";
 
 const SHIPPING_TABS = [
   { key: "PREPARING TO SHIP", label: "Preparing to ship" },
@@ -485,6 +486,19 @@ export default function CashierShipmentsPage() {
     window.setTimeout(() => setCopiedId((cur) => (cur === o.id ? null : cur)), 1200);
   }
 
+  async function onCopyPhone(phone: string) {
+    const value = String(phone ?? "").trim();
+    if (!value) return;
+
+    const ok = await copyText(value);
+    if (!ok) {
+      toast({ intent: "error", message: "Copy failed. Your browser blocked clipboard access." });
+      return;
+    }
+
+    toast({ intent: "success", message: "Phone copied." });
+  }
+
   function onDraftChange(orderId: string, key: "courier" | "tracking", value: string) {
     setDrafts((cur) => ({
       ...cur,
@@ -705,7 +719,19 @@ export default function CashierShipmentsPage() {
                         <div className="text-[11px] uppercase tracking-wide text-white/50">Customer</div>
                         <div className="mt-1 font-medium">{customerName}</div>
                         {customerPhone ? (
-                          <div className="text-sm text-white/70">{customerPhone}</div>
+                          <div className="mt-1 flex items-center gap-2">
+                            <span className="text-sm text-white/70">{customerPhone}</span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 px-0"
+                              title="Copy phone number"
+                              aria-label="Copy phone number"
+                              onClick={() => onCopyPhone(customerPhone)}
+                            >
+                              <ClipboardCopy className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
                         ) : null}
                         {customerAddress ? (
                           <div className="mt-1 text-xs text-white/60">{customerAddress}</div>

@@ -118,6 +118,7 @@ export function SiteHeader() {
     staffCounts.pendingShipping;
   const menuBadgeCount = isStaff ? staffTotal : orderCount;
   const menuBadgeLabel = menuBadgeCount > 99 ? "99+" : String(menuBadgeCount);
+  const showCustomerOrders = Boolean(user) && !isStaff;
   const showShopSort = pathname === "/";
 
   React.useEffect(() => {
@@ -647,6 +648,24 @@ export function SiteHeader() {
             </div>
           ) : null}
           <ThemeToggle />
+
+          {showCustomerOrders ? (
+            <Link href="/orders">
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label={orderCount ? `Orders (${orderCountLabel})` : "Orders"}
+                className="relative"
+              >
+                <ClipboardList className="h-4 w-4" />
+                {orderCount > 0 ? (
+                  <span className="absolute -top-1 -right-1 min-w-[18px] rounded-full border border-bg-900/80 bg-accent-500 px-1 text-[10px] font-semibold leading-4 text-white">
+                    {orderCountLabel}
+                  </span>
+                ) : null}
+              </Button>
+            </Link>
+          ) : null}
 
           <Link href="/cart">
             <Button
