@@ -316,6 +316,30 @@ export default function CashierOrdersPage() {
                       )}
                     </div>
 
+                    {o.receipt_url ? (
+                      <div className="mt-4">
+                        <div className="text-sm font-semibold">Receipt</div>
+                        <div className="mt-2 rounded-xl border border-white/10 bg-paper/5 p-3">
+                          <a
+                            href={o.receipt_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={o.receipt_url}
+                              alt="Receipt"
+                              className="w-full max-h-80 object-contain rounded-lg bg-neutral-50"
+                            />
+                          </a>
+                          <div className="mt-2 text-xs text-white/50">
+                            Click image to enlarge.
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+
                     <div className="mt-4 flex flex-wrap items-center gap-2">
                       <Button variant="secondary" onClick={() => onCopy(o)}>
                         {copiedId === o.id ? "Copied!" : "Copy details"}

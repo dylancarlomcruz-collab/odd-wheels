@@ -35,6 +35,34 @@ function formatVoucherStatus(status: string | null | undefined) {
   return normalized;
 }
 
+function formatCourierLabel(value: string | null | undefined) {
+  const raw = String(value ?? "").trim().toUpperCase();
+  if (!raw) return "";
+  if (raw === "JNT" || raw === "J&T") return "J&T";
+  if (raw === "LBC") return "LBC";
+  if (raw === "LALAMOVE") return "Lalamove";
+  return raw;
+}
+
+function normalizeCourierValues(
+  values?: Array<string | null | undefined> | string | null
+) {
+  if (Array.isArray(values)) return values;
+  if (typeof values === "string") {
+    const trimmed = values.replace(/[{}]/g, "").trim();
+    if (!trimmed) return [];
+    return trimmed.split(",").map((value) => value.trim());
+  }
+  return [];
+}
+
+function formatCourierList(values?: Array<string | null | undefined> | string | null) {
+  const list = normalizeCourierValues(values)
+    .map((value) => formatCourierLabel(value))
+    .filter((value) => value.length > 0);
+  return list.length ? list.join(", ") : null;
+}
+
 const TIER_ICONS: Record<Tier, React.ElementType> = {
   CLASSIC: Star,
   SILVER: Shield,
@@ -163,7 +191,7 @@ export default function AccountTierPage() {
       const { data, error } = await supabase
         .from("voucher_wallet")
         .select(
-          "id,status,claimed_at,used_at,expires_at,voucher:vouchers(id,code,title,kind,min_subtotal,shipping_cap,starts_at,expires_at,is_active)"
+          "id,status,claimed_at,used_at,expires_at,voucher:vouchers(id,code,title,details,kind,min_subtotal,shipping_cap,include_couriers,starts_at,expires_at,is_active)"
         )
         .eq("user_id", user.id)
         .order("claimed_at", { ascending: false });
@@ -486,6 +514,16 @@ export default function AccountTierPage() {
                           Min spend {formatPHP(Number(wallet.voucher.min_subtotal ?? 0))} - Cap{" "}
                           {formatPHP(Number(wallet.voucher.shipping_cap ?? 0))}
                         </div>
+                        {formatCourierList(wallet.voucher.include_couriers) ? (
+                          <div className="mt-1 text-xs text-neutral-500">
+                            Couriers: {formatCourierList(wallet.voucher.include_couriers)}
+                          </div>
+                        ) : null}
+                        {wallet.voucher.details ? (
+                          <div className="mt-1 text-xs text-neutral-500 whitespace-pre-line">
+                            {wallet.voucher.details}
+                          </div>
+                        ) : null}
                       </div>
                       <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] text-white/70">
                         {formatVoucherStatus(wallet.status)}

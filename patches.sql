@@ -1471,11 +1471,13 @@ create table if not exists public.vouchers (
   id uuid primary key default gen_random_uuid(),
   code text unique,
   title text,
+  details text,
   kind text not null default 'FREE_SHIPPING',
   min_subtotal numeric not null default 0,
   shipping_cap numeric not null default 0,
   discount_amount numeric,
   discount_percent numeric,
+  include_couriers text[],
   include_ship_classes text[],
   exclude_ship_classes text[],
   starts_at timestamptz,
@@ -1487,6 +1489,8 @@ create table if not exists public.vouchers (
 );
 
 alter table public.vouchers
+  add column if not exists details text,
+  add column if not exists include_couriers text[],
   add column if not exists discount_amount numeric,
   add column if not exists discount_percent numeric,
   add column if not exists include_ship_classes text[],
@@ -1963,15 +1967,16 @@ security definer
 set search_path = public
 set row_security = off
 as $$
-declare
-  v_voucher public.vouchers%rowtype;
-  v_now timestamptz := now();
-  v_tier text;
-  v_base_total numeric := 0;
-  v_shipping_discount numeric := 0;
-  v_order_discount numeric := 0;
-  v_kind text;
-  v_percent numeric := 0;
+  declare
+    v_voucher public.vouchers%rowtype;
+    v_now timestamptz := now();
+    v_tier text;
+    v_base_total numeric := 0;
+    v_shipping_discount numeric := 0;
+    v_order_discount numeric := 0;
+    v_kind text;
+    v_percent numeric := 0;
+    v_ship_method text;
 begin
   if new.id is null then
     new.id := gen_random_uuid();
@@ -2019,6 +2024,20 @@ begin
   if coalesce(new.subtotal, 0) < coalesce(v_voucher.min_subtotal, 0) then
     raise exception 'Subtotal does not meet voucher minimum.';
   end if;
+
+    if v_voucher.include_couriers is not null
+       and array_length(v_voucher.include_couriers, 1) is not null then
+      v_ship_method := upper(trim(coalesce(new.shipping_method, '')));
+      if v_ship_method = '' then
+        raise exception 'Voucher requires a shipping method.';
+      end if;
+      if v_ship_method in ('J&T', 'J&T EXPRESS', 'J&TEXPRESS', 'JT') then
+        v_ship_method := 'JNT';
+      end if;
+      if not (v_ship_method = any(v_voucher.include_couriers)) then
+        raise exception 'Voucher not eligible for this courier.';
+      end if;
+    end if;
 
   v_kind := upper(trim(coalesce(v_voucher.kind, '')));
 
@@ -2261,6 +2280,26 @@ begin
   return v_count;
   end;
   $$;
+
+drop function if exists public.fn_admin_grant_voucher(
+  text,
+  text,
+  text,
+  numeric,
+  numeric,
+  numeric,
+  numeric,
+  timestamptz,
+  timestamptz,
+  boolean,
+  int,
+  int,
+  uuid[],
+  boolean,
+  int,
+  timestamptz,
+  uuid
+);
 
 create or replace function public.fn_admin_grant_voucher(
   p_kind text,

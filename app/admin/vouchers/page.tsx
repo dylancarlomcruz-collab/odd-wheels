@@ -7,15 +7,18 @@ import { Button } from "@/components/ui/Button";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import type { ShipClass } from "@/lib/shipping/config";
+import { Textarea } from "@/components/ui/Textarea";
+import type { Courier, ShipClass } from "@/lib/shipping/config";
 
 type VoucherRow = {
   id: string;
   code: string | null;
   title: string | null;
+  details: string | null;
   kind: string;
   min_subtotal: number;
   shipping_cap: number;
+  include_couriers: string[] | null;
   include_ship_classes: string[] | null;
   exclude_ship_classes: string[] | null;
   starts_at: string | null;
@@ -26,8 +29,10 @@ type VoucherRow = {
 type VoucherForm = {
   code: string;
   title: string;
+  details: string;
   min_subtotal: string;
   shipping_cap: string;
+  include_couriers: Courier[];
   include_ship_classes: ShipClass[];
   exclude_ship_classes: ShipClass[];
   starts_at: string;
@@ -38,8 +43,10 @@ type VoucherForm = {
 const EMPTY_FORM: VoucherForm = {
   code: "",
   title: "",
+  details: "",
   min_subtotal: "0",
   shipping_cap: "0",
+  include_couriers: [],
   include_ship_classes: [],
   exclude_ship_classes: [],
   starts_at: "",
@@ -60,6 +67,12 @@ const SHIP_CLASS_OPTIONS: ShipClass[] = [
   "LOOSE_NO_BOX",
   "LALAMOVE",
   "DIORAMA",
+];
+
+const COURIER_OPTIONS: Array<{ value: Courier; label: string }> = [
+  { value: "JNT", label: "J&T" },
+  { value: "LBC", label: "LBC" },
+  { value: "LALAMOVE", label: "Lalamove" },
 ];
 
 function formatShipClassLabel(value: string) {
@@ -103,9 +116,11 @@ function buildPayload(form: VoucherForm) {
   return {
     code: form.code.trim() || null,
     title: form.title.trim() || null,
+    details: form.details.trim() || null,
     kind: "FREE_SHIPPING",
     min_subtotal: Math.max(0, Number(form.min_subtotal) || 0),
     shipping_cap: Math.max(0, Number(form.shipping_cap) || 0),
+    include_couriers: form.include_couriers.length ? form.include_couriers : null,
     include_ship_classes: form.include_ship_classes.length
       ? form.include_ship_classes
       : null,
@@ -122,8 +137,10 @@ function mapVoucherToForm(row: VoucherRow): VoucherForm {
   return {
     code: row.code ?? "",
     title: row.title ?? "",
+    details: row.details ?? "",
     min_subtotal: String(row.min_subtotal ?? 0),
     shipping_cap: String(row.shipping_cap ?? 0),
+    include_couriers: (row.include_couriers ?? []) as Courier[],
     include_ship_classes: (row.include_ship_classes ?? []) as ShipClass[],
     exclude_ship_classes: (row.exclude_ship_classes ?? []) as ShipClass[],
     starts_at: toDatetimeLocal(row.starts_at),
@@ -138,7 +155,9 @@ export default function AdminVouchersPage() {
   const [vouchers, setVouchers] = React.useState<VoucherRow[]>([]);
   const [drafts, setDrafts] = React.useState<Record<string, VoucherForm>>({});
   const [newVoucher, setNewVoucher] = React.useState<VoucherForm>(EMPTY_FORM);
+  const [grantAllOnCreate, setGrantAllOnCreate] = React.useState(false);
   const [savingId, setSavingId] = React.useState<string | null>(null);
+  const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [createLoading, setCreateLoading] = React.useState(false);
   const [createMsg, setCreateMsg] = React.useState<string | null>(null);
   const [grantUserId, setGrantUserId] = React.useState("");
@@ -146,6 +165,7 @@ export default function AdminVouchersPage() {
   const [grantExpiresAt, setGrantExpiresAt] = React.useState("");
   const [grantLoading, setGrantLoading] = React.useState(false);
   const [grantMsg, setGrantMsg] = React.useState<string | null>(null);
+  const [grantAllId, setGrantAllId] = React.useState<string | null>(null);
   const [syncLoading, setSyncLoading] = React.useState(false);
   const [syncMsg, setSyncMsg] = React.useState<string | null>(null);
 
@@ -155,7 +175,7 @@ export default function AdminVouchersPage() {
     const { data, error: loadError } = await supabase
       .from("vouchers")
       .select(
-        "id,code,title,kind,min_subtotal,shipping_cap,include_ship_classes,exclude_ship_classes,starts_at,expires_at,is_active"
+        "id,code,title,details,kind,min_subtotal,shipping_cap,include_couriers,include_ship_classes,exclude_ship_classes,starts_at,expires_at,is_active"
       )
       .order("created_at", { ascending: false });
 
@@ -185,15 +205,38 @@ export default function AdminVouchersPage() {
     setCreateMsg(null);
     const payload = buildPayload(newVoucher);
 
-    const { error: createError } = await supabase.from("vouchers").insert(payload);
+    const { data, error: createError } = await supabase
+      .from("vouchers")
+      .insert(payload)
+      .select("id")
+      .single();
     if (createError) {
       setCreateMsg(createError.message || "Failed to create voucher.");
       setCreateLoading(false);
       return;
     }
 
-    setCreateMsg("Voucher created.");
+    if (grantAllOnCreate && data?.id) {
+      const { error: grantError } = await supabase.rpc("fn_admin_grant_voucher", {
+        p_kind: "FREE_SHIPPING",
+        p_voucher_id: data.id,
+        p_include_ship_classes: null,
+        p_exclude_ship_classes: null,
+        p_grant_all: true,
+        p_per_user: 1,
+      });
+      if (grantError) {
+        setCreateMsg(
+          `Voucher created, but grant failed: ${grantError.message || "Unknown error."}`
+        );
+      } else {
+        setCreateMsg("Voucher created and granted to all users.");
+      }
+    } else {
+      setCreateMsg("Voucher created.");
+    }
     setNewVoucher(EMPTY_FORM);
+    setGrantAllOnCreate(false);
     await loadVouchers();
     setCreateLoading(false);
   }
@@ -217,6 +260,52 @@ export default function AdminVouchersPage() {
 
     await loadVouchers();
     setSavingId(null);
+  }
+
+  async function onDeleteVoucher(id: string) {
+    const target = vouchers.find((voucher) => voucher.id === id);
+    const label = target?.code || target?.title || id.slice(0, 8);
+    if (!window.confirm(`Delete voucher "${label}"? This cannot be undone.`)) {
+      return;
+    }
+
+    setDeletingId(id);
+    const { error: deleteError } = await supabase.from("vouchers").delete().eq("id", id);
+    if (deleteError) {
+      alert(deleteError.message || "Failed to delete voucher.");
+      setDeletingId(null);
+      return;
+    }
+
+    await loadVouchers();
+    setDeletingId(null);
+  }
+
+  async function onGrantVoucherAll(id: string) {
+    const target = vouchers.find((voucher) => voucher.id === id);
+    const label = target?.code || target?.title || id.slice(0, 8);
+    if (!window.confirm(`Grant voucher "${label}" to all users?`)) {
+      return;
+    }
+
+    setGrantAllId(id);
+    const { error: grantError } = await supabase.rpc("fn_admin_grant_voucher", {
+      p_kind: "FREE_SHIPPING",
+      p_voucher_id: id,
+      p_include_ship_classes: null,
+      p_exclude_ship_classes: null,
+      p_grant_all: true,
+      p_per_user: 1,
+    });
+
+    if (grantError) {
+      alert(grantError.message || "Failed to grant voucher to all users.");
+      setGrantAllId(null);
+      return;
+    }
+
+    setGrantAllId(null);
+    alert("Voucher granted to all users.");
   }
 
   async function onGrantVoucher() {
@@ -297,6 +386,15 @@ export default function AdminVouchersPage() {
                   setNewVoucher((prev) => ({ ...prev, title: e.target.value }))
                 }
               />
+              <Textarea
+                label="Details"
+                value={newVoucher.details}
+                onChange={(e) =>
+                  setNewVoucher((prev) => ({ ...prev, details: e.target.value }))
+                }
+                className="md:col-span-2"
+                placeholder="Optional notes or voucher details shown to customers."
+              />
               <Input
                 label="Min subtotal"
                 type="number"
@@ -339,6 +437,33 @@ export default function AdminVouchersPage() {
                   setNewVoucher((prev) => ({ ...prev, expires_at: e.target.value }))
                 }
               />
+            </div>
+            <div className="space-y-2">
+              <div className="text-xs uppercase text-white/50">
+                Available couriers
+              </div>
+              <div className="flex flex-wrap gap-3">
+                {COURIER_OPTIONS.map((opt) => (
+                  <Checkbox
+                    key={`create-courier-${opt.value}`}
+                    checked={newVoucher.include_couriers.includes(opt.value)}
+                    onChange={(next) =>
+                      setNewVoucher((prev) => ({
+                        ...prev,
+                        include_couriers: toggleListValue(
+                          prev.include_couriers,
+                          opt.value,
+                          next
+                        ),
+                      }))
+                    }
+                    label={opt.label}
+                  />
+                ))}
+              </div>
+              <div className="text-xs text-white/50">
+                Leave empty to allow all couriers.
+              </div>
             </div>
             <div className="space-y-2">
               <div className="text-xs uppercase text-white/50">
@@ -390,6 +515,18 @@ export default function AdminVouchersPage() {
                   />
                 ))}
               </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-white/70">
+              <input
+                type="checkbox"
+                checked={grantAllOnCreate}
+                onChange={(e) => setGrantAllOnCreate(e.target.checked)}
+                className="h-4 w-4"
+              />
+              Grant to all users on create
+            </label>
+            <div className="text-xs text-white/50">
+              This adds the voucher to every customer&apos;s voucher wallet.
             </div>
             <label className="flex items-center gap-2 text-sm text-white/70">
               <input
@@ -450,6 +587,18 @@ export default function AdminVouchersPage() {
                             }))
                           }
                         />
+                        <Textarea
+                          label="Details"
+                          value={draft.details}
+                          onChange={(e) =>
+                            setDrafts((prev) => ({
+                              ...prev,
+                              [voucher.id]: { ...draft, details: e.target.value },
+                            }))
+                          }
+                          className="md:col-span-2"
+                          placeholder="Optional notes or voucher details shown to customers."
+                        />
                         <Input
                           label="Min subtotal"
                           type="number"
@@ -504,6 +653,36 @@ export default function AdminVouchersPage() {
                             }))
                           }
                         />
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-xs uppercase text-white/50">
+                          Available couriers
+                        </div>
+                        <div className="flex flex-wrap gap-3">
+                          {COURIER_OPTIONS.map((opt) => (
+                            <Checkbox
+                              key={`edit-courier-${voucher.id}-${opt.value}`}
+                              checked={draft.include_couriers.includes(opt.value)}
+                              onChange={(next) =>
+                                setDrafts((prev) => ({
+                                  ...prev,
+                                  [voucher.id]: {
+                                    ...draft,
+                                    include_couriers: toggleListValue(
+                                      draft.include_couriers,
+                                      opt.value,
+                                      next
+                                    ),
+                                  },
+                                }))
+                              }
+                              label={opt.label}
+                            />
+                          ))}
+                        </div>
+                        <div className="text-xs text-white/50">
+                          Leave empty to allow all couriers.
+                        </div>
                       </div>
                       <div className="space-y-2">
                         <div className="text-xs uppercase text-white/50">
@@ -579,13 +758,42 @@ export default function AdminVouchersPage() {
                         />
                         Active
                       </label>
-                      <Button
-                        size="sm"
-                        onClick={() => onSaveVoucher(voucher.id)}
-                        disabled={savingId === voucher.id}
-                      >
-                        {savingId === voucher.id ? "Saving..." : "Save changes"}
-                      </Button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => onSaveVoucher(voucher.id)}
+                          disabled={
+                            savingId === voucher.id ||
+                            deletingId === voucher.id ||
+                            grantAllId === voucher.id
+                          }
+                        >
+                          {savingId === voucher.id ? "Saving..." : "Save changes"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => onGrantVoucherAll(voucher.id)}
+                          disabled={
+                            savingId === voucher.id ||
+                            deletingId === voucher.id ||
+                            grantAllId === voucher.id
+                          }
+                        >
+                          {grantAllId === voucher.id ? "Granting..." : "Grant to all users"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={() => onDeleteVoucher(voucher.id)}
+                          disabled={
+                            deletingId === voucher.id ||
+                            savingId === voucher.id ||
+                            grantAllId === voucher.id
+                          }
+                        >
+                          {deletingId === voucher.id ? "Deleting..." : "Delete"}
+                        </Button>
+                      </div>
                     </div>
                   );
                 })}

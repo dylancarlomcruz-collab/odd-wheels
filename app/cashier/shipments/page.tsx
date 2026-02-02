@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { ClipboardCopy, ScrollText } from "lucide-react";
 import { useAllOrders } from "@/hooks/useAllOrders";
 import { useNotices } from "@/hooks/useNotices";
+import { useProfile } from "@/hooks/useProfile";
 import { supabase } from "@/lib/supabase/browser";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -248,6 +249,7 @@ function pickShippingDays(notices: { title: string; body: string }[]) {
 
 export default function CashierShipmentsPage() {
   const pathname = usePathname();
+  const { profile } = useProfile();
   const { orders, itemsByOrderId, loading, reload } = useAllOrders();
   const { notices } = useNotices(10);
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
@@ -264,6 +266,7 @@ export default function CashierShipmentsPage() {
   const [scanError, setScanError] = React.useState<string | null>(null);
   const [scanSupported, setScanSupported] = React.useState(false);
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
+  const isAdmin = profile?.role === "admin";
 
   const shippingDays = React.useMemo(
     () => pickShippingDays(notices),
@@ -780,18 +783,27 @@ export default function CashierShipmentsPage() {
 
                     {shippingStatus === "PREPARING TO SHIP" ? (
                       <div className="mt-3 grid gap-2 md:grid-cols-[1fr_1.2fr]">
-                        <Select
-                          label="Courier"
-                          value={draft.courier}
-                          onChange={(e) => onDraftChange(o.id, "courier", e.target.value)}
-                          className="h-9 text-sm"
-                        >
-                          {buildCourierOptions(o.shipping_method).map((opt) => (
-                            <option key={opt} value={opt}>
-                              {opt}
-                            </option>
-                          ))}
-                        </Select>
+                        {isAdmin ? (
+                          <Select
+                            label="Courier"
+                            value={draft.courier}
+                            onChange={(e) => onDraftChange(o.id, "courier", e.target.value)}
+                            className="h-9 text-sm"
+                          >
+                            {buildCourierOptions(o.shipping_method).map((opt) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </Select>
+                        ) : (
+                          <Input
+                            label="Courier"
+                            value={draft.courier || o.shipping_method || ""}
+                            disabled
+                            className="h-9 text-sm"
+                          />
+                        )}
                         <Input
                           label="Tracking number"
                           value={draft.tracking}

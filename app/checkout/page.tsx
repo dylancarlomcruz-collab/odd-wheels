@@ -316,6 +316,7 @@ type VoucherModalProps = {
   subtotal: number;
   shippingFee: number;
   shipClasses: Array<string | null | undefined>;
+  shippingMethod: ShippingMethod;
 };
 
 type JntLocationModalProps = {
@@ -473,6 +474,34 @@ function formatVoucherDate(value: string | null | undefined) {
   });
 }
 
+function formatCourierLabel(value: string | null | undefined) {
+  const raw = String(value ?? "").trim().toUpperCase();
+  if (!raw) return "";
+  if (raw === "JNT" || raw === "J&T") return "J&T";
+  if (raw === "LBC") return "LBC";
+  if (raw === "LALAMOVE") return "Lalamove";
+  return raw;
+}
+
+function normalizeCourierValues(
+  values?: Array<string | null | undefined> | string | null
+) {
+  if (Array.isArray(values)) return values;
+  if (typeof values === "string") {
+    const trimmed = values.replace(/[{}]/g, "").trim();
+    if (!trimmed) return [];
+    return trimmed.split(",").map((value) => value.trim());
+  }
+  return [];
+}
+
+function formatCourierList(values?: Array<string | null | undefined> | string | null) {
+  const list = normalizeCourierValues(values)
+    .map((value) => formatCourierLabel(value))
+    .filter((value) => value.length > 0);
+  return list.length ? list.join(", ") : null;
+}
+
 function VoucherModal({
   open,
   vouchers,
@@ -483,7 +512,18 @@ function VoucherModal({
   subtotal,
   shippingFee,
   shipClasses,
+  shippingMethod,
 }: VoucherModalProps) {
+  const [expandedDetails, setExpandedDetails] = React.useState<Record<string, boolean>>(
+    {}
+  );
+
+  React.useEffect(() => {
+    if (!open) {
+      setExpandedDetails({});
+    }
+  }, [open]);
+
   React.useEffect(() => {
     if (!open || typeof document === "undefined") return undefined;
     const originalOverflow = document.body.style.overflow;
@@ -495,7 +535,9 @@ function VoucherModal({
 
   if (!open || typeof document === "undefined") return null;
 
-  const available = vouchers.filter((v) => v.status === "AVAILABLE");
+  const available = vouchers.filter(
+    (v) => String(v.status ?? "AVAILABLE").toUpperCase() === "AVAILABLE"
+  );
 
   const content = (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 p-4">
@@ -527,8 +569,13 @@ function VoucherModal({
                     subtotal,
                     shippingFee,
                     shipClasses,
+                    shippingMethod,
                   });
+                  const courierLabel = formatCourierList(
+                    voucher.include_couriers
+                  );
                   const isSelected = selectedId === wallet.id;
+                  const isDetailsOpen = Boolean(expandedDetails[wallet.id]);
                   return (
                     <div
                       key={wallet.id}
@@ -548,6 +595,34 @@ function VoucherModal({
                             {formatPHP(Number(voucher.min_subtotal ?? 0))} - Cap{" "}
                             {formatPHP(Number(voucher.shipping_cap ?? 0))}
                           </div>
+                          {courierLabel ? (
+                            <div className="mt-1 text-xs text-white/50">
+                              Couriers: {courierLabel}
+                            </div>
+                          ) : null}
+                          {voucher.details ? (
+                            <div className="mt-1 space-y-1">
+                              <button
+                                type="button"
+                                className="text-xs text-white/60 underline underline-offset-2 hover:text-white/80"
+                                onClick={() =>
+                                  setExpandedDetails((prev) => ({
+                                    ...prev,
+                                    [wallet.id]: !isDetailsOpen,
+                                  }))
+                                }
+                              >
+                                {isDetailsOpen
+                                  ? "Hide voucher details"
+                                  : "Show voucher details"}
+                              </button>
+                              {isDetailsOpen ? (
+                                <div className="text-xs text-white/50 whitespace-pre-line">
+                                  {voucher.details}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
                         </div>
                         <div className="text-xs text-white/60">
                           Expires:{" "}
@@ -566,7 +641,7 @@ function VoucherModal({
                           }
                         >
                           {eligibility.eligible
-                            ? `Eligible - Discount ${formatPHP(eligibility.discount)}`
+                            ? "Eligible - Discount: Free shipping"
                             : `Ineligible - ${eligibility.reason ?? "Not eligible"}`}
                         </div>
                         <div className="flex items-center gap-2">
@@ -689,6 +764,7 @@ function CheckoutContent() {
     string | null
   >(null);
   const [voucherNotice, setVoucherNotice] = React.useState<string | null>(null);
+  const [showVoucherDetails, setShowVoucherDetails] = React.useState(false);
 
   // Shared
   const [name, setName] = React.useState("");
@@ -946,7 +1022,7 @@ function CheckoutContent() {
       const { data, error } = await supabase
         .from("voucher_wallet")
         .select(
-          "id,status,claimed_at,used_at,expires_at,voucher:vouchers(id,code,title,kind,min_subtotal,shipping_cap,include_ship_classes,exclude_ship_classes,starts_at,expires_at,is_active)",
+          "id,status,claimed_at,used_at,expires_at,voucher:vouchers(id,code,title,details,kind,min_subtotal,shipping_cap,include_couriers,include_ship_classes,exclude_ship_classes,starts_at,expires_at,is_active)",
         )
         .eq("user_id", user.id)
         .order("claimed_at", { ascending: false });
@@ -973,11 +1049,14 @@ function CheckoutContent() {
       setVoucherLoading(false);
     }
 
-    loadVouchers();
+    if (voucherOpen || voucherWallet.length === 0) {
+      loadVouchers();
+    }
+
     return () => {
       mounted = false;
     };
-  }, [user?.id]);
+  }, [user?.id, voucherOpen, voucherWallet.length]);
 
   // Apply defaults when switching method
   React.useEffect(() => {
@@ -1380,6 +1459,9 @@ function CheckoutContent() {
       null,
     [voucherWallet, selectedVoucherWalletId],
   );
+  React.useEffect(() => {
+    setShowVoucherDetails(false);
+  }, [selectedVoucherWalletId]);
 
   const freeShippingEligibility = React.useMemo(
     () =>
@@ -1416,8 +1498,9 @@ function CheckoutContent() {
       subtotal: itemsSubtotal,
       shippingFee: fees.shipping_fee,
       shipClasses: (selectedLines ?? []).map((line) => line.variant.ship_class),
+      shippingMethod,
     });
-  }, [selectedVoucher, itemsSubtotal, fees.shipping_fee, selectedLines]);
+  }, [selectedVoucher, itemsSubtotal, fees.shipping_fee, selectedLines, shippingMethod]);
 
   const voucherDiscount = voucherEligibility?.eligible
     ? voucherEligibility.discount
@@ -2320,8 +2403,36 @@ function CheckoutContent() {
                       Number(selectedVoucher.voucher.shipping_cap ?? 0),
                     )}
                   </div>
+                  {formatCourierList(
+                    selectedVoucher.voucher.include_couriers
+                  ) ? (
+                    <div className="text-xs text-white/50">
+                      Couriers:{" "}
+                      {formatCourierList(
+                        selectedVoucher.voucher.include_couriers
+                      )}
+                    </div>
+                  ) : null}
+                  {selectedVoucher.voucher.details ? (
+                    <div className="space-y-1">
+                      <button
+                        type="button"
+                        className="text-xs text-white/60 underline underline-offset-2 hover:text-white/80"
+                        onClick={() => setShowVoucherDetails((prev) => !prev)}
+                      >
+                        {showVoucherDetails
+                          ? "Hide voucher details"
+                          : "Show voucher details"}
+                      </button>
+                      {showVoucherDetails ? (
+                        <div className="text-xs text-white/50 whitespace-pre-line">
+                          {selectedVoucher.voucher.details}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <div className="text-xs text-emerald-200">
-                    Applied discount: {formatPHP(shippingDiscount)}
+                    Discount: Free shipping
                   </div>
                 </div>
               ) : (
@@ -2377,6 +2488,7 @@ function CheckoutContent() {
         subtotal={itemsSubtotal}
         shippingFee={fees.shipping_fee}
         shipClasses={(selectedLines ?? []).map((line) => line.variant.ship_class)}
+        shippingMethod={shippingMethod}
       />
       <LalamoveMapPickerModal
         open={lalamoveMapPickerOpen}

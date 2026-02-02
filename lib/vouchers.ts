@@ -4,9 +4,11 @@ export type Voucher = {
   id: string;
   code?: string | null;
   title?: string | null;
+  details?: string | null;
   kind: VoucherKind | string;
   min_subtotal: number;
   shipping_cap: number;
+  include_couriers?: string[] | null;
   include_ship_classes?: string[] | null;
   exclude_ship_classes?: string[] | null;
   starts_at?: string | null;
@@ -29,6 +31,7 @@ type EligibilityInput = {
   subtotal: number;
   shippingFee: number;
   shipClasses?: Array<string | null | undefined>;
+  shippingMethod?: string | null;
   now?: Date;
 };
 
@@ -52,6 +55,37 @@ function normalizeShipClassList(values?: Array<string | null | undefined> | null
   return (values ?? [])
     .map((value) => normalizeShipClass(value))
     .filter((value): value is string => Boolean(value));
+}
+
+function normalizeCourier(value: string | null | undefined) {
+  const raw = String(value ?? "").trim().toUpperCase();
+  if (!raw) return null;
+  if (raw === "J&T" || raw === "J&T EXPRESS" || raw === "J&TEXPRESS" || raw === "JT") {
+    return "JNT";
+  }
+  if (raw === "JNT") return "JNT";
+  if (raw === "LBC") return "LBC";
+  if (raw === "LALAMOVE") return "LALAMOVE";
+  return raw;
+}
+
+function normalizeCourierList(
+  values?: Array<string | null | undefined> | string | null
+) {
+  if (Array.isArray(values)) {
+    return values
+      .map((value) => normalizeCourier(value))
+      .filter((value): value is string => Boolean(value));
+  }
+  if (typeof values === "string") {
+    const trimmed = values.replace(/[{}]/g, "").trim();
+    if (!trimmed) return [];
+    return trimmed
+      .split(",")
+      .map((value) => normalizeCourier(value))
+      .filter((value): value is string => Boolean(value));
+  }
+  return [];
 }
 
 function isExpired(dateValue?: string | null, now = new Date()) {
@@ -90,6 +124,7 @@ export function getVoucherEligibility({
   subtotal,
   shippingFee,
   shipClasses,
+  shippingMethod,
   now = new Date(),
 }: EligibilityInput): VoucherEligibility {
   const fee = Math.max(0, toNumber(shippingFee));
@@ -104,6 +139,24 @@ export function getVoucherEligibility({
   }
   if (isExpired(voucher.expires_at, now) || isExpired(walletExpiresAt, now)) {
     return { eligible: false, discount: 0, reason: "Voucher expired." };
+  }
+  const includeCouriers = normalizeCourierList(voucher.include_couriers);
+  if (includeCouriers.length) {
+    const method = normalizeCourier(shippingMethod);
+    if (!method) {
+      return {
+        eligible: false,
+        discount: 0,
+        reason: "Select a shipping method.",
+      };
+    }
+    if (!includeCouriers.includes(method)) {
+      return {
+        eligible: false,
+        discount: 0,
+        reason: "Not eligible for this courier.",
+      };
+    }
   }
   const includeClasses = normalizeShipClassList(voucher.include_ship_classes);
   const excludeClasses = normalizeShipClassList(voucher.exclude_ship_classes);

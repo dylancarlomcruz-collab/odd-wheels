@@ -12,6 +12,7 @@ export type OrderRow = {
   payment_status: string;
   payment_method: string | null;
   fulfillment_status?: string | null;
+  receipt_url?: string | null;
 
   subtotal: number;
   shipping_fee: number;
@@ -75,7 +76,7 @@ export function useAllOrders() {
     }
 
     const select =
-      "id,created_at,user_id,status,payment_status,payment_method,fulfillment_status,subtotal,shipping_fee,total,shipping_method,shipping_region,shipping_details,shipping_status,tracking_number,courier,shipped_at,completed_at,rush_fee,customer_name,customer_phone,contact,address,priority_fee,priority_approved,channel,reserved_expires_at,payment_deadline,payment_hold";
+      "id,created_at,user_id,status,payment_status,payment_method,fulfillment_status,receipt_url,subtotal,shipping_fee,total,shipping_method,shipping_region,shipping_details,shipping_status,tracking_number,courier,shipped_at,completed_at,rush_fee,customer_name,customer_phone,contact,address,priority_fee,priority_approved,channel,reserved_expires_at,payment_deadline,payment_hold";
 
     const { data, error } = await supabase
       .from("orders")
@@ -96,6 +97,7 @@ export function useAllOrders() {
         payment_status: o.payment_status,
         payment_method: o.payment_method ?? null,
         fulfillment_status: o.fulfillment_status ?? null,
+        receipt_url: o.receipt_url ?? null,
 
         subtotal: Number(o.subtotal ?? 0),
         shipping_fee: Number(o.shipping_fee ?? 0),
