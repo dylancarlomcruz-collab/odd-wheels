@@ -164,7 +164,7 @@ export default function AdminSettingsPage() {
   const [logoUploading, setLogoUploading] = React.useState(false);
   const [logoMsg, setLogoMsg] = React.useState<string | null>(null);
   const freeShippingCourierSet = React.useMemo(
-    () => new Set(FREE_SHIPPING_COURIERS.map((c) => c.value)),
+    () => new Set<string>(FREE_SHIPPING_COURIERS.map((c) => c.value)),
     []
   );
   const freeShippingShipClassSet = React.useMemo(
