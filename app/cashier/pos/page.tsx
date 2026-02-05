@@ -84,6 +84,12 @@ function variantLabel(v: Variant) {
   return `${formatCondition(v.condition)} | ${peso(Number(v.price ?? 0))} | Qty ${Number(v.qty ?? 0)}${barcode}`;
 }
 
+function parseNumberInput(value: string) {
+  const cleaned = String(value ?? "").replace(/[^0-9.]/g, "");
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function resolveOrderId(data: any): string | null {
   if (!data) return null;
   if (typeof data === "string" || typeof data === "number") return String(data);
@@ -146,8 +152,18 @@ export default function CashierPOSPage() {
   // cart
   const [cart, setCart] = React.useState<CartLine[]>([]);
   const [placing, setPlacing] = React.useState(false);
+  const [discountType, setDiscountType] = React.useState<"AMOUNT" | "PERCENT">(
+    "AMOUNT"
+  );
+  const [discountValue, setDiscountValue] = React.useState("");
 
   const subtotal = cart.reduce((s, l) => s + l.line_total, 0);
+  const discountBase = parseNumberInput(discountValue);
+  const discountAmount =
+    discountType === "PERCENT"
+      ? Math.min(subtotal, Math.max(0, subtotal * Math.min(100, discountBase) / 100))
+      : Math.min(subtotal, Math.max(0, discountBase));
+  const totalAfterDiscount = Math.max(0, subtotal - discountAmount);
 
   async function runSearch() {
     const q = search.trim();
@@ -451,6 +467,14 @@ export default function CashierPOSPage() {
       const shipping_details = {
         method: shippingMethod,
         text: shippingDetailsText,
+        discount:
+          discountAmount > 0
+            ? {
+                type: discountType,
+                value: discountBase,
+                amount: discountAmount,
+              }
+            : null,
       };
 
       const items = cart.map((l) => ({ variant_id: l.variant_id, qty: l.qty }));
@@ -469,6 +493,18 @@ export default function CashierPOSPage() {
 
       const orderId = resolveOrderId(data);
       if (!orderId) throw new Error("POS order created, but order id is missing.");
+
+      if (discountAmount > 0) {
+        const { error: discountError } = await supabase
+          .from("orders")
+          .update({
+            discount_total: discountAmount,
+            discount: discountAmount,
+            total: totalAfterDiscount,
+          })
+          .eq("id", orderId);
+        if (discountError) throw discountError;
+      }
 
       const session = await supabase.auth.getSession();
       const token = session.data.session?.access_token;
@@ -502,6 +538,8 @@ export default function CashierPOSPage() {
       setVariants([]);
       setBarcodeMatches([]);
       setShippingDetailsText("");
+      setDiscountValue("");
+      setDiscountType("AMOUNT");
       setSearchHint(null);
       setBarcodeHint(null);
       searchRef.current?.focus();
@@ -591,11 +629,25 @@ export default function CashierPOSPage() {
                 <option value="BPI">BPI</option>
                 <option value="MANUAL">Manual</option>
               </Select>
+            </div>
 
-              <div className="flex items-end text-sm text-white/70">
+            <div className="flex flex-wrap items-center justify-end gap-4 text-sm text-white/70">
+              <div>
                 Subtotal:
                 <span className="ml-2 text-white font-semibold">
                   {peso(subtotal)}
+                </span>
+              </div>
+              <div>
+                Discount:
+                <span className="ml-2 text-white font-semibold">
+                  -{peso(discountAmount)}
+                </span>
+              </div>
+              <div>
+                Total:
+                <span className="ml-2 text-white font-semibold">
+                  {peso(totalAfterDiscount)}
                 </span>
               </div>
             </div>
@@ -947,9 +999,39 @@ export default function CashierPOSPage() {
               </div>
             )}
 
-            <div className="flex items-center justify-between pt-2">
-              <div className="text-white/70">Subtotal</div>
-              <div className="text-white font-semibold">{peso(subtotal)}</div>
+            <div className="space-y-1 pt-2">
+              <div className="flex items-center justify-between">
+                <div className="text-white/70">Subtotal</div>
+                <div className="text-white font-semibold">{peso(subtotal)}</div>
+              </div>
+              <div className="flex items-center justify-between text-sm text-white/70">
+                <div>Discount</div>
+                <div className="text-white font-semibold">-{peso(discountAmount)}</div>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="text-white/70">Total</div>
+                <div className="text-white font-semibold">{peso(totalAfterDiscount)}</div>
+              </div>
+            </div>
+
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <Select
+                label="Discount Type"
+                value={discountType}
+                onChange={(e) =>
+                  setDiscountType(e.target.value as "AMOUNT" | "PERCENT")
+                }
+              >
+                <option value="AMOUNT">Amount</option>
+                <option value="PERCENT">Percent</option>
+              </Select>
+
+              <Input
+                label={discountType === "PERCENT" ? "Discount (%)" : "Discount (PHP)"}
+                value={discountValue}
+                onChange={(e) => setDiscountValue(e.target.value)}
+                inputMode="decimal"
+              />
             </div>
 
             <Button onClick={placeOrder} disabled={placing || cart.length === 0}>

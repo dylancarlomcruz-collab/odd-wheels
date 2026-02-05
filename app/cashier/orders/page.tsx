@@ -103,9 +103,25 @@ function getItemTitle(it: any): string {
 }
 
 function getItemPrice(it: any): number {
-  const v = it?.price_each ?? it?.unit_price ?? it?.product_variant?.price;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
+  const pickMoney = (value: any) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const direct =
+    pickMoney(it?.price_each) ??
+    pickMoney(it?.unit_price) ??
+    pickMoney(it?.price);
+  if (direct !== null && direct > 0) return direct;
+
+  const qty = Math.max(1, Number(it?.qty ?? 1));
+  const lineTotal = pickMoney(it?.line_total);
+  if (lineTotal !== null && lineTotal > 0) return lineTotal / qty;
+
+  const variantPrice = pickMoney(it?.product_variant?.price);
+  if (variantPrice !== null && variantPrice > 0) return variantPrice;
+
+  return direct ?? lineTotal ?? 0;
 }
 
 export default function CashierOrdersPage() {
@@ -271,8 +287,12 @@ export default function CashierOrdersPage() {
                                 ""
                             ).trim();
                             const price = getItemPrice(it);
-                            const qty = Number(it?.qty ?? 1);
-                            const line = Number(it?.line_total ?? price * qty);
+                            const qty = Math.max(1, Number(it?.qty ?? 1));
+                            const rawLine = Number(it?.line_total);
+                            const line =
+                              Number.isFinite(rawLine) && rawLine > 0
+                                ? rawLine
+                                : price * qty;
 
                             return (
                               <div key={`${o.id}-${idx}`} className="rounded-xl border border-white/10 bg-paper/5 p-3 flex gap-3">

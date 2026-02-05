@@ -1,15 +1,14 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import {
   CheckCircle2,
-  ChevronDown,
   ClipboardCheck,
   ClipboardCopy,
   Clock,
   Receipt,
   ScrollText,
-  User,
   Wallet,
   XCircle,
 } from "lucide-react";
@@ -124,6 +123,27 @@ function buildCopyPayload(o: any) {
   return [name, phone, addr].filter(Boolean).join("\n");
 }
 
+function getAddressOrBranch(method: string, details: any, order: any) {
+  const normalized = String(method ?? "").toUpperCase();
+
+  if (normalized === "LBC") {
+    const branchName = String(details?.branch_name ?? details?.branch ?? "").trim();
+    const branchCity = String(details?.branch_city ?? "").trim();
+    const branch = [branchName, branchCity].filter(Boolean).join(", ");
+    if (branch) return branch;
+  }
+
+  if (normalized === "LALAMOVE") {
+    const dropoff = String(details?.dropoff_address ?? order?.address ?? "").trim();
+    if (dropoff) return dropoff;
+  }
+
+  const addr = String(
+    details?.full_address ?? details?.address ?? order?.address ?? ""
+  ).trim();
+  return addr;
+}
+
 function getItemThumb(it: any): string | null {
   const urls = it?.product_variant?.product?.image_urls;
   if (Array.isArray(urls) && urls.length) return String(urls[0]);
@@ -140,9 +160,25 @@ function getItemTitle(it: any): string {
 }
 
 function getItemPrice(it: any): number {
-  const v = it?.price_each ?? it?.unit_price ?? it?.product_variant?.price;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
+  const pickMoney = (value: any) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const direct =
+    pickMoney(it?.price_each) ??
+    pickMoney(it?.unit_price) ??
+    pickMoney(it?.price);
+  if (direct !== null && direct > 0) return direct;
+
+  const qty = Math.max(1, Number(it?.qty ?? 1));
+  const lineTotal = pickMoney(it?.line_total);
+  if (lineTotal !== null && lineTotal > 0) return lineTotal / qty;
+
+  const variantPrice = pickMoney(it?.product_variant?.price);
+  if (variantPrice !== null && variantPrice > 0) return variantPrice;
+
+  return direct ?? lineTotal ?? 0;
 }
 
 function formatShippingContainer(method: string, details: any) {
@@ -230,10 +266,53 @@ function getStatusMeta(status: string) {
   );
 }
 
+type OrderDetailsModalProps = {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: React.ReactNode;
+};
+
+function OrderDetailsModal({ open, onClose, title, children }: OrderDetailsModalProps) {
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [open]);
+
+  if (!open) return null;
+
+  const content = (
+    <div
+      className="fixed inset-0 z-[9999] overflow-y-auto bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div className="mx-auto w-full max-w-5xl" onClick={(e) => e.stopPropagation()}>
+        <Card>
+          <CardHeader className="flex items-center justify-between">
+            <div className="text-lg font-semibold">{title}</div>
+            <Button variant="ghost" onClick={onClose}>
+              Close
+            </Button>
+          </CardHeader>
+          <CardBody className="max-h-[75vh] overflow-y-auto">{children}</CardBody>
+        </Card>
+      </div>
+    </div>
+  );
+
+  if (typeof document === "undefined") return null;
+  return createPortal(content, document.body);
+}
+
 export default function AdminOrdersPage() {
   const { orders, itemsByOrderId, loading, reload } = useAllOrders();
   const [voidReason, setVoidReason] = React.useState<Record<string, string>>({});
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
+  const [detailOrderId, setDetailOrderId] = React.useState<string | null>(null);
   const [statusFilter, setStatusFilter] = React.useState<string | null>(
     "PENDING_APPROVAL"
   );
@@ -326,6 +405,216 @@ export default function AdminOrdersPage() {
     },
   ];
 
+
+  const selectedOrder =
+    detailOrderId ? orders.find((order) => String(order.id) === detailOrderId) : null;
+
+  function renderOrderDetails(o: any) {
+    const details = parseJsonMaybe(o.shipping_details) ?? {};
+    const createdAt = new Date(o.created_at).toLocaleString("en-PH");
+    const statusMeta = getStatusMeta(o.status ?? "");
+    const shippingMethod = String(
+      o.shipping_method ?? details.method ?? "-"
+    ).toUpperCase();
+    const shippingContainer = formatShippingContainer(shippingMethod, details);
+    const customerName =
+      details.receiver_name ||
+      [details.first_name, details.last_name].filter(Boolean).join(" ") ||
+      o.customer_name ||
+      "Guest";
+    const customerPhone =
+      details.receiver_phone ||
+      details.phone ||
+      o.contact ||
+      o.customer_phone ||
+      "";
+    const customerAddress = getAddressOrBranch(shippingMethod, details, o);
+    const deadline = o.payment_deadline ?? o.reserved_expires_at ?? null;
+    const left = msLeft(deadline, now);
+    const showTimer =
+      o.status === "AWAITING_PAYMENT" && !o.payment_hold && left !== null;
+
+    const items = itemsByOrderId[o.id] ?? [];
+
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-1">
+            <div className="text-lg font-semibold">Order #{String(o.id).slice(0, 8)}</div>
+            <div className="text-xs text-white/60">{createdAt}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-white/50">Status</div>
+            <div className="text-sm text-white/80">{statusMeta.label}</div>
+          </div>
+        </div>
+
+        {showTimer ? (
+          <div className="flex items-center gap-2 text-sm text-yellow-200">
+            <Clock className="h-4 w-4" />
+            Payment window: {fmtCountdown(left!)}
+          </div>
+        ) : null}
+        {o.payment_hold ? (
+          <div className="text-sm text-yellow-200">Payment window: ON HOLD</div>
+        ) : null}
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+            <div className="text-base font-medium">{customerName || "—"}</div>
+            {customerPhone ? (
+              <div className="mt-1 flex items-center gap-2">
+                <span className="text-sm text-white/70">{customerPhone}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 px-0"
+                  title="Copy phone number"
+                  aria-label="Copy phone number"
+                  onClick={() => onCopyPhone(customerPhone)}
+                >
+                  <ClipboardCopy className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : (
+              <div className="mt-1 text-sm text-white/70">—</div>
+            )}
+            {customerAddress ? (
+              <div className="mt-2 text-sm text-white/70">{customerAddress}</div>
+            ) : null}
+          </div>
+          <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+            <div className="text-lg font-semibold">{peso(Number(o.total ?? 0))}</div>
+            <div className="mt-1 text-sm text-white/80">
+              {shippingMethod || "—"}
+            </div>
+            <div className="mt-1 text-sm text-white/80">
+              {shippingContainer || "—"}
+            </div>
+          </div>
+        </div>
+
+        {o.receipt_url ? (
+          <div>
+            <div className="text-sm font-semibold">Receipt</div>
+            <div className="mt-2 rounded-xl border border-white/10 bg-paper/5 p-3">
+              <a href={o.receipt_url} target="_blank" rel="noreferrer" className="block">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={o.receipt_url}
+                  alt="Receipt"
+                  className="w-full max-h-80 object-contain rounded-lg bg-neutral-50"
+                />
+              </a>
+              <div className="mt-2 text-xs text-white/50">Click image to enlarge.</div>
+            </div>
+          </div>
+        ) : null}
+
+        <div>
+          <div className="flex items-center gap-2 text-sm font-semibold text-white/80">
+            <ClipboardCheck className="h-4 w-4" />
+            Items ({items.length})
+          </div>
+          <div className="mt-2">
+            {items.length === 0 ? (
+              <div className="text-sm text-white/60">No items found for this order.</div>
+            ) : (
+              <div className="space-y-2">
+                {items.map((it: any, idx: number) => {
+                  const thumb = getItemThumb(it);
+                  const title = getItemTitle(it);
+                  const price = getItemPrice(it);
+                  const qty = Math.max(1, Number(it?.qty ?? 1));
+                  const rawLine = Number(it?.line_total);
+                  const line =
+                    Number.isFinite(rawLine) && rawLine > 0 ? rawLine : price * qty;
+
+                  return (
+                    <div
+                      key={`${o.id}-${idx}`}
+                      className="rounded-xl border border-white/10 bg-paper/5 p-3"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="h-14 w-14 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
+                          {thumb ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={thumb} alt={title} className="h-full w-full object-cover" />
+                          ) : null}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="font-medium truncate">
+                                {title}
+                                {qty > 1 ? ` x${qty}` : ""}
+                              </div>
+                            </div>
+                            <div className="text-sm text-white/80">{peso(line)}</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {o.payment_status === "PAID" ? (
+          <div>
+            <Button variant="secondary" onClick={() => onCopy(o)}>
+              <ClipboardCopy className="mr-2 h-4 w-4" />
+              {copiedId === o.id ? "Copied!" : "Copy details"}
+            </Button>
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap gap-2">
+          {o.status === "PENDING_APPROVAL" ? (
+            <Button variant="secondary" onClick={() => approveOrder(o.id)}>
+              <ClipboardCheck className="mr-2 h-4 w-4" />
+              Approve order (reserve)
+            </Button>
+          ) : null}
+
+          {o.status === "PAYMENT_SUBMITTED" ? (
+            <>
+              <Button variant="secondary" onClick={() => approvePayment(o.id, true)}>
+                <CheckCircle2 className="mr-2 h-4 w-4" />
+                Approve payment
+              </Button>
+              <Button variant="ghost" onClick={() => approvePayment(o.id, false)}>
+                <XCircle className="mr-2 h-4 w-4" />
+                Reject
+              </Button>
+            </>
+          ) : null}
+
+          {o.status !== "VOIDED" && o.status !== "CANCELLED" ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                placeholder="Void reason (optional)"
+                value={voidReason[o.id] ?? ""}
+                className="w-full sm:w-72"
+                onChange={(e) =>
+                  setVoidReason((m) => ({
+                    ...m,
+                    [o.id]: e.target.value,
+                  }))
+                }
+              />
+              <Button variant="ghost" onClick={() => voidOrder(o.id)}>
+                Void
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <Card>
@@ -347,7 +636,7 @@ export default function AdminOrdersPage() {
         </CardHeader>
 
         <CardBody className="space-y-6">
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
             {summaryCards.map((card) => {
               const meta = getStatusMeta(card.status);
               const Icon = meta.icon;
@@ -359,18 +648,18 @@ export default function AdminOrdersPage() {
                   onClick={() =>
                     setStatusFilter((prev) => (prev === card.status ? null : card.status))
                   }
-                  className={`rounded-2xl border p-4 text-left transition ${
+                  className={`rounded-2xl border p-3 text-left text-xs transition sm:p-4 sm:text-sm ${
                     active
                       ? "border-white/30 bg-bg-900/50 shadow-soft"
                       : "border-white/10 bg-bg-900/30 hover:border-white/20 hover:bg-bg-900/40"
                   }`}
                   aria-pressed={active}
                 >
-                  <div className="flex items-center justify-between text-sm text-white/60">
+                  <div className="flex items-center justify-between text-white/60">
                     <span>{meta.label}</span>
-                    <Icon className="h-4 w-4" />
+                    <Icon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                   </div>
-                  <div className={`text-2xl font-semibold ${card.countClass}`}>
+                  <div className={`text-lg font-semibold sm:text-2xl ${card.countClass}`}>
                     {card.count}
                   </div>
                 </button>
@@ -384,10 +673,9 @@ export default function AdminOrdersPage() {
             <div className="text-white/60">No orders.</div>
           ) : (
             <div className="space-y-3">
+
               {visibleOrders.map((o: any) => {
                 const details = parseJsonMaybe(o.shipping_details) ?? {};
-                const createdAt = new Date(o.created_at).toLocaleString("en-PH");
-                const statusMeta = getStatusMeta(o.status ?? "");
                 const shippingMethod = String(
                   o.shipping_method ?? details.method ?? "-"
                 ).toUpperCase();
@@ -406,221 +694,99 @@ export default function AdminOrdersPage() {
                   o.contact ||
                   o.customer_phone ||
                   "";
-                const deadline = o.payment_deadline ?? o.reserved_expires_at ?? null;
-                const left = msLeft(deadline, now);
-                const showTimer = o.status === "AWAITING_PAYMENT" && !o.payment_hold && left !== null;
-
-                const items = itemsByOrderId[o.id] ?? [];
-
+                const customerAddress = getAddressOrBranch(shippingMethod, details, o);
+                const courierSummary = shippingContainer || shippingMethod;
                 return (
                   <div
                     key={o.id}
-                    className={`rounded-2xl border border-white/10 bg-bg-900/30 p-4 border-l-4 ${statusMeta.borderClass}`}
+                    className="rounded-2xl bg-bg-900/30 p-4"
                   >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="text-lg font-semibold">
-                          Order #{String(o.id).slice(0, 8)}
-                        </div>
-                        <div className="text-xs text-white/60">{createdAt}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-xs text-white/50">Total</div>
-                        <div className="text-lg font-semibold">{peso(Number(o.total ?? 0))}</div>
-                      </div>
-                    </div>
-
-                    <div className="mt-2 text-xs text-white/50">{statusMeta.label}</div>
-
-                    {showTimer ? (
-                      <div className="mt-2 flex items-center gap-2 text-sm text-yellow-200">
-                        <Clock className="h-4 w-4" />
-                        Payment window: {fmtCountdown(left!)}
-                      </div>
-                    ) : null}
-                    {o.payment_hold ? (
-                      <div className="mt-2 text-sm text-yellow-200">Payment window: ON HOLD</div>
-                    ) : null}
-
-                    <details
-                      className="mt-4 rounded-xl border border-white/10 bg-bg-900/20"
-                      open={o.status === "PENDING_APPROVAL" || o.status === "PAYMENT_SUBMITTED"}
-                    >
-                      <summary className="flex cursor-pointer items-center justify-between px-3 py-2 text-sm font-semibold">
-                        <span className="flex items-center gap-2 text-white/80">
-                          <User className="h-4 w-4" />
-                          Order details
-                        </span>
-                        <ChevronDown className="h-4 w-4 text-white/60" />
-                      </summary>
-                      <div className="border-t border-white/10 p-3">
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
-                            <div className="text-xs uppercase tracking-wide text-white/50">Customer</div>
-                            <div className="mt-1 font-medium">{customerName}</div>
-                            {customerPhone ? (
-                              <div className="mt-1 flex items-center gap-2">
-                                <span className="text-sm text-white/70">{customerPhone}</span>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 w-7 px-0"
-                                  title="Copy phone number"
-                                  aria-label="Copy phone number"
-                                  onClick={() => onCopyPhone(customerPhone)}
-                                >
-                                  <ClipboardCopy className="h-3.5 w-3.5" />
-                                </Button>
-                              </div>
-                            ) : null}
+                    <div className="mt-3 rounded-xl border border-white/10 bg-paper/5 p-2 sm:p-3">
+                      <div className="grid gap-1 text-[10px] sm:text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0 truncate text-[11px] font-medium sm:text-sm">
+                            {customerName || "—"}
                           </div>
-                          <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
-                            <div className="text-xs uppercase tracking-wide text-white/50">Summary</div>
-                            <div className="mt-1 text-sm text-white/80">
-                              Shipping: <span className="text-white">{shippingMethod}</span>
-                            </div>
-                            {shippingContainer ? (
-                              <div className="mt-1 text-sm text-white/80">
-                                Container: <span className="text-white">{shippingContainer}</span>
-                              </div>
-                            ) : null}
-                            <div className="mt-1 font-semibold">Total: {peso(Number(o.total ?? 0))}</div>
+                          <div className="text-[11px] font-semibold sm:text-sm">
+                            {peso(Number(o.total ?? 0))}
                           </div>
                         </div>
-
-                        {o.receipt_url ? (
-                          <div className="mt-4">
-                            <div className="text-sm font-semibold">Receipt</div>
-                            <div className="mt-2 rounded-xl border border-white/10 bg-paper/5 p-3">
-                              <a
-                                href={o.receipt_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="block"
-                              >
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                  src={o.receipt_url}
-                                  alt="Receipt"
-                                  className="w-full max-h-80 object-contain rounded-lg bg-neutral-50"
-                                />
-                              </a>
-                              <div className="mt-2 text-xs text-white/50">
-                                Click image to enlarge.
-                              </div>
-                            </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0 truncate text-white/70">
+                            {customerPhone || "—"}
                           </div>
-                        ) : null}
-
-                        {o.payment_status === "PAID" ? (
-                          <div className="mt-3">
-                            <Button variant="secondary" onClick={() => onCopy(o)}>
-                              <ClipboardCopy className="mr-2 h-4 w-4" />
-                              {copiedId === o.id ? "Copied!" : "Copy details"}
-                            </Button>
+                          <div className="min-w-0 truncate text-right text-white/80">
+                            {courierSummary || "—"}
                           </div>
-                        ) : null}
+                        </div>
+                        <div className="min-w-0 truncate text-white/70">
+                          {customerAddress || "—"}
+                        </div>
                       </div>
-                    </details>
-
-                    <details
-                      className="mt-3 rounded-xl border border-white/10 bg-bg-900/20"
-                      open={o.status === "PENDING_APPROVAL" || o.status === "PAYMENT_SUBMITTED"}
-                    >
-                      <summary className="flex cursor-pointer items-center justify-between px-3 py-2 text-sm font-semibold">
-                        <span className="flex items-center gap-2 text-white/80">
-                          <ClipboardCheck className="h-4 w-4" />
-                          Items ({items.length})
-                        </span>
-                        <ChevronDown className="h-4 w-4 text-white/60" />
-                      </summary>
-                      <div className="border-t border-white/10 p-3">
-                        {items.length === 0 ? (
-                          <div className="text-sm text-white/60">No items found for this order.</div>
-                        ) : (
-                          <div className="space-y-2">
-                            {items.map((it: any, idx: number) => {
-                              const thumb = getItemThumb(it);
-                              const title = getItemTitle(it);
-                              const price = getItemPrice(it);
-                              const qty = Number(it?.qty ?? 1);
-                              const line = Number(it?.line_total ?? price * qty);
-
-                              return (
-                                <div key={`${o.id}-${idx}`} className="rounded-xl border border-white/10 bg-paper/5 p-3">
-                                  <div className="flex items-center gap-3">
-                                    <div className="h-14 w-14 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
-                                      {thumb ? (
-                                        // eslint-disable-next-line @next/next/no-img-element
-                                        <img src={thumb} alt={title} className="h-full w-full object-cover" />
-                                      ) : null}
-                                    </div>
-                                    <div className="min-w-0 flex-1">
-                                      <div className="flex items-start justify-between gap-3">
-                                        <div className="min-w-0">
-                                          <div className="font-medium truncate">
-                                            {title}
-                                            {qty > 1 ? ` x${qty}` : ""}
-                                          </div>
-                                        </div>
-                                        <div className="text-sm text-white/80">{peso(line)}</div>
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </details>
-
-                    {/* Actions */}
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {o.status === "PENDING_APPROVAL" ? (
-                        <Button variant="secondary" onClick={() => approveOrder(o.id)}>
-                          <ClipboardCheck className="mr-2 h-4 w-4" />
-                          Approve order (reserve)
+                      <div className="mt-2 flex flex-nowrap items-center gap-1">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="h-10 w-10 p-0 text-white"
+                          title={copiedId === o.id ? "Copied" : "Copy"}
+                          aria-label={copiedId === o.id ? "Copied" : "Copy"}
+                          onClick={() => onCopy(o)}
+                        >
+                          <ClipboardCopy className="h-6 w-6 text-white" />
                         </Button>
-                      ) : null}
-
-                      {o.status === "PAYMENT_SUBMITTED" ? (
-                        <>
-                          <Button variant="secondary" onClick={() => approvePayment(o.id, true)}>
-                            <CheckCircle2 className="mr-2 h-4 w-4" />
-                            Approve payment
-                          </Button>
-                          <Button variant="ghost" onClick={() => approvePayment(o.id, false)}>
-                            <XCircle className="mr-2 h-4 w-4" />
-                            Reject
-                          </Button>
-                        </>
-                      ) : null}
-
-                      {o.status !== "VOIDED" && o.status !== "CANCELLED" ? (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Input
-                            placeholder="Void reason (optional)"
-                            value={voidReason[o.id] ?? ""}
-                            className="w-full sm:w-72"
-                            onChange={(e) =>
-                              setVoidReason((m) => ({
-                                ...m,
-                                [o.id]: e.target.value,
-                              }))
-                            }
-                          />
-                          <Button variant="ghost" onClick={() => voidOrder(o.id)}>
-                            Void
-                          </Button>
-                        </div>
-                      ) : null}
+                        {o.status === "PAYMENT_SUBMITTED" ? (
+                          <>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              className="h-10 w-10 p-0 text-white"
+                              title="Approve"
+                              aria-label="Approve"
+                              onClick={() => approvePayment(o.id, true)}
+                            >
+                              <CheckCircle2 className="h-6 w-6 text-white" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-10 w-10 p-0 text-white"
+                              title="Reject"
+                              aria-label="Reject"
+                              onClick={() => approvePayment(o.id, false)}
+                            >
+                              <XCircle className="h-6 w-6 text-white" />
+                            </Button>
+                          </>
+                        ) : null}
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="h-10 w-10 p-0 text-white"
+                          title="Show details"
+                          aria-label="Show details"
+                          onClick={() => setDetailOrderId(String(o.id))}
+                        >
+                          <ScrollText className="h-6 w-6 text-white" />
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 );
               })}
             </div>
           )}
+
+        <OrderDetailsModal
+          open={Boolean(selectedOrder)}
+          onClose={() => setDetailOrderId(null)}
+          title={
+            selectedOrder
+              ? `Order #${String(selectedOrder.id).slice(0, 8)} details`
+              : "Order details"
+          }
+        >
+          {selectedOrder ? renderOrderDetails(selectedOrder) : null}
+        </OrderDetailsModal>
         </CardBody>
       </Card>
     </div>
