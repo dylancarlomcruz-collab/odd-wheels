@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import {
   BarChart3,
   CalendarRange,
@@ -41,6 +42,98 @@ function ymd(d: Date) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function parseJsonMaybe(v: any) {
+  if (!v) return null;
+  if (typeof v === "object") return v;
+  if (typeof v === "string") {
+    try {
+      return JSON.parse(v);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function getItemTitle(it: any) {
+  return (
+    it?.item_name ||
+    it?.product_title ||
+    it?.product_variant?.product?.title ||
+    "Item"
+  );
+}
+
+function getItemThumb(it: any): string | null {
+  const urls = it?.product_variant?.product?.image_urls;
+  if (Array.isArray(urls) && urls.length) return String(urls[0]);
+  return null;
+}
+
+function getItemPrice(it: any): number {
+  const pickMoney = (value: any) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const direct =
+    pickMoney(it?.price_each) ??
+    pickMoney(it?.unit_price) ??
+    pickMoney(it?.price);
+  if (direct !== null && direct > 0) return direct;
+
+  const qty = Math.max(1, Number(it?.qty ?? 1));
+  const lineTotal = pickMoney(it?.line_total);
+  if (lineTotal !== null && lineTotal > 0) return lineTotal / qty;
+
+  const variantPrice = pickMoney(it?.product_variant?.price);
+  if (variantPrice !== null && variantPrice > 0) return variantPrice;
+
+  return direct ?? lineTotal ?? 0;
+}
+
+type DetailsModalProps = {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: React.ReactNode;
+};
+
+function DetailsModal({ open, onClose, title, children }: DetailsModalProps) {
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [open]);
+
+  if (!open) return null;
+
+  const content = (
+    <div
+      className="fixed inset-0 z-[9999] overflow-y-auto bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div className="mx-auto w-full max-w-4xl" onClick={(e) => e.stopPropagation()}>
+        <Card>
+          <CardHeader className="flex items-center justify-between">
+            <div className="text-lg font-semibold">{title}</div>
+            <Button variant="ghost" onClick={onClose}>
+              Close
+            </Button>
+          </CardHeader>
+          <CardBody className="max-h-[75vh] overflow-y-auto">{children}</CardBody>
+        </Card>
+      </div>
+    </div>
+  );
+
+  if (typeof document === "undefined") return null;
+  return createPortal(content, document.body);
+}
+
 export default function AdminSalesPage() {
   const today = React.useMemo(() => new Date(), []);
   const [from, setFrom] = React.useState(() => {
@@ -53,6 +146,12 @@ export default function AdminSalesPage() {
   const [loading, setLoading] = React.useState(false);
   const [orders, setOrders] = React.useState<any[]>([]);
   const [daily, setDaily] = React.useState<{ date: string; total: number; count: number }[]>([]);
+  const [selectedDailyDate, setSelectedDailyDate] = React.useState<string | null>(null);
+  const [selectedOrderId, setSelectedOrderId] = React.useState<string | null>(null);
+  const [selectedOrder, setSelectedOrder] = React.useState<any | null>(null);
+  const [selectedOrderItems, setSelectedOrderItems] = React.useState<any[]>([]);
+  const [orderDetailsLoading, setOrderDetailsLoading] = React.useState(false);
+  const [orderDetailsError, setOrderDetailsError] = React.useState<string | null>(null);
   const [topItems, setTopItems] = React.useState<
     { key: string; name: string; qty: number; sales: number; cogs: number; profit: number }[]
   >([]);
@@ -266,6 +365,56 @@ export default function AdminSalesPage() {
 
 
   const channels = Object.entries(channelBreakdown).sort((a, b) => b[1].sales - a[1].sales);
+  const selectedDailyOrders = React.useMemo(() => {
+    if (!selectedDailyDate) return [];
+    return orders.filter((o) => ymd(new Date(o.created_at)) === selectedDailyDate);
+  }, [orders, selectedDailyDate]);
+  const selectedDailySummary = React.useMemo(
+    () => daily.find((d) => d.date === selectedDailyDate) ?? null,
+    [daily, selectedDailyDate]
+  );
+
+  React.useEffect(() => {
+    if (!selectedOrderId) {
+      setSelectedOrder(null);
+      setSelectedOrderItems([]);
+      setOrderDetailsError(null);
+      return;
+    }
+
+    const loadDetails = async () => {
+      setOrderDetailsLoading(true);
+      setOrderDetailsError(null);
+      try {
+        const { data: order, error: orderError } = await supabase
+          .from("orders")
+          .select(
+            "id,created_at,total,subtotal,shipping_fee,discount_total,shipping_method,shipping_details,payment_status,status,channel,customer_name,customer_phone,contact,address"
+          )
+          .eq("id", selectedOrderId)
+          .single();
+        if (orderError) throw orderError;
+
+        const { data: items, error: itemsError } = await supabase
+          .from("order_items")
+          .select(
+            "order_id,variant_id,item_id,item_name,product_title,qty,line_total,unit_price,price_each,condition,issue_notes,product_variant:product_variants(id,barcode,condition,issue_notes,public_notes,price,qty,product:products(id,title,brand,model,variation,image_urls))"
+          )
+          .eq("order_id", selectedOrderId)
+          .limit(200);
+        if (itemsError) throw itemsError;
+
+        setSelectedOrder(order ?? null);
+        setSelectedOrderItems((items as any[]) ?? []);
+      } catch (err: any) {
+        setOrderDetailsError(err?.message ?? "Failed to load order details.");
+      } finally {
+        setOrderDetailsLoading(false);
+      }
+    };
+
+    loadDetails();
+  }, [selectedOrderId]);
 
   return (
     <RequireAuth>
@@ -383,11 +532,16 @@ export default function AdminSalesPage() {
                     <div className="text-sm text-white/60">No paid orders in range.</div>
                   ) : (
                     daily.map((d) => (
-                      <div key={d.date} className="flex items-center justify-between rounded-xl border border-white/10 bg-paper/5 px-3 py-2">
+                      <button
+                        key={d.date}
+                        type="button"
+                        onClick={() => setSelectedDailyDate(d.date)}
+                        className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-paper/5 px-3 py-2 text-left transition hover:border-white/20 hover:bg-bg-900/40"
+                      >
                         <div className="text-sm text-white/80">{d.date}</div>
                         <div className="text-sm text-white/60">{d.count} orders</div>
                         <div className="font-semibold">{peso(d.total)}</div>
-                      </div>
+                      </button>
                     ))
                   )}
                 </div>
@@ -445,6 +599,226 @@ export default function AdminSalesPage() {
             </div>
           </CardBody>
         </Card>
+
+        <DetailsModal
+          open={Boolean(selectedDailyDate)}
+          onClose={() => setSelectedDailyDate(null)}
+          title={
+            selectedDailyDate
+              ? `Orders for ${selectedDailyDate}`
+              : "Orders for selected day"
+          }
+        >
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-3 text-sm text-white/70">
+              <div>
+                Orders:{" "}
+                <span className="text-white font-semibold">
+                  {selectedDailySummary?.count ?? selectedDailyOrders.length}
+                </span>
+              </div>
+              <div>
+                Total:{" "}
+                <span className="text-white font-semibold">
+                  {peso(selectedDailySummary?.total ?? 0)}
+                </span>
+              </div>
+            </div>
+
+            {selectedDailyOrders.length === 0 ? (
+              <div className="text-sm text-white/60">No orders found for this day.</div>
+            ) : (
+              <div className="space-y-2">
+                {selectedDailyOrders.map((o) => {
+                  const time = new Date(o.created_at).toLocaleTimeString("en-PH", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  });
+                  return (
+                    <button
+                      key={o.id}
+                      type="button"
+                      onClick={() => setSelectedOrderId(String(o.id))}
+                      className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-paper/5 px-3 py-2 text-left transition hover:border-white/20 hover:bg-bg-900/40"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-medium">
+                          Order #{String(o.id).slice(0, 8)}
+                        </div>
+                        <div className="text-xs text-white/60">
+                          {time} · {String(o.channel ?? "WEB").toUpperCase()}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-semibold">{peso(Number(o.total ?? 0))}</div>
+                        <div className="text-xs text-white/60">
+                          {String(o.payment_status ?? "").toUpperCase()}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </DetailsModal>
+
+        <DetailsModal
+          open={Boolean(selectedOrderId)}
+          onClose={() => setSelectedOrderId(null)}
+          title={
+            selectedOrderId
+              ? `Order #${String(selectedOrderId).slice(0, 8)}`
+              : "Order details"
+          }
+        >
+          {orderDetailsLoading ? (
+            <div className="text-sm text-white/60">Loading order details...</div>
+          ) : orderDetailsError ? (
+            <div className="text-sm text-red-200">{orderDetailsError}</div>
+          ) : !selectedOrder ? (
+            <div className="text-sm text-white/60">Order not found.</div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-xs text-white/60">
+                    {new Date(selectedOrder.created_at).toLocaleString("en-PH")}
+                  </div>
+                  <div className="mt-1 text-sm text-white/80">
+                    Channel: {String(selectedOrder.channel ?? "WEB").toUpperCase()}
+                  </div>
+                  <div className="text-sm text-white/80">
+                    Status: {String(selectedOrder.status ?? "").toUpperCase()}
+                  </div>
+                  <div className="text-sm text-white/80">
+                    Payment: {String(selectedOrder.payment_status ?? "").toUpperCase()}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xs text-white/50">Total</div>
+                  <div className="text-lg font-semibold">
+                    {peso(Number(selectedOrder.total ?? 0))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                  <div className="text-[11px] uppercase tracking-wide text-white/50">
+                    Customer
+                  </div>
+                  <div className="mt-1 font-medium">
+                    {selectedOrder.customer_name || "Guest"}
+                  </div>
+                  <div className="text-sm text-white/70">
+                    {selectedOrder.customer_phone ||
+                      selectedOrder.contact ||
+                      "-"}
+                  </div>
+                  <div className="mt-1 text-sm text-white/70">
+                    {selectedOrder.address || "-"}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                  <div className="text-[11px] uppercase tracking-wide text-white/50">
+                    Totals
+                  </div>
+                  <div className="mt-1 text-sm text-white/80">
+                    Subtotal:{" "}
+                    <span className="text-white">
+                      {peso(Number(selectedOrder.subtotal ?? 0))}
+                    </span>
+                  </div>
+                  <div className="text-sm text-white/80">
+                    Shipping:{" "}
+                    <span className="text-white">
+                      {peso(Number(selectedOrder.shipping_fee ?? 0))}
+                    </span>
+                  </div>
+                  <div className="text-sm text-white/80">
+                    Discount:{" "}
+                    <span className="text-white">
+                      -{peso(Number(selectedOrder.discount_total ?? 0))}
+                    </span>
+                  </div>
+                  <div className="mt-1 font-semibold">
+                    Total: {peso(Number(selectedOrder.total ?? 0))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                <div className="text-[11px] uppercase tracking-wide text-white/50">
+                  Shipping
+                </div>
+                <div className="mt-1 text-sm text-white/80">
+                  Method: {selectedOrder.shipping_method || "-"}
+                </div>
+                <div className="mt-1 text-sm text-white/70">
+                  {(() => {
+                    const details = parseJsonMaybe(selectedOrder.shipping_details) ?? {};
+                    const text = String(details.text ?? "").trim();
+                    return text || "No shipping details.";
+                  })()}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-semibold text-white/80">
+                  Items ({selectedOrderItems.length})
+                </div>
+                {selectedOrderItems.length === 0 ? (
+                  <div className="text-sm text-white/60 mt-2">No items found.</div>
+                ) : (
+                  <div className="mt-2 space-y-2">
+                    {selectedOrderItems.map((it) => {
+                      const title = getItemTitle(it);
+                      const thumb = getItemThumb(it);
+                      const unit = getItemPrice(it);
+                      const qty = Number(it?.qty ?? 1);
+                      const line = Number(it?.line_total ?? unit * qty);
+                      const notes = String(
+                        it?.product_variant?.public_notes ??
+                          it?.issue_notes ??
+                          it?.product_variant?.issue_notes ??
+                          ""
+                      ).trim();
+                      return (
+                        <div
+                          key={`${it.order_id}-${it.variant_id ?? it.item_id ?? title}`}
+                          className="rounded-xl border border-white/10 bg-bg-900/30 p-2 flex gap-3"
+                        >
+                          <div className="h-12 w-12 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
+                            {thumb ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={thumb}
+                                alt={title}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : null}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="font-medium truncate">{title}</div>
+                            <div className="text-xs text-white/60">
+                              {qty} x {peso(unit)} | Line: {peso(line)}
+                            </div>
+                            {notes ? (
+                              <div className="mt-1 text-xs text-white/60">
+                                Notes: {notes}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </DetailsModal>
       </div>
     </RequireAuth>
   );

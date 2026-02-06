@@ -294,7 +294,7 @@ function pickShippingDays(notices: { title: string; body: string }[]) {
 type OrderDetailsModalProps = {
   open: boolean;
   onClose: () => void;
-  title: string;
+  title: React.ReactNode;
   children: React.ReactNode;
 };
 
@@ -340,6 +340,7 @@ export default function CashierShipmentsPage() {
   const { notices } = useNotices(10);
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
   const [detailOrderId, setDetailOrderId] = React.useState<string | null>(null);
+  const [selectedItem, setSelectedItem] = React.useState<any | null>(null);
   const [activeTab, setActiveTab] =
     React.useState<ShippingTabKey>("PREPARING TO SHIP");
   const [drafts, setDrafts] = React.useState<
@@ -775,63 +776,66 @@ export default function CashierShipmentsPage() {
                     ).toLowerCase();
                     const isNearMint = itemCondition === "near_mint";
                     const isWithIssues = itemCondition === "with_issues";
-                    const notes = String(
-                      it?.public_notes ??
-                        it?.issue_notes ??
-                        it?.product_variant?.public_notes ??
-                        it?.product_variant?.issue_notes ??
-                        ""
-                    ).trim();
+                              const notes = String(
+                                it?.public_notes ??
+                                  it?.product_variant?.public_notes ??
+                                  it?.issue_notes ??
+                                  it?.product_variant?.issue_notes ??
+                                  ""
+                              ).trim();
                     const price = getItemPrice(it);
                     const qty = Number(it?.qty ?? 1);
                     const line = Number(it?.line_total ?? price * qty);
 
-                    return (
-                    <div
-                      key={`${o.id}-${idx}`}
-                      className="rounded-xl border border-white/10 bg-bg-900/30 p-2 flex gap-3"
-                    >
-                      <div className="h-12 w-12 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
-                          {thumb ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={thumb}
-                              alt={title}
-                              className="h-full w-full object-cover"
-                            />
-                          ) : null}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="font-medium truncate">{title}</div>
-                          <div className="text-xs text-white/60">
-                            {condition ? `${condition} | ` : ""}
-                            {qty} x {peso(price)} | Line: {peso(line)}
-                          </div>
-                          {notes ? (
-                            <div
-                              className={`mt-1 text-xs flex items-center gap-2 ${
-                                isWithIssues
-                                  ? "text-red-200/80"
-                                  : isNearMint
-                                    ? "text-amber-200/80"
-                                    : "text-white/60"
-                              }`}
-                            >
-                              {isWithIssues || isNearMint ? (
-                                <span
-                                  className={`h-2 w-2 rounded-full ${
-                                    isWithIssues ? "bg-red-400" : "bg-amber-400"
-                                  }`}
-                                  aria-hidden="true"
-                                />
-                              ) : null}
-                              <span>Notes: {notes}</span>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
+                              return (
+                                <button
+                                  key={`${o.id}-${idx}`}
+                                  type="button"
+                                  className="w-full rounded-xl border border-white/10 bg-bg-900/30 p-2 flex gap-3 text-left transition hover:border-white/20 hover:bg-bg-900/50"
+                                  onClick={() => setSelectedItem(it)}
+                                  aria-label={`View details for ${title}`}
+                                >
+                                  <div className="h-12 w-12 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
+                                    {thumb ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img
+                                        src={thumb}
+                                        alt={title}
+                                        className="h-full w-full object-cover"
+                                      />
+                                    ) : null}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-medium truncate">{title}</div>
+                                    <div className="text-xs text-white/60">
+                                      {condition ? `${condition} | ` : ""}
+                                      {qty} x {peso(price)} | Line: {peso(line)}
+                                    </div>
+                                    {notes ? (
+                                      <div
+                                        className={`mt-1 text-xs flex items-center gap-2 ${
+                                          isWithIssues
+                                            ? "text-red-200/80"
+                                            : isNearMint
+                                              ? "text-amber-200/80"
+                                              : "text-white/60"
+                                        }`}
+                                      >
+                                        {isWithIssues || isNearMint ? (
+                                          <span
+                                            className={`h-2 w-2 rounded-full ${
+                                              isWithIssues ? "bg-red-400" : "bg-amber-400"
+                                            }`}
+                                            aria-hidden="true"
+                                          />
+                                        ) : null}
+                                        <span>Notes: {notes}</span>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                </button>
+                              );
+                            })}
                 </div>
               )}
             </details>
@@ -945,7 +949,89 @@ export default function CashierShipmentsPage() {
           {error ? <div className="mt-2 text-sm text-red-200">{error}</div> : null}
         </div>
       );
-    };
+  };
+
+  const renderItemDetails = (it: any) => {
+    const title = getItemTitle(it);
+    const thumb = getItemThumb(it);
+    const condition = formatConditionLabel(
+      it?.condition ?? it?.product_variant?.condition,
+      { upper: true }
+    );
+    const unitPrice = getItemPrice(it);
+    const qty = Number(it?.qty ?? 1);
+    const lineTotal = Number(it?.line_total ?? unitPrice * qty);
+    const variantId = String(it?.variant_id ?? it?.product_variant?.id ?? "").trim();
+    const barcode = String(it?.barcode ?? it?.product_variant?.barcode ?? "").trim();
+    const issueNotes = String(
+      it?.issue_notes ?? it?.product_variant?.issue_notes ?? ""
+    ).trim();
+    const publicNotes = String(
+      it?.public_notes ?? it?.product_variant?.public_notes ?? ""
+    ).trim();
+    const notesCombined = [publicNotes, issueNotes].filter(Boolean).join(" | ");
+
+    return (
+      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+        <div className="rounded-2xl border border-white/10 bg-white p-4">
+          {thumb ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={thumb}
+              alt={title}
+              className="h-[300px] w-full rounded-xl object-contain"
+            />
+          ) : (
+            <div className="h-[300px] w-full rounded-xl bg-bg-800" />
+          )}
+        </div>
+
+        <div className="space-y-3">
+          <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4">
+            <div className="flex items-center justify-between text-sm text-white/70">
+              <span>Selected condition</span>
+              <span className="text-white">{condition || "-"}</span>
+            </div>
+            <div className="mt-2 flex items-center justify-between text-sm text-white/70">
+              <span>Price</span>
+              <span className="text-white font-semibold">{peso(unitPrice)}</span>
+            </div>
+            <div className="mt-2 flex items-center justify-between text-sm text-white/70">
+              <span>Qty</span>
+              <span className="text-white">{qty}</span>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4">
+            <div className="text-xs uppercase tracking-wide text-white/50">
+              Conditions
+            </div>
+            <div className="mt-2 flex items-center justify-between text-sm text-white/80">
+              <span>{condition || "-"}</span>
+              <span>
+                {peso(unitPrice)} - {qty} pcs
+              </span>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4">
+            <div className="text-xs uppercase tracking-wide text-white/50">Notes</div>
+            <div className="mt-2 text-sm text-white/80">
+              {notesCombined || "No notes."}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+            Photos are for reference only. For more photos/details, please message our Facebook page.
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-3 text-xs text-white/60">
+            Variant ID: {variantId || "-"} | Barcode: {barcode || "-"} | Line total: {peso(lineTotal)}
+          </div>
+        </div>
+      </div>
+    );
+  };
   return (
     <div className="space-y-6">
       <Card>
@@ -1181,6 +1267,27 @@ export default function CashierShipmentsPage() {
             }
           >
             {selectedOrder ? renderShippingDetails(selectedOrder) : null}
+          </OrderDetailsModal>
+
+          <OrderDetailsModal
+            open={Boolean(selectedItem)}
+            onClose={() => setSelectedItem(null)}
+            title={
+              selectedItem ? (
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-white/50">
+                    Item Preview
+                  </div>
+                  <div className="text-lg font-semibold">
+                    {getItemTitle(selectedItem)}
+                  </div>
+                </div>
+              ) : (
+                "Item details"
+              )
+            }
+          >
+            {selectedItem ? renderItemDetails(selectedItem) : null}
           </OrderDetailsModal>
         </CardBody>
       </Card>

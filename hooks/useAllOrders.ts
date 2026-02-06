@@ -55,6 +55,7 @@ export type OrderItemRow = {
   line_total: number;
   condition?: string | null;
   issue_notes?: string | null;
+  public_notes?: string | null;
   // joined
   product_variant?: any;
 };
@@ -139,7 +140,7 @@ export function useAllOrders() {
 
     // Pull order_items with best-effort joins to variants/products for photos.
     const itemSelect =
-      "order_id,variant_id,item_id,item_name,price_each,unit_price,qty,line_total,condition,issue_notes,product_variant:product_variants(id,barcode,condition,issue_notes,price,qty,product:products(id,title,brand,model,variation,image_urls))";
+      "order_id,variant_id,item_id,item_name,price_each,unit_price,qty,line_total,condition,issue_notes,product_variant:product_variants(id,barcode,condition,issue_notes,public_notes,price,qty,product:products(id,title,brand,model,variation,image_urls))";
 
     const { data: items, error: iErr } = await supabase
       .from("order_items")
