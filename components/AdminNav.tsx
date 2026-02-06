@@ -19,6 +19,7 @@ import {
   Ticket,
   Crown,
   Bug,
+  MessageSquare,
 } from "lucide-react";
 
 const links = [
@@ -38,6 +39,7 @@ const links = [
   { href: "/announcements", label: "Announcements", icon: StickyNote },
   { href: "/admin/notices", label: "Notice Board", icon: StickyNote },
   { href: "/admin/bug-reports", label: "Bug Reports", icon: Bug },
+  { href: "/admin/feedback", label: "Customer Feedback", icon: MessageSquare },
   { href: "/admin/settings/payment-methods", label: "Payment Methods", icon: QrCode },
   { href: "/admin/settings", label: "Settings", icon: Settings2 },
 ];

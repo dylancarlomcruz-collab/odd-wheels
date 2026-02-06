@@ -31,6 +31,7 @@ import {
   ScanLine,
   Crown,
   Bug,
+  MessageSquare,
   LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -392,6 +393,12 @@ export function SiteHeader() {
     { key: "admin-brands", href: "/admin/brands", label: "Brand Tabs", icon: Tags },
     { key: "admin-notices", href: "/admin/notices", label: "Notice Board", icon: StickyNote },
     { key: "admin-bug-reports", href: "/admin/bug-reports", label: "Bug Reports", icon: Bug },
+    {
+      key: "admin-feedback",
+      href: "/admin/feedback",
+      label: "Customer Feedback",
+      icon: MessageSquare,
+    },
     { key: "admin-payment-methods", href: "/admin/settings/payment-methods", label: "Payment Methods", icon: QrCode },
     { key: "admin-settings", href: "/admin/settings", label: "Settings", icon: Settings2 },
   ];

@@ -912,3 +912,68 @@ as $$
 $$;
 
 grant execute on function public.get_frequently_bought_together(uuid, int) to anon, authenticated;
+
+-- Customer feedback
+create table if not exists public.customer_feedback (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  order_id uuid references public.orders(id) on delete set null,
+  user_id uuid references auth.users(id) on delete set null,
+  user_email text,
+  rating int,
+  experience text,
+  change text,
+  status text not null default 'NEW'
+);
+
+create index if not exists idx_customer_feedback_status
+  on public.customer_feedback (status, created_at desc);
+
+alter table public.customer_feedback enable row level security;
+
+drop policy if exists "admin read customer feedback" on public.customer_feedback;
+create policy "admin read customer feedback" on public.customer_feedback
+for select using (public.is_admin());
+
+drop policy if exists "admin update customer feedback" on public.customer_feedback;
+create policy "admin update customer feedback" on public.customer_feedback
+for update using (public.is_admin()) with check (public.is_admin());
+
+create or replace function public.fn_submit_feedback(
+  p_order_id uuid default null,
+  p_rating int default null,
+  p_experience text default null,
+  p_change text default null,
+  p_user_email text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+begin
+  if p_rating is null and coalesce(trim(p_experience), '') = '' and coalesce(trim(p_change), '') = '' then
+    raise exception 'Feedback is empty.';
+  end if;
+
+  if p_rating is not null and (p_rating < 1 or p_rating > 5) then
+    raise exception 'Rating must be between 1 and 5.';
+  end if;
+
+  insert into public.customer_feedback (order_id, user_id, user_email, rating, experience, change)
+  values (
+    p_order_id,
+    auth.uid(),
+    nullif(trim(p_user_email), ''),
+    p_rating,
+    nullif(trim(p_experience), ''),
+    nullif(trim(p_change), '')
+  );
+
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
+revoke execute on function public.fn_submit_feedback(uuid, int, text, text, text) from public;
+grant execute on function public.fn_submit_feedback(uuid, int, text, text, text) to anon, authenticated;

@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { RequireAuth } from "@/components/auth/RequireAuth";
+import { useAuth } from "@/components/auth/AuthProvider";
 import { Order, OrderItemPreview, useOrders } from "@/hooks/useOrders";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -600,6 +601,7 @@ function OrderCard({
 }
 
 function OrdersContent() {
+  const { user } = useAuth();
   const { orders, itemsByOrderId, loading } = useOrders();
   const [activeTab, setActiveTab] =
     React.useState<StageKey>("PENDING_APPROVAL");
@@ -612,6 +614,7 @@ function OrdersContent() {
   const [feedbackChange, setFeedbackChange] = React.useState("");
   const [feedbackError, setFeedbackError] = React.useState<string | null>(null);
   const [feedbackNeverShow, setFeedbackNeverShow] = React.useState(false);
+  const [feedbackSending, setFeedbackSending] = React.useState(false);
 
   const activeOrders = React.useMemo(
     () =>
@@ -728,9 +731,11 @@ function OrdersContent() {
     clearFeedbackPrompt();
     setFeedbackError(null);
     setShowFeedback(false);
+    setFeedbackSending(false);
   }
 
-  function onSubmitFeedback() {
+  async function onSubmitFeedback() {
+    if (feedbackSending) return;
     const experience = feedbackExperience.trim();
     const change = feedbackChange.trim();
     if (!rating && !experience && !change) {
@@ -747,6 +752,21 @@ function OrdersContent() {
       createdAt: new Date().toISOString(),
     };
 
+    setFeedbackSending(true);
+    const { error } = await supabase.rpc("fn_submit_feedback", {
+      p_order_id: feedbackPrompt?.orderId ?? null,
+      p_rating: rating || null,
+      p_experience: experience || null,
+      p_change: change || null,
+      p_user_email: user?.email ?? null,
+    });
+
+    if (error) {
+      setFeedbackError(error.message || "Failed to send feedback.");
+      setFeedbackSending(false);
+      return;
+    }
+
     try {
       window.localStorage.setItem(FEEDBACK_LAST_KEY, JSON.stringify(payload));
     } catch {
@@ -762,6 +782,7 @@ function OrdersContent() {
     setFeedbackExperience("");
     setFeedbackChange("");
     closeFeedback();
+    setFeedbackSending(false);
   }
 
   return (
@@ -976,9 +997,10 @@ function OrdersContent() {
                   size="sm"
                   variant="primary"
                   onClick={onSubmitFeedback}
+                  disabled={feedbackSending}
                   className="h-9 px-4 text-xs shadow-glow"
                 >
-                  Send feedback
+                  {feedbackSending ? "Sending..." : "Send feedback"}
                 </Button>
                 <Button
                   type="button"
