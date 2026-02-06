@@ -7,6 +7,7 @@ import { recordRecentView } from "@/lib/recentViews";
 import { normalizeSearchTerm } from "@/lib/search";
 import { formatConditionLabel } from "@/lib/conditions";
 import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
+import { applyImageFallback, buildSrcSet, getOptimizedImageUrl } from "@/lib/imageUrl";
 import { getOptionPricing, getProductEffectiveRange } from "@/lib/pricing";
 import { formatTitle } from "@/lib/text";
 import { supabase } from "@/lib/supabase/browser";
@@ -47,6 +48,8 @@ const COMPACT_CONDITION_LABELS: Record<string, string> = {
   unsealed_blister: "BLISTER",
   blistered: "BLISTER",
 };
+const TRANSPARENT_PIXEL =
+  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
 function getCompactConditionLabel(
   value: string | null | undefined,
@@ -133,6 +136,8 @@ export default function ProductCard({
   const issueTouchStartY = React.useRef<number | null>(null);
   const previewScrollRef = React.useRef<HTMLDivElement | null>(null);
   const cardRef = React.useRef<HTMLDivElement | null>(null);
+  const imageRef = React.useRef<HTMLDivElement | null>(null);
+  const [cardImageReady, setCardImageReady] = React.useState(false);
   const loggedPreviewIds = React.useRef(new Set<string>());
 
   const selected = React.useMemo(
@@ -227,7 +232,76 @@ export default function ProductCard({
     () => (cardImage ? parseImageCrop(cardImage) : null),
     [cardImage]
   );
+  const cardImageSrc = React.useMemo(
+    () =>
+      parsedCardImage
+        ? getOptimizedImageUrl(parsedCardImage.src, {
+            width: 640,
+            quality: 70,
+            format: "webp",
+          })
+        : "",
+    [parsedCardImage]
+  );
+  const cardImageSrcSet = React.useMemo(
+    () =>
+      parsedCardImage
+        ? buildSrcSet(parsedCardImage.src, [240, 320, 480, 640], {
+            quality: 70,
+            format: "webp",
+          })
+        : "",
+    [parsedCardImage]
+  );
+  const cardImageFinalSrc = cardImageReady
+    ? cardImageSrc || parsedCardImage?.src || ""
+    : TRANSPARENT_PIXEL;
+  const cardImageFinalSrcSet = cardImageReady
+    ? cardImageSrcSet || undefined
+    : undefined;
+  const activeImageSrc = React.useMemo(
+    () =>
+      activeImage
+        ? getOptimizedImageUrl(activeImage, {
+            width: 1200,
+            quality: 75,
+            format: "webp",
+          })
+        : "",
+    [activeImage]
+  );
+  const activeImageSrcSet = React.useMemo(
+    () =>
+      activeImage
+        ? buildSrcSet(activeImage, [480, 720, 960, 1200], {
+            quality: 75,
+            format: "webp",
+          })
+        : "",
+    [activeImage]
+  );
   const activeIssueImage = issueImages[issueIndex] ?? "";
+  const activeIssueImageSrc = React.useMemo(
+    () =>
+      activeIssueImage
+        ? getOptimizedImageUrl(activeIssueImage, {
+            width: 1200,
+            quality: 75,
+            format: "webp",
+          })
+        : "",
+    [activeIssueImage]
+  );
+  const activeIssueImageSrcSet = React.useMemo(
+    () =>
+      activeIssueImage
+        ? buildSrcSet(activeIssueImage, [480, 720, 960, 1200], {
+            quality: 75,
+            format: "webp",
+          })
+        : "",
+    [activeIssueImage]
+  );
   const hasIssuePhotos = issueImages.length > 0;
   const publicNotes = String(previewSelected?.public_notes ?? "").trim();
   const issueNotes = String(previewSelected?.issue_notes ?? "").trim();
@@ -362,6 +436,32 @@ export default function ProductCard({
     setIssueOpen(false);
     setIssueIndex(0);
   }, [selectedId]);
+
+  React.useEffect(() => {
+    setCardImageReady(false);
+  }, [product.key]);
+
+  React.useEffect(() => {
+    const node = imageRef.current;
+    if (!node) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setCardImageReady(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          setCardImageReady(true);
+          observer.disconnect();
+          break;
+        }
+      },
+      { root: null, rootMargin: "300px 0px", threshold: 0.01 }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [product.key]);
 
   React.useEffect(() => {
     const node = cardRef.current;
@@ -532,13 +632,23 @@ export default function ProductCard({
           aria-label={`Preview ${product.title}`}
         >
           {parsedCardImage ? (
-            <div className="h-full w-full bg-neutral-50">
+            <div ref={imageRef} className="h-full w-full bg-neutral-50">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={parsedCardImage.src}
+                src={cardImageFinalSrc}
+                srcSet={cardImageFinalSrcSet}
+                sizes="(min-width: 1024px) 240px, (min-width: 640px) 200px, 45vw"
                 alt={product.title}
                 className="h-full w-full object-contain"
                 style={cropStyle(parsedCardImage.crop)}
+                loading="lazy"
+                decoding="async"
+                onError={
+                  cardImageReady
+                    ? (e) =>
+                        applyImageFallback(e.currentTarget, parsedCardImage.src)
+                    : undefined
+                }
               />
             </div>
           ) : (
@@ -750,9 +860,16 @@ export default function ProductCard({
                           <div className="aspect-[4/3] w-full bg-neutral-50">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
-                              src={activeImage}
+                              src={activeImageSrc || activeImage}
+                              srcSet={activeImageSrcSet || undefined}
+                              sizes="(min-width: 1024px) 720px, 90vw"
                               alt=""
                               className="h-full w-full object-contain"
+                              loading="lazy"
+                              decoding="async"
+                              onError={(e) =>
+                                applyImageFallback(e.currentTarget, activeImage)
+                              }
                             />
                           </div>
                         ) : (
@@ -928,9 +1045,36 @@ export default function ProductCard({
                                   {image ? (
                                     // eslint-disable-next-line @next/next/no-img-element
                                     <img
-                                      src={image}
+                                      src={
+                                        image
+                                          ? getOptimizedImageUrl(image, {
+                                              width: 320,
+                                              quality: 70,
+                                              format: "webp",
+                                            })
+                                          : ""
+                                      }
+                                      srcSet={
+                                        image
+                                          ? buildSrcSet(image, [160, 240, 320], {
+                                              quality: 70,
+                                              format: "webp",
+                                            })
+                                          : undefined
+                                      }
+                                      sizes="160px"
                                       alt=""
                                       className="h-full w-full object-contain bg-neutral-50"
+                                      loading="lazy"
+                                      decoding="async"
+                                      onError={(e) =>
+                                        image
+                                          ? applyImageFallback(
+                                              e.currentTarget,
+                                              image,
+                                            )
+                                          : undefined
+                                      }
                                     />
                                   ) : null}
                                 </div>
@@ -1071,9 +1215,16 @@ export default function ProductCard({
                       {activeIssueImage ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
-                          src={activeIssueImage}
+                          src={activeIssueImageSrc || activeIssueImage}
+                          srcSet={activeIssueImageSrcSet || undefined}
+                          sizes="(min-width: 1024px) 720px, 90vw"
                           alt="Issue photo"
                           className="h-72 w-full object-contain bg-neutral-50"
+                          loading="lazy"
+                          decoding="async"
+                          onError={(e) =>
+                            applyImageFallback(e.currentTarget, activeIssueImage)
+                          }
                         />
                       ) : (
                         <div className="flex h-72 items-center justify-center text-sm text-white/50">

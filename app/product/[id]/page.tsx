@@ -18,6 +18,7 @@ import { supabase } from "@/lib/supabase/browser";
 import { getOrCreateGuestSessionId } from "@/lib/guestSession";
 import { recordRecentView } from "@/lib/recentViews";
 import { resolveEffectivePrice } from "@/lib/pricing";
+import { applyImageFallback, buildSrcSet, getOptimizedImageUrl } from "@/lib/imageUrl";
 
 export default function ProductDetailPage() {
   const params = useParams<{ id: string }>();
@@ -266,9 +267,21 @@ export default function ProductDetailPage() {
                   {image ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
-                      src={image}
+                      src={getOptimizedImageUrl(image, {
+                        width: 320,
+                        quality: 70,
+                        format: "webp",
+                      })}
+                      srcSet={buildSrcSet(image, [160, 240, 320], {
+                        quality: 70,
+                        format: "webp",
+                      })}
+                      sizes="160px"
                       alt=""
                       className="h-full w-full object-contain bg-neutral-50"
+                      loading="lazy"
+                      decoding="async"
+                      onError={(e) => applyImageFallback(e.currentTarget, image)}
                     />
                   ) : null}
                 </div>
@@ -293,6 +306,12 @@ export default function ProductDetailPage() {
   }
 
   const heroImg = product.image_urls?.[0] ?? null;
+  const heroImgSrc = heroImg
+    ? getOptimizedImageUrl(heroImg, { width: 1200, quality: 75, format: "webp" })
+    : null;
+  const heroImgSrcSet = heroImg
+    ? buildSrcSet(heroImg, [480, 720, 960, 1200], { quality: 75, format: "webp" })
+    : "";
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8 space-y-6">
@@ -301,7 +320,18 @@ export default function ProductDetailPage() {
           <div className="aspect-square bg-bg-900/40 grid place-items-center">
             {heroImg ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={heroImg} alt={product.title} className="h-full w-full object-cover" />
+              <img
+                src={heroImgSrc || heroImg}
+                srcSet={heroImgSrcSet || undefined}
+                sizes="(min-width: 1024px) 560px, 90vw"
+                alt={product.title}
+                className="h-full w-full object-cover"
+                loading="eager"
+                decoding="async"
+                onError={(e) =>
+                  heroImg ? applyImageFallback(e.currentTarget, heroImg) : undefined
+                }
+              />
             ) : (
               <div className="text-white/30 text-sm">No image</div>
             )}
@@ -511,9 +541,26 @@ export default function ProductDetailPage() {
               {issueViewer.images[issueIndex] ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={issueViewer.images[issueIndex]}
+                  src={getOptimizedImageUrl(issueViewer.images[issueIndex], {
+                    width: 1200,
+                    quality: 75,
+                    format: "webp",
+                  })}
+                  srcSet={buildSrcSet(issueViewer.images[issueIndex], [480, 720, 960, 1200], {
+                    quality: 75,
+                    format: "webp",
+                  })}
+                  sizes="(min-width: 1024px) 720px, 90vw"
                   alt="Issue photo"
                   className="h-72 w-full rounded-lg object-contain"
+                  loading="lazy"
+                  decoding="async"
+                  onError={(e) =>
+                    applyImageFallback(
+                      e.currentTarget,
+                      issueViewer.images[issueIndex],
+                    )
+                  }
                 />
               ) : (
                 <div className="flex h-72 items-center justify-center text-sm text-white/50">

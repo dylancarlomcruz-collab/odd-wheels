@@ -58,6 +58,8 @@ const FILTER_CHIP_STYLES = {
   idle:
     "border-white/10 bg-bg-950/50 text-white/70 hover:bg-bg-950/70 hover:text-white",
 };
+const PAGE_SIZE = 48;
+const PAGE_SIZE_WIDE = 64;
 
 type TourStep = {
   key: string;
@@ -243,10 +245,13 @@ export default function ShopPageClient() {
   >([]);
   const [lastSearch, setLastSearch] = React.useState<string | null>(null);
   const [showBackToTop, setShowBackToTop] = React.useState(false);
+  const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
   const { sortBy, priceDir } = useShopSort();
+  const pageSize = wideView ? PAGE_SIZE_WIDE : PAGE_SIZE;
   const resultsRef = React.useRef<HTMLDivElement | null>(null);
   const lastScrolledQuery = React.useRef<string>("");
   const lastRecentRefresh = React.useRef<number>(0);
+  const loadMoreRef = React.useRef<HTMLDivElement | null>(null);
   const tourSteps = React.useMemo<TourStep[]>(
     () => [
       {
@@ -1097,6 +1102,45 @@ export default function ShopPageClient() {
       ),
     [feedSections]
   );
+  const totalMainItems = mainSection?.items.length ?? 0;
+  const visibleMainItems = mainSection
+    ? mainSection.items.slice(0, visibleCount)
+    : [];
+  const canLoadMore = visibleMainItems.length < totalMainItems;
+
+  React.useEffect(() => {
+    setVisibleCount(Math.min(pageSize, totalMainItems));
+  }, [
+    pageSize,
+    totalMainItems,
+    searchQuery,
+    selectedBrands,
+    selectedCategories,
+    selectedConditions,
+    sortBy,
+    priceDir,
+  ]);
+
+  React.useEffect(() => {
+    if (!canLoadMore) return;
+    const node = loadMoreRef.current;
+    if (!node) return;
+    if (typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          setVisibleCount((prev) =>
+            Math.min(prev + pageSize, totalMainItems)
+          );
+          break;
+        }
+      },
+      { root: null, rootMargin: "600px 0px", threshold: 0.01 }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [canLoadMore, pageSize, totalMainItems, visibleCount]);
   const activeTourStep = tourSteps[tourStepIndex] ?? null;
   const tourIsLastStep = tourStepIndex >= tourSteps.length - 1;
   const tourTooltipFallback = {
@@ -1473,7 +1517,9 @@ export default function ShopPageClient() {
                 {mainSection.title}
               </div>
               <div className="flex flex-wrap items-center gap-2 text-[11px] text-white/30">
-                <span>{mainSection.items.length} items</span>
+                <span>
+                  Showing {visibleMainItems.length} of {mainSection.items.length}
+                </span>
               </div>
             </div>
             {(() => {
@@ -1539,7 +1585,7 @@ export default function ShopPageClient() {
                   );
                 });
               };
-              mainSection.items.forEach((p, index) => {
+              visibleMainItems.forEach((p, index) => {
                 nodes.push(
                   <ProductCard
                     key={`all-${p.key}`}
@@ -1562,19 +1608,42 @@ export default function ShopPageClient() {
                   if (section) renderSectionBlock(section);
                 }
               });
-              while (suggestionQueue.length) {
-                renderSectionBlock(suggestionQueue.shift()!);
-              }
-              if (hasSearch && suggestionSections.length) {
-                suggestionSections.forEach((section) => {
-                  renderSectionBlock(section);
-                });
+              const allMainVisible =
+                visibleMainItems.length >= mainSection.items.length;
+              if (allMainVisible) {
+                while (suggestionQueue.length) {
+                  renderSectionBlock(suggestionQueue.shift()!);
+                }
+                if (hasSearch && suggestionSections.length) {
+                  suggestionSections.forEach((section) => {
+                    renderSectionBlock(section);
+                  });
+                }
               }
               return nodes;
             })()}
           </>
         ) : null}
       </div>
+
+      {mainSection && canLoadMore ? (
+        <div className="mt-6 flex flex-col items-center gap-3">
+          <button
+            type="button"
+            onClick={() =>
+              setVisibleCount((prev) =>
+                Math.min(prev + pageSize, mainSection.items.length)
+              )
+            }
+            className="rounded-full border border-white/15 bg-bg-950/60 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white/80 hover:bg-bg-950/80"
+          >
+            Load more
+          </button>
+          <div ref={loadMoreRef} className="h-1 w-full" />
+        </div>
+      ) : (
+        <div ref={loadMoreRef} className="h-1 w-full" />
+      )}
 
       {!loading && !err && feedItemCount === 0 ? (
         <div className="text-white/60 mt-6">

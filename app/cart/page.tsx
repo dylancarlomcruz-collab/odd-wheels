@@ -17,6 +17,7 @@ import { useSettings } from "@/hooks/useSettings";
 import { toast } from "@/components/ui/toast";
 import { resolveEffectivePrice } from "@/lib/pricing";
 import { formatTitle } from "@/lib/text";
+import { applyImageFallback, buildSrcSet, getOptimizedImageUrl } from "@/lib/imageUrl";
 import {
   PROTECTOR_ADDON_FEE,
   isProtectorEligibleShipClass,
@@ -435,6 +436,7 @@ function CartContent() {
                 const checked = selectedIds.includes(l.id);
                 const protectorFeeLabel = formatPHP(PROTECTOR_ADDON_FEE);
 
+                const thumb = l.variant.product.image_urls?.[0] ?? "";
                 return (
                   <div
                     key={l.id}
@@ -463,12 +465,36 @@ function CartContent() {
                         >
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
-                            src={l.variant.product.image_urls?.[0] ?? ""}
+                            src={
+                              thumb
+                                ? getOptimizedImageUrl(thumb, {
+                                    width: 200,
+                                    quality: 70,
+                                    format: "webp",
+                                  })
+                                : ""
+                            }
+                            srcSet={
+                              thumb
+                                ? buildSrcSet(thumb, [120, 160, 200], {
+                                    quality: 70,
+                                    format: "webp",
+                                  })
+                                : undefined
+                            }
+                            sizes="80px"
                             alt=""
                             className="h-full w-full object-contain bg-neutral-50"
-                            onError={(e) =>
-                              (e.currentTarget.style.display = "none")
-                            }
+                            onError={(e) => {
+                              const img = e.currentTarget;
+                              if (thumb && img.dataset.fallbackApplied !== "true") {
+                                applyImageFallback(img, thumb);
+                                return;
+                              }
+                              img.style.display = "none";
+                            }}
+                            loading="lazy"
+                            decoding="async"
                           />
                         </button>
                         <div>
@@ -787,9 +813,23 @@ function CartContent() {
                     {activeImage ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
-                        src={activeImage}
+                        src={getOptimizedImageUrl(activeImage, {
+                          width: 1000,
+                          quality: 75,
+                          format: "webp",
+                        })}
+                        srcSet={buildSrcSet(activeImage, [480, 720, 1000], {
+                          quality: 75,
+                          format: "webp",
+                        })}
+                        sizes="(min-width: 1024px) 560px, 90vw"
                         alt=""
                         className="h-64 w-full rounded-lg object-contain"
+                        loading="lazy"
+                        decoding="async"
+                        onError={(e) =>
+                          applyImageFallback(e.currentTarget, activeImage)
+                        }
                       />
                     ) : (
                       <div className="flex h-64 items-center justify-center text-sm text-white/50">
@@ -904,9 +944,23 @@ function CartContent() {
                             >
                               {/* eslint-disable-next-line @next/next/no-img-element */}
                               <img
-                                src={img}
+                                src={getOptimizedImageUrl(img, {
+                                  width: 160,
+                                  quality: 70,
+                                  format: "webp",
+                                })}
+                                srcSet={buildSrcSet(img, [96, 120, 160], {
+                                  quality: 70,
+                                  format: "webp",
+                                })}
+                                sizes="64px"
                                 alt=""
                                 className="h-full w-full object-cover"
+                                loading="lazy"
+                                decoding="async"
+                                onError={(e) =>
+                                  applyImageFallback(e.currentTarget, img)
+                                }
                               />
                             </button>
                           ))}
