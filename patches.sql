@@ -32,6 +32,13 @@ set
 -- Shipping workflow patches
 
 alter table public.settings
+  add column if not exists order_approval_enabled boolean not null default true;
+
+update public.settings
+  set order_approval_enabled = true
+where order_approval_enabled is null;
+
+alter table public.settings
   add column if not exists header_logo_url text;
 
 alter table public.settings
@@ -2260,6 +2267,7 @@ declare
   v_sold_out uuid[] := '{}';
   v_remaining int;
   v_tier text;
+  v_order_approval_enabled boolean := true;
 begin
   select * into v_order from public.orders where id = p_order_id for update;
   if not found then
@@ -2270,9 +2278,16 @@ begin
     raise exception 'Not authorized';
   end if;
 
-  select p.tier into v_tier from public.profiles p where p.id = v_order.user_id;
-  if coalesce(v_tier, 'SILVER') not in ('GOLD', 'PLATINUM') then
-    return jsonb_build_object('ok', true, 'eligible', false, 'order_id', p_order_id);
+  select s.order_approval_enabled
+    into v_order_approval_enabled
+  from public.settings s
+  where s.id = 1;
+
+  if coalesce(v_order_approval_enabled, true) then
+    select p.tier into v_tier from public.profiles p where p.id = v_order.user_id;
+    if coalesce(v_tier, 'SILVER') not in ('GOLD', 'PLATINUM') then
+      return jsonb_build_object('ok', true, 'eligible', false, 'order_id', p_order_id);
+    end if;
   end if;
 
   if v_order.status <> 'PENDING_APPROVAL' then

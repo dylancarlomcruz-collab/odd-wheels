@@ -7,6 +7,7 @@ export type Settings = {
   id: number;
   shipping_schedule_text: string | null;
   shipping_cutoff_text: string | null;
+  order_approval_enabled: boolean;
   priority_shipping_available: boolean;
   priority_shipping_note: string | null;
   free_shipping_threshold: number | null;
