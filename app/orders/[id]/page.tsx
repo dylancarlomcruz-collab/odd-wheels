@@ -290,6 +290,13 @@ function OrderDetailContent() {
   const [paymentMethodError, setPaymentMethodError] = React.useState<string | null>(
     null
   );
+  const [paymentMethods, setPaymentMethods] = React.useState<PaymentMethod[]>([]);
+  const [paymentMethodsLoading, setPaymentMethodsLoading] = React.useState(false);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = React.useState("");
+  const [paymentUpdateLoading, setPaymentUpdateLoading] = React.useState(false);
+  const [paymentUpdateMsg, setPaymentUpdateMsg] = React.useState<string | null>(
+    null
+  );
   const [copyMsg, setCopyMsg] = React.useState<string | null>(null);
   const [tier, setTier] = React.useState<string | null>(null);
   const [events, setEvents] = React.useState<any[]>([]);
@@ -407,6 +414,58 @@ function OrderDetailContent() {
 
   React.useEffect(() => {
     let mounted = true;
+    const status = String(order?.status ?? "");
+    const shouldFetch =
+      !!order &&
+      order.payment_status !== "PAID" &&
+      ["PENDING_PAYMENT", "PENDING_APPROVAL", "AWAITING_PAYMENT"].includes(
+        status
+      );
+
+    if (!shouldFetch) {
+      setPaymentMethods([]);
+      setSelectedPaymentMethod("");
+      setPaymentMethodsLoading(false);
+      return () => {
+        mounted = false;
+      };
+    }
+
+    setSelectedPaymentMethod(String(order?.payment_method ?? "").trim());
+
+    const run = async () => {
+      setPaymentMethodsLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from("payment_methods")
+          .select(
+            "id,method,label,account_number,account_name,instructions,qr_image_url,is_active"
+          )
+          .eq("is_active", true)
+          .order("label", { ascending: true });
+
+        if (!mounted) return;
+        if (error) {
+          console.error(error);
+          setPaymentMethods([]);
+          return;
+        }
+        setPaymentMethods((data as PaymentMethod[]) ?? []);
+      } finally {
+        if (!mounted) return;
+        setPaymentMethodsLoading(false);
+      }
+    };
+
+    run();
+
+    return () => {
+      mounted = false;
+    };
+  }, [order?.id, order?.payment_method, order?.payment_status, order?.status]);
+
+  React.useEffect(() => {
+    let mounted = true;
     async function loadTier() {
       if (!user) {
         setTier(null);
@@ -479,6 +538,14 @@ function OrderDetailContent() {
     ["AWAITING_PAYMENT", "PAYMENT_SUBMITTED", "PAYMENT_REVIEW"].includes(
       String(order?.status ?? "")
     );
+  const canChangePaymentMethod = React.useMemo(() => {
+    if (!order) return false;
+    if (order.payment_status === "PAID") return false;
+    const status = String(order.status ?? "");
+    return ["PENDING_PAYMENT", "PENDING_APPROVAL", "AWAITING_PAYMENT"].includes(
+      status
+    );
+  }, [order]);
   const canUploadReceipt = React.useMemo(() => {
     if (!order) return false;
     if (order.payment_status === "PAID") return false;
@@ -571,6 +638,33 @@ function OrderDetailContent() {
     } finally {
       setUploading(false);
       e.target.value = "";
+    }
+  }
+
+  async function onUpdatePaymentMethod() {
+    if (!order || !canChangePaymentMethod) return;
+    const current = String(order.payment_method ?? "").trim().toUpperCase();
+    const next = String(selectedPaymentMethod ?? "").trim();
+    if (!next) return;
+    if (next.toUpperCase() === current) {
+      setPaymentUpdateMsg("Payment method is already selected.");
+      return;
+    }
+
+    setPaymentUpdateMsg(null);
+    setPaymentUpdateLoading(true);
+    try {
+      const { error } = await supabase.rpc("fn_buyer_update_payment_method", {
+        p_order_id: order.id,
+        p_payment_method: next,
+      });
+      if (error) throw error;
+      setPaymentUpdateMsg("Payment method updated.");
+      window.location.reload();
+    } catch (err: any) {
+      setPaymentUpdateMsg(err?.message ?? "Failed to update payment method.");
+    } finally {
+      setPaymentUpdateLoading(false);
     }
   }
 
@@ -740,6 +834,67 @@ function OrderDetailContent() {
 
               {showPaymentDetails ? (
                 <div className="panel p-4 space-y-4">
+                  {canChangePaymentMethod ? (
+                    <div className="rounded-lg border border-white/10 bg-bg-950/40 p-3 space-y-2">
+                      <div className="text-xs font-semibold text-white/80">
+                        Change payment method
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <select
+                          value={selectedPaymentMethod}
+                          onChange={(e) => {
+                            setSelectedPaymentMethod(e.target.value);
+                            setPaymentUpdateMsg(null);
+                          }}
+                          disabled={paymentMethodsLoading || paymentUpdateLoading}
+                          className="h-9 min-w-[160px] rounded-md border border-white/10 bg-bg-900/60 px-3 text-sm text-white/90"
+                        >
+                          <option value="">Select method</option>
+                          {selectedPaymentMethod &&
+                          !paymentMethods.some(
+                            (method) => method.method === selectedPaymentMethod
+                          ) ? (
+                            <option value={selectedPaymentMethod}>
+                              {selectedPaymentMethod} (Unavailable)
+                            </option>
+                          ) : null}
+                          {paymentMethods.map((method) => (
+                            <option key={method.id} value={method.method}>
+                              {method.label || method.method}
+                            </option>
+                          ))}
+                        </select>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-9 px-3 text-xs"
+                          disabled={
+                            paymentMethodsLoading ||
+                            paymentUpdateLoading ||
+                            !selectedPaymentMethod ||
+                            String(selectedPaymentMethod).trim().toUpperCase() ===
+                              String(order.payment_method ?? "")
+                                .trim()
+                                .toUpperCase()
+                          }
+                          onClick={onUpdatePaymentMethod}
+                        >
+                          {paymentUpdateLoading
+                            ? "Updating..."
+                            : "Update method"}
+                        </Button>
+                      </div>
+                      <div className="text-[11px] text-white/50">
+                        Update before uploading a receipt. Changing method can
+                        require a new receipt.
+                      </div>
+                      {paymentUpdateMsg ? (
+                        <div className="text-[11px] text-white/70">
+                          {paymentUpdateMsg}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <div className="flex items-center justify-between">
                     <div className="text-sm font-semibold text-white/90">
                       How to pay

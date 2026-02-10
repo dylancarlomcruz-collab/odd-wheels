@@ -249,12 +249,15 @@ create table if not exists public.order_items (
   id uuid primary key default gen_random_uuid(),
   order_id uuid not null references public.orders(id) on delete cascade,
   product_id uuid not null references public.products(id) on delete restrict,
+  item_id uuid,
+  item_name text,
   product_title text,
   image_url text,
   variant_id uuid not null references public.product_variants(id) on delete restrict,
   condition text not null,
   issue_notes text,
   unit_price numeric not null default 0,
+  price_each numeric,
   cost_each numeric,
   qty int not null default 1 check (qty > 0),
   line_total numeric not null default 0,
@@ -1022,3 +1025,132 @@ $$;
 
 revoke execute on function public.fn_submit_feedback(uuid, int, text, text, text) from public;
 grant execute on function public.fn_submit_feedback(uuid, int, text, text, text) to anon, authenticated;
+
+create or replace function public.fn_buyer_update_payment_method(
+  p_order_id uuid,
+  p_payment_method text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_order public.orders%rowtype;
+  v_method text;
+  v_status text;
+  v_exists boolean;
+begin
+  v_method := upper(trim(coalesce(p_payment_method, '')));
+  if v_method = '' then
+    raise exception 'Payment method required.';
+  end if;
+
+  select * into v_order from public.orders where id = p_order_id for update;
+  if not found then
+    raise exception 'Order not found: %', p_order_id;
+  end if;
+
+  if v_order.user_id <> auth.uid() then
+    raise exception 'Not authorized';
+  end if;
+
+  if v_order.payment_status = 'PAID' then
+    raise exception 'Order already paid.';
+  end if;
+
+  v_status := upper(trim(coalesce(v_order.status, '')));
+  if v_status not in ('PENDING_PAYMENT','PENDING_APPROVAL','AWAITING_PAYMENT') then
+    raise exception 'Payment method cannot be changed at this stage.';
+  end if;
+
+  select true into v_exists
+  from public.payment_methods pm
+  where upper(trim(pm.method)) = v_method
+    and pm.is_active = true
+  limit 1;
+
+  if not coalesce(v_exists, false) then
+    raise exception 'Payment method unavailable.';
+  end if;
+
+  if v_method = upper(trim(coalesce(v_order.payment_method, ''))) then
+    return jsonb_build_object('ok', true, 'order_id', p_order_id, 'unchanged', true);
+  end if;
+
+  update public.orders
+    set payment_method = v_method
+  where id = p_order_id;
+
+  return jsonb_build_object('ok', true, 'order_id', p_order_id);
+end;
+$$;
+
+revoke execute on function public.fn_buyer_update_payment_method(uuid, text) from public;
+grant execute on function public.fn_buyer_update_payment_method(uuid, text) to authenticated;
+
+-- Product image auto-match uploads
+insert into storage.buckets (id, name, public)
+values ('product-uploads', 'product-uploads', true)
+on conflict (id) do nothing;
+
+drop policy if exists "product uploads read" on storage.objects;
+create policy "product uploads read" on storage.objects
+for select using (bucket_id = 'product-uploads');
+
+drop policy if exists "product uploads insert" on storage.objects;
+create policy "product uploads insert" on storage.objects
+for insert with check (bucket_id = 'product-uploads' and public.is_staff());
+
+create table if not exists public.product_image_hashes (
+  product_id uuid not null references public.products(id) on delete cascade,
+  image_url text not null,
+  image_hash text not null,
+  hash_algo text not null default 'dhash-64',
+  created_at timestamptz not null default now(),
+  primary key (product_id, image_url)
+);
+
+create index if not exists idx_product_image_hashes_product
+  on public.product_image_hashes (product_id);
+
+alter table public.product_image_hashes enable row level security;
+
+drop policy if exists "staff read product image hashes" on public.product_image_hashes;
+create policy "staff read product image hashes" on public.product_image_hashes
+for select using (public.is_staff());
+
+drop policy if exists "staff manage product image hashes" on public.product_image_hashes;
+create policy "staff manage product image hashes" on public.product_image_hashes
+for all using (public.is_staff()) with check (public.is_staff());
+
+create table if not exists public.product_upload_matches (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  uploader_user_id uuid references auth.users(id) on delete set null,
+  upload_url text not null,
+  upload_hash text,
+  status text not null default 'NEEDS_REVIEW'
+    check (status in ('APPLIED','NEEDS_REVIEW','NO_MATCH','ERROR')),
+  review_reason text,
+  matched_product_id uuid references public.products(id) on delete set null,
+  matched_image_url text,
+  confidence numeric,
+  distance int,
+  candidates jsonb,
+  applied_at timestamptz
+);
+
+create index if not exists idx_product_upload_matches_status
+  on public.product_upload_matches (status, created_at desc);
+
+alter table public.product_upload_matches enable row level security;
+
+drop policy if exists "staff read product upload matches" on public.product_upload_matches;
+create policy "staff read product upload matches" on public.product_upload_matches
+for select using (public.is_staff());
+
+drop policy if exists "staff manage product upload matches" on public.product_upload_matches;
+create policy "staff manage product upload matches" on public.product_upload_matches
+for all using (public.is_staff()) with check (public.is_staff());
