@@ -1131,6 +1131,63 @@ on conflict (method) do update set
 alter table public.order_items
   add column if not exists cost_each numeric;
 
+-- Order item image snapshot (first product image)
+alter table public.order_items
+  add column if not exists image_url text;
+
+update public.order_items oi
+  set image_url = p.image_urls[1]
+from public.products p
+where oi.image_url is null
+  and oi.product_id = p.id
+  and p.image_urls is not null
+  and array_length(p.image_urls, 1) is not null;
+
+update public.order_items oi
+  set image_url = p.image_urls[1]
+from public.product_variants pv
+join public.products p on p.id = pv.product_id
+where oi.image_url is null
+  and oi.variant_id = pv.id
+  and p.image_urls is not null
+  and array_length(p.image_urls, 1) is not null;
+
+create or replace function public.fn_set_order_item_image_url()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_img text;
+begin
+  if new.image_url is not null and length(trim(new.image_url)) > 0 then
+    return new;
+  end if;
+
+  if new.product_id is not null then
+    select p.image_urls[1]
+      into v_img
+    from public.products p
+    where p.id = new.product_id;
+  end if;
+
+  if (v_img is null or length(trim(coalesce(v_img, ''))) = 0) and new.variant_id is not null then
+    select p.image_urls[1]
+      into v_img
+    from public.product_variants pv
+    join public.products p on p.id = pv.product_id
+    where pv.id = new.variant_id;
+  end if;
+
+  if v_img is not null and length(trim(v_img)) > 0 then
+    new.image_url = v_img;
+  end if;
+
+  return new;
+end;
+$$;
+
 create or replace function public.fn_set_order_item_cost_each()
 returns trigger
 language plpgsql
@@ -1151,6 +1208,11 @@ drop trigger if exists trg_order_items_cost_each on public.order_items;
 create trigger trg_order_items_cost_each
 before insert on public.order_items
 for each row execute procedure public.fn_set_order_item_cost_each();
+
+drop trigger if exists trg_order_items_image_url on public.order_items;
+create trigger trg_order_items_image_url
+before insert on public.order_items
+for each row execute procedure public.fn_set_order_item_image_url();
 
 create or replace function public.fn_process_paid_order(p_order_id uuid)
 returns jsonb

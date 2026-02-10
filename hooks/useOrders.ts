@@ -33,6 +33,7 @@ export type OrderItemPreview = {
   item_name?: string | null;
   product_title?: string | null;
   name_snapshot?: string | null;
+  image_url?: string | null;
   condition?: string | null;
   price_each?: number | null;
   price?: number | null;

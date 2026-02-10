@@ -990,6 +990,10 @@ function OrderDetailContent() {
                   it?.item_id ??
                   "Item";
                 const image =
+                  (typeof it?.image_url === "string" &&
+                  it.image_url.trim().length
+                    ? it.image_url
+                    : null) ||
                   (Array.isArray(productFromVariant?.image_urls) &&
                   productFromVariant.image_urls.length
                     ? productFromVariant.image_urls[0]

@@ -187,10 +187,16 @@ export async function createOrderFromCart(
   // ✅ Insert order items with schema fallbacks
   const itemsV2 = cartLines.map((l) => {
     const unitPrice = lineUnitPrice(l);
+    const imageUrl =
+      Array.isArray(l.variant.product.image_urls) &&
+      l.variant.product.image_urls.length
+        ? String(l.variant.product.image_urls[0])
+        : null;
     return {
     order_id: order.id,
     item_id: l.variant.id,
     item_name: l.variant.product.title,
+    image_url: imageUrl,
     variant_id: l.variant.id,
     price_each: unitPrice,
     qty: l.qty,

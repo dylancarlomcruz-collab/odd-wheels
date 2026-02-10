@@ -249,6 +249,9 @@ function stageFromOrder(o: Order): StageKey | null {
 }
 
 function getItemThumb(it: OrderItemPreview): string | null {
+  if (typeof it?.image_url === "string" && it.image_url.trim().length) {
+    return it.image_url;
+  }
   const urls = it?.product_variant?.product?.image_urls;
   if (Array.isArray(urls) && urls.length) return String(urls[0]);
   const fallbackUrls = it?.product?.image_urls;

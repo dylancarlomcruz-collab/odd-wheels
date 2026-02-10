@@ -250,6 +250,7 @@ create table if not exists public.order_items (
   order_id uuid not null references public.orders(id) on delete cascade,
   product_id uuid not null references public.products(id) on delete restrict,
   product_title text,
+  image_url text,
   variant_id uuid not null references public.product_variants(id) on delete restrict,
   condition text not null,
   issue_notes text,
@@ -574,10 +575,51 @@ begin
 end;
 $$;
 
+create or replace function public.fn_set_order_item_image_url()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_img text;
+begin
+  if new.image_url is not null and length(trim(new.image_url)) > 0 then
+    return new;
+  end if;
+
+  if new.product_id is not null then
+    select p.image_urls[1]
+      into v_img
+    from public.products p
+    where p.id = new.product_id;
+  end if;
+
+  if (v_img is null or length(trim(coalesce(v_img, ''))) = 0) and new.variant_id is not null then
+    select p.image_urls[1]
+      into v_img
+    from public.product_variants pv
+    join public.products p on p.id = pv.product_id
+    where pv.id = new.variant_id;
+  end if;
+
+  if v_img is not null and length(trim(v_img)) > 0 then
+    new.image_url = v_img;
+  end if;
+
+  return new;
+end;
+$$;
+
 drop trigger if exists trg_order_items_cost_each on public.order_items;
 create trigger trg_order_items_cost_each
 before insert on public.order_items
 for each row execute procedure public.fn_set_order_item_cost_each();
+
+drop trigger if exists trg_order_items_image_url on public.order_items;
+create trigger trg_order_items_image_url
+before insert on public.order_items
+for each row execute procedure public.fn_set_order_item_image_url();
 -- ===== Atomic inventory deduction on successful payment =====
 create or replace function public.fn_process_paid_order(p_order_id uuid)
 returns jsonb
