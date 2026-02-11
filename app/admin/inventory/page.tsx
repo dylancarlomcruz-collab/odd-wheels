@@ -128,6 +128,35 @@ type HotWheelsBulkItem = {
   qty: number;
   condition: VariantCondition;
 };
+type AutoMatchResult = {
+  ok?: boolean;
+  file?: string;
+  uploadUrl?: string;
+  upload_url?: string;
+  status?: "APPLIED" | "NEEDS_REVIEW" | "NO_MATCH" | "ERROR" | string;
+  reviewReason?: string;
+  review_reason?: string;
+  matchedProductId?: string;
+  matched_product_id?: string;
+  confidence?: number | null;
+  distance?: number | null;
+  error?: string;
+};
+type ReviewMatch = {
+  id: string;
+  created_at: string;
+  upload_url: string;
+  upload_hash: string | null;
+  status: string;
+  review_reason: string | null;
+  candidates: any;
+};
+type UploadCandidate = {
+  product_id: string;
+  image_url: string;
+  distance: number;
+  confidence: number;
+};
 
 const BULK_CONDITIONS: VariantCondition[] = [
   "sealed",
@@ -139,6 +168,47 @@ const BULK_CONDITIONS: VariantCondition[] = [
   "sealed_blister",
   "unsealed_blister",
 ];
+
+function autoMatchBadgeClass(status: string) {
+  switch (status) {
+    case "APPLIED":
+      return "border-emerald-400/40 bg-emerald-500/15 text-emerald-100";
+    case "NEEDS_REVIEW":
+      return "border-amber-400/40 bg-amber-500/15 text-amber-100";
+    case "NO_MATCH":
+      return "border-white/15 bg-white/5 text-white/70";
+    case "ERROR":
+      return "border-red-400/40 bg-red-500/15 text-red-100";
+    default:
+      return "";
+  }
+}
+
+function mergeFileList(prev: File[], next: File[]) {
+  const seen = new Set(prev.map((f) => `${f.name}-${f.size}-${f.lastModified}`));
+  const merged = [...prev];
+  next.forEach((file) => {
+    const key = `${file.name}-${file.size}-${file.lastModified}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(file);
+  });
+  return merged;
+}
+
+function normalizeCandidates(raw: any): UploadCandidate[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw as UploadCandidate[];
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as UploadCandidate[]) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
 
 function n(v: any, fallback = 0) {
   const x = Number(v);
@@ -466,6 +536,29 @@ export default function AdminInventoryPage() {
     Record<string, boolean>
   >({});
 
+  // Auto-match uploads
+  const [autoMatchFiles, setAutoMatchFiles] = React.useState<File[]>([]);
+  const [autoMatchMinConfidence, setAutoMatchMinConfidence] =
+    React.useState("0.9");
+  const [autoMatchLoading, setAutoMatchLoading] = React.useState(false);
+  const [autoMatchMsg, setAutoMatchMsg] = React.useState<string | null>(null);
+  const [autoMatchResults, setAutoMatchResults] = React.useState<
+    AutoMatchResult[]
+  >([]);
+  const [autoMatchDragging, setAutoMatchDragging] = React.useState(false);
+  const [autoMatchProgress, setAutoMatchProgress] = React.useState<{
+    current: number;
+    total: number;
+  } | null>(null);
+
+  // Auto-match review queue
+  const [reviewMatches, setReviewMatches] = React.useState<ReviewMatch[]>([]);
+  const [reviewLoading, setReviewLoading] = React.useState(false);
+  const [reviewError, setReviewError] = React.useState<string | null>(null);
+  const [reviewActionId, setReviewActionId] = React.useState<string | null>(
+    null
+  );
+
   // Product fields (edit)
   const [title, setTitle] = React.useState("");
   const [brand, setBrand] = React.useState("");
@@ -645,6 +738,7 @@ export default function AdminInventoryPage() {
     void loadValuations();
     void loadBarcodeLogs();
     void loadProtectorStock();
+    void loadReviewQueue();
   }, []);
 
   React.useEffect(() => {
@@ -860,6 +954,25 @@ export default function AdminInventoryPage() {
     setVariants(loaded);
     applyVariantDefaultsFromExisting(loaded);
     focusBarcodeInput();
+  }
+
+  async function loadProductById(productId: string) {
+    if (!productId) return;
+    const { data, error } = await supabase
+      .from("products")
+      .select("id,title,brand,model,variation,image_urls,is_active,created_at")
+      .eq("id", productId)
+      .maybeSingle();
+
+    if (error || !data) {
+      toast({
+        intent: "error",
+        message: "Product not found for this match.",
+      });
+      return;
+    }
+
+    await loadProduct(data as Product);
   }
 
   function clearProduct() {
@@ -1233,6 +1346,207 @@ export default function AdminInventoryPage() {
       candidate = candidate.slice(0, nextIdx);
     }
     return candidate.replace(/[)\],.]+$/g, "").trim();
+  }
+
+  function resetAutoMatch() {
+    setAutoMatchFiles([]);
+    setAutoMatchResults([]);
+    setAutoMatchMsg(null);
+    setAutoMatchProgress(null);
+  }
+
+  async function runAutoMatchUpload() {
+    if (!autoMatchFiles.length) {
+      setAutoMatchMsg("Select image files first.");
+      return;
+    }
+
+    setAutoMatchLoading(true);
+    setAutoMatchMsg(null);
+    setAutoMatchResults([]);
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) throw new Error("Not authenticated.");
+
+      const minConfidence = Number(autoMatchMinConfidence);
+      const results: AutoMatchResult[] = [];
+      const total = autoMatchFiles.length;
+      setAutoMatchProgress({ current: 0, total });
+
+      for (let i = 0; i < autoMatchFiles.length; i += 1) {
+        const file = autoMatchFiles[i];
+        setAutoMatchProgress({ current: i, total });
+
+        const form = new FormData();
+        form.append("file", file);
+        if (Number.isFinite(minConfidence)) {
+          form.append("minConfidence", String(minConfidence));
+        }
+
+        try {
+          const res = await fetch("/api/images/auto-match", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` },
+            body: form,
+          });
+          const json = await res.json();
+          if (!json?.ok) {
+            results.push({
+              ok: false,
+              file: file.name,
+              error: json?.error ?? "Auto match failed."
+            });
+          } else if (Array.isArray(json?.results) && json.results.length) {
+            results.push(json.results[0] as AutoMatchResult);
+          } else {
+            results.push({
+              ok: false,
+              file: file.name,
+              error: "No result returned."
+            });
+          }
+        } catch (e: any) {
+          results.push({
+            ok: false,
+            file: file.name,
+            error: e?.message ?? "Upload failed."
+          });
+        }
+      }
+
+      setAutoMatchProgress({ current: total, total });
+      setAutoMatchResults(results);
+      setAutoMatchFiles([]);
+
+      const applied = results.filter((r) => r.status === "APPLIED").length;
+      const review = results.filter((r) => r.status === "NEEDS_REVIEW").length;
+      const noMatch = results.filter((r) => r.status === "NO_MATCH").length;
+      const errors = results.filter(
+        (r) => r.status === "ERROR" || r.ok === false
+      ).length;
+
+      setAutoMatchMsg(
+        `Done. Applied ${applied}, review ${review}, no match ${noMatch}, errors ${errors}.`
+      );
+      void loadReviewQueue();
+    } catch (e: any) {
+      setAutoMatchMsg(e?.message ?? "Auto match failed.");
+    } finally {
+      setAutoMatchLoading(false);
+      setAutoMatchProgress(null);
+    }
+  }
+
+  async function loadReviewQueue() {
+    setReviewLoading(true);
+    setReviewError(null);
+    try {
+      const { data, error } = await supabase
+        .from("product_upload_matches")
+        .select(
+          "id,created_at,upload_url,upload_hash,status,review_reason,candidates"
+        )
+        .eq("status", "NEEDS_REVIEW")
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (error) throw error;
+      setReviewMatches((data as ReviewMatch[]) ?? []);
+    } catch (e: any) {
+      setReviewError(e?.message ?? "Failed to load review queue.");
+      setReviewMatches([]);
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
+  async function applyReviewCandidate(
+    match: ReviewMatch,
+    candidate: UploadCandidate
+  ) {
+    if (!candidate?.product_id || !match?.upload_url) return;
+    setReviewActionId(match.id);
+    try {
+      const { data: product, error } = await supabase
+        .from("products")
+        .select("image_urls")
+        .eq("id", candidate.product_id)
+        .maybeSingle();
+
+      if (error || !product) {
+        throw new Error("Product not found.");
+      }
+
+      const current = Array.isArray(product.image_urls)
+        ? product.image_urls
+        : [];
+      const filtered = current.filter((url: string) => url && url !== match.upload_url);
+      const updated = [match.upload_url, ...filtered];
+
+      const { error: updateError } = await supabase
+        .from("products")
+        .update({ image_urls: updated })
+        .eq("id", candidate.product_id);
+
+      if (updateError) throw updateError;
+
+      if (match.upload_hash) {
+        await supabase.from("product_image_hashes").upsert(
+          {
+            product_id: candidate.product_id,
+            image_url: match.upload_url,
+            image_hash: match.upload_hash,
+            hash_algo: "dhash-64",
+          },
+          { onConflict: "product_id,image_url" }
+        );
+      }
+
+      await supabase
+        .from("product_upload_matches")
+        .update({
+          status: "APPLIED",
+          matched_product_id: candidate.product_id,
+          matched_image_url: candidate.image_url,
+          confidence: candidate.confidence,
+          distance: candidate.distance,
+          applied_at: new Date().toISOString(),
+          review_reason: null,
+        })
+        .eq("id", match.id);
+
+      toast({ intent: "success", message: "Applied match." });
+      setReviewMatches((prev) => prev.filter((m) => m.id !== match.id));
+    } catch (e: any) {
+      toast({
+        intent: "error",
+        message: e?.message ?? "Failed to apply match.",
+      });
+    } finally {
+      setReviewActionId(null);
+    }
+  }
+
+  async function markReviewNoMatch(match: ReviewMatch) {
+    setReviewActionId(match.id);
+    try {
+      const { error } = await supabase
+        .from("product_upload_matches")
+        .update({ status: "NO_MATCH", review_reason: "MANUAL" })
+        .eq("id", match.id);
+      if (error) throw error;
+      toast({ intent: "success", message: "Marked as no match." });
+      setReviewMatches((prev) => prev.filter((m) => m.id !== match.id));
+    } catch (e: any) {
+      toast({
+        intent: "error",
+        message: e?.message ?? "Failed to update match.",
+      });
+    } finally {
+      setReviewActionId(null);
+    }
   }
 
   async function uploadFileToStorage(file: File, folderId: string) {
@@ -2429,6 +2743,350 @@ export default function AdminInventoryPage() {
                 focusBarcodeInput();
               }}
             />
+          </div>
+
+          {/* Auto-match uploads */}
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold">Auto-match uploaded photos</div>
+                <div className="text-xs text-white/60">
+                  Upload images and we will match them to existing product
+                  photos. High-confidence matches replace the thumbnail
+                  automatically. Ties and low confidence go to review.
+                </div>
+              </div>
+              <Badge>Staff only</Badge>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-[1.2fr_0.8fr]">
+              <div className="space-y-2">
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => {
+                    const list = Array.from(e.target.files ?? []);
+                    if (!list.length) return;
+                    setAutoMatchFiles((prev) => mergeFileList(prev, list));
+                    setAutoMatchResults([]);
+                    setAutoMatchMsg(null);
+                    e.currentTarget.value = "";
+                  }}
+                />
+                <div className="text-xs text-white/50">
+                  Select multiple images to match against your existing catalog.
+                  You can add more files before uploading.
+                </div>
+              </div>
+              <Input
+                label="Min confidence (0-1)"
+                type="number"
+                step="0.01"
+                min="0"
+                max="1"
+                value={autoMatchMinConfidence}
+                onChange={(e) => setAutoMatchMinConfidence(e.target.value)}
+              />
+            </div>
+
+            <div
+              className={`rounded-xl border border-dashed p-3 text-sm text-white/60 transition ${
+                autoMatchDragging
+                  ? "border-accent-500/60 bg-paper/10"
+                  : "border-white/15 bg-bg-900/40"
+              }`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setAutoMatchDragging(true);
+              }}
+              onDragLeave={() => setAutoMatchDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setAutoMatchDragging(false);
+                const files = Array.from(e.dataTransfer.files ?? []).filter(
+                  (file) => file.type.startsWith("image/")
+                );
+                if (!files.length) return;
+                setAutoMatchFiles((prev) => mergeFileList(prev, files));
+                setAutoMatchResults([]);
+                setAutoMatchMsg(null);
+              }}
+            >
+              Drag and drop images here to add them to the upload queue.
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={runAutoMatchUpload}
+                disabled={autoMatchLoading || autoMatchFiles.length === 0}
+              >
+                {autoMatchLoading ? "Matching..." : "Upload & Match"}
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={resetAutoMatch}
+                disabled={!autoMatchFiles.length && !autoMatchResults.length}
+              >
+                Clear
+              </Button>
+              <div className="text-xs text-white/60">
+                {autoMatchFiles.length
+                  ? `${autoMatchFiles.length} file(s) selected.`
+                  : "No files selected."}
+              </div>
+            </div>
+
+            {autoMatchMsg ? (
+              <div className="text-xs text-white/70">{autoMatchMsg}</div>
+            ) : null}
+
+            {autoMatchProgress ? (
+              <div className="text-xs text-white/60">
+                Uploading {Math.min(autoMatchProgress.current + 1, autoMatchProgress.total)} of{" "}
+                {autoMatchProgress.total}...
+              </div>
+            ) : null}
+
+            {autoMatchFiles.length ? (
+              <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 text-xs text-white/70 space-y-2">
+                <div className="font-medium text-white/80">
+                  Upload queue
+                </div>
+                <div className="grid gap-1">
+                  {autoMatchFiles.map((file, idx) => (
+                    <div
+                      key={`${file.name}-${file.size}-${file.lastModified}`}
+                      className="flex items-center justify-between gap-2"
+                    >
+                      <span className="truncate">
+                        {idx + 1}. {file.name}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setAutoMatchFiles((prev) =>
+                            prev.filter(
+                              (f) =>
+                                `${f.name}-${f.size}-${f.lastModified}` !==
+                                `${file.name}-${file.size}-${file.lastModified}`
+                            )
+                          )
+                        }
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {autoMatchResults.length ? (
+              <div className="grid gap-2">
+                {autoMatchResults.map((result, idx) => {
+                  const uploadUrl = result.uploadUrl ?? result.upload_url ?? "";
+                  const statusRaw = String(
+                    result.status ?? (result.ok ? "DONE" : "ERROR")
+                  ).toUpperCase();
+                  const reviewReason =
+                    result.reviewReason ?? result.review_reason ?? null;
+                  const matchedProductId =
+                    result.matchedProductId ??
+                    result.matched_product_id ??
+                    null;
+                  const confidence =
+                    typeof result.confidence === "number"
+                      ? result.confidence
+                      : null;
+                  const distance =
+                    typeof result.distance === "number" ? result.distance : null;
+
+                  return (
+                    <div
+                      key={`${result.file ?? "upload"}-${idx}`}
+                      className="rounded-xl border border-white/10 bg-bg-900/40 p-3 flex gap-3"
+                    >
+                      <div className="h-12 w-12 rounded-lg border border-white/10 bg-bg-950/60 overflow-hidden flex-shrink-0">
+                        {uploadUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={uploadUrl}
+                            alt={result.file ?? "Upload"}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : null}
+                      </div>
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="text-sm font-medium truncate">
+                            {result.file ?? `Upload ${idx + 1}`}
+                          </div>
+                          <Badge className={autoMatchBadgeClass(statusRaw)}>
+                            {statusRaw}
+                          </Badge>
+                        </div>
+                        {matchedProductId ? (
+                          <div className="text-xs text-white/60 flex flex-wrap items-center gap-2">
+                            <span>Matched product:</span>
+                            <button
+                              type="button"
+                              className="text-white/80 hover:underline"
+                              onClick={() => loadProductById(matchedProductId)}
+                            >
+                              {matchedProductId.slice(0, 8)}...
+                            </button>
+                          </div>
+                        ) : null}
+                        {confidence != null ? (
+                          <div className="text-xs text-white/50">
+                            Confidence: {Math.round(confidence * 1000) / 10}%{" "}
+                            {distance != null ? `· Distance ${distance}` : ""}
+                          </div>
+                        ) : null}
+                        {reviewReason ? (
+                          <div className="text-xs text-white/50">
+                            Review reason: {reviewReason}
+                          </div>
+                        ) : null}
+                        {result.error ? (
+                          <div className="text-xs text-red-200">
+                            {result.error}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+
+          {/* Auto-match review queue */}
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="font-semibold">Review auto-matches</div>
+                <div className="text-xs text-white/60">
+                  Resolve ties and low-confidence matches.
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={loadReviewQueue}
+                disabled={reviewLoading}
+              >
+                {reviewLoading ? "Refreshing..." : "Refresh"}
+              </Button>
+            </div>
+
+            {reviewError ? (
+              <div className="text-xs text-red-200">{reviewError}</div>
+            ) : null}
+            {!reviewLoading && reviewMatches.length === 0 ? (
+              <div className="text-xs text-white/60">
+                No items need review right now.
+              </div>
+            ) : null}
+
+            {reviewMatches.length ? (
+              <div className="grid gap-3">
+                {reviewMatches.map((match) => {
+                  const candidates = normalizeCandidates(match.candidates).slice(
+                    0,
+                    4
+                  );
+                  return (
+                    <div
+                      key={match.id}
+                      className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3"
+                    >
+                      <div className="flex flex-wrap items-start gap-3">
+                        <div className="h-14 w-14 rounded-lg border border-white/10 bg-bg-950/60 overflow-hidden flex-shrink-0">
+                          {match.upload_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={match.upload_url}
+                              alt="Upload"
+                              className="h-full w-full object-cover"
+                            />
+                          ) : null}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium">
+                            Needs review
+                          </div>
+                          <div className="text-xs text-white/60">
+                            {match.review_reason ?? "TIE / LOW_CONFIDENCE"}
+                          </div>
+                          <div className="text-[11px] text-white/40">
+                            {new Date(match.created_at).toLocaleString()}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => markReviewNoMatch(match)}
+                            disabled={reviewActionId === match.id}
+                          >
+                            Mark no match
+                          </Button>
+                        </div>
+                      </div>
+
+                      {candidates.length ? (
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {candidates.map((candidate, idx) => (
+                            <div
+                              key={`${match.id}-${candidate.product_id}-${idx}`}
+                              className="rounded-lg border border-white/10 bg-paper/5 p-2 flex flex-col gap-2"
+                            >
+                              <div className="text-xs text-white/70">
+                                Product {candidate.product_id.slice(0, 8)}...
+                              </div>
+                              <div className="text-[11px] text-white/50">
+                                Confidence{" "}
+                                {Math.round(candidate.confidence * 1000) / 10}% ·
+                                Distance {candidate.distance}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={() =>
+                                    applyReviewCandidate(match, candidate)
+                                  }
+                                  disabled={reviewActionId === match.id}
+                                >
+                                  Apply
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() =>
+                                    loadProductById(candidate.product_id)
+                                  }
+                                >
+                                  Open product
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-white/60">
+                          No candidates saved for this upload.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
 
           {/* Product URL lookup */}

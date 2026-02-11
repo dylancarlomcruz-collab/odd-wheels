@@ -672,13 +672,59 @@ function CartContent() {
                                 <Link
                                   key={p.id}
                                   href={`/product/${p.id}`}
-                                  className="rounded-xl border border-white/10 bg-bg-900/30 px-3 py-2 text-white/80 hover:bg-paper/5"
+                                  className="group flex items-center gap-3 rounded-xl border border-white/10 bg-bg-900/40 p-2 text-white/80 transition hover:border-white/20 hover:bg-paper/10"
                                 >
-                                  <div className="font-medium line-clamp-1">
-                                    {p.title}
+                                  <div className="h-12 w-12 flex-shrink-0 overflow-hidden rounded-lg border border-white/10 bg-bg-950/50">
+                                    {Array.isArray(p.image_urls) &&
+                                    p.image_urls[0] ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img
+                                        src={getOptimizedImageUrl(
+                                          p.image_urls[0],
+                                          {
+                                            width: 96,
+                                            quality: 70,
+                                            format: "webp",
+                                          },
+                                        )}
+                                        srcSet={buildSrcSet(
+                                          p.image_urls[0],
+                                          [64, 96, 128],
+                                          { quality: 70, format: "webp" },
+                                        )}
+                                        sizes="48px"
+                                        alt={p.title ?? "Suggestion"}
+                                        className="h-full w-full object-cover"
+                                        loading="lazy"
+                                        decoding="async"
+                                        onError={(e) =>
+                                          applyImageFallback(
+                                            e.currentTarget,
+                                            p.image_urls[0],
+                                          )
+                                        }
+                                      />
+                                    ) : (
+                                      <div className="flex h-full w-full items-center justify-center text-[10px] text-white/40">
+                                        No image
+                                      </div>
+                                    )}
                                   </div>
-                                  <div className="text-xs text-white/60">
-                                    {formatPHP(p.min_price)}
+                                  <div className="min-w-0">
+                                    <div className="text-xs font-medium line-clamp-2">
+                                      {p.title}
+                                    </div>
+                                    <div className="text-[11px] text-white/55">
+                                      {p.brand ?? "-"}
+                                      {p.model ? ` · ${p.model}` : ""}
+                                    </div>
+                                    <div className="mt-1 text-xs text-price">
+                                      {formatPHP(
+                                        Number.isFinite(p.min_price)
+                                          ? p.min_price
+                                          : Number(p.min_price ?? 0),
+                                      )}
+                                    </div>
                                   </div>
                                 </Link>
                               ))}
