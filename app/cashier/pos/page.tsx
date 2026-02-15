@@ -336,8 +336,10 @@ export default function CashierPOSPage() {
   async function addByBarcode(code: string) {
     const t = normalizeBarcode(code);
     if (!t) {
+      setBarcode("");
       setBarcodeHint(null);
       setBarcodeMatches([]);
+      barcodeRef.current?.focus();
       return;
     }
 
@@ -365,6 +367,8 @@ export default function CashierPOSPage() {
           message: `No item found for barcode ${t}`,
           intent: "error",
         });
+        setBarcode("");
+        barcodeRef.current?.focus();
         return;
       }
 
@@ -372,12 +376,15 @@ export default function CashierPOSPage() {
         addVariantToCart(exactList[0], exactList[0].product);
         setBarcode("");
         setBarcodeMatches([]);
+        setBarcodeHint(null);
         barcodeRef.current?.focus();
         return;
       }
 
       setBarcodeHint("Multiple barcode matches found. Choose a variant.");
       setBarcodeMatches(exactList);
+      setBarcode("");
+      barcodeRef.current?.focus();
     } finally {
       setBarcodeLoading(false);
     }

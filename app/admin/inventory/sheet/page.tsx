@@ -16,6 +16,7 @@ import { formatConditionLabel } from "@/lib/conditions";
 type SheetRow = {
   id: string;
   condition: string | null;
+  ship_class: string | null;
   qty: number | null;
   price: number | null;
   product: {
@@ -42,9 +43,253 @@ function formatBrand(row: SheetRow) {
   return inferred.brand ?? "Unknown";
 }
 
+const FALLBACK_DIECAST_BRANDS = [
+  "Mini GT",
+  "Kaido House",
+  "Inno64",
+  "Tarmac",
+  "Tarmac Works",
+  "POP RACE",
+  "Pop Race",
+  "Hot Wheels",
+  "Tomica",
+  "BMC",
+  "GCD",
+  "Focal Horizon",
+  "Street Warrior",
+  "Street Weapon",
+  "StreetWeapon",
+  "Howie",
+  "Howie Model",
+  "Para64",
+  "Para 64",
+  "Auto World",
+  "Greenlight",
+  "Johnny Lightning",
+  "M2 Machines",
+  "Matchbox",
+  "Majorette",
+  "Kyosho",
+  "Welly",
+  "Maisto",
+];
+
+let runtimeDiecastBrands: string[] = [];
+
+function setRuntimeDiecastBrands(list: string[]) {
+  runtimeDiecastBrands = list.filter(Boolean);
+  VEHICLE_CACHE.clear();
+}
+
+function getDiecastBrands() {
+  const merged = [...runtimeDiecastBrands, ...FALLBACK_DIECAST_BRANDS];
+  return Array.from(new Set(merged.filter(Boolean)));
+}
+
+const VEHICLE_MAKE_ALIASES: Array<{ canonical: string; aliases: string[] }> = [
+  { canonical: "Toyota", aliases: ["toyota", "trd"] },
+  { canonical: "Nissan", aliases: ["nissan", "nismo"] },
+  { canonical: "Honda", aliases: ["honda"] },
+  { canonical: "Mazda", aliases: ["mazda"] },
+  { canonical: "Subaru", aliases: ["subaru"] },
+  { canonical: "Mitsubishi", aliases: ["mitsubishi", "mitsubushi"] },
+  { canonical: "Lexus", aliases: ["lexus"] },
+  { canonical: "Acura", aliases: ["acura"] },
+  { canonical: "Infiniti", aliases: ["infiniti"] },
+  { canonical: "Suzuki", aliases: ["suzuki"] },
+  { canonical: "Isuzu", aliases: ["isuzu"] },
+  { canonical: "Kia", aliases: ["kia"] },
+  { canonical: "Hyundai", aliases: ["hyundai"] },
+  { canonical: "Genesis", aliases: ["genesis"] },
+  { canonical: "BMW", aliases: ["bmw"] },
+  { canonical: "Mercedes-Benz", aliases: ["mercedes", "mercedes-benz", "benz"] },
+  { canonical: "Audi", aliases: ["audi"] },
+  { canonical: "Volkswagen", aliases: ["volkswagen", "vw"] },
+  { canonical: "Porsche", aliases: ["porsche"] },
+  { canonical: "Ferrari", aliases: ["ferrari"] },
+  { canonical: "Lamborghini", aliases: ["lamborghini", "lambo"] },
+  { canonical: "McLaren", aliases: ["mclaren", "mc laren"] },
+  { canonical: "Aston Martin", aliases: ["aston martin", "astonmartin"] },
+  { canonical: "Bentley", aliases: ["bentley"] },
+  { canonical: "Rolls-Royce", aliases: ["rolls-royce", "rolls royce"] },
+  { canonical: "Jaguar", aliases: ["jaguar"] },
+  { canonical: "Land Rover", aliases: ["land rover", "landrover", "range rover"] },
+  { canonical: "Mini", aliases: ["mini cooper", "mini"] },
+  { canonical: "Alfa Romeo", aliases: ["alfa romeo", "alfaromeo"] },
+  { canonical: "Fiat", aliases: ["fiat"] },
+  { canonical: "Maserati", aliases: ["maserati"] },
+  { canonical: "Lotus", aliases: ["lotus"] },
+  { canonical: "Pagani", aliases: ["pagani"] },
+  { canonical: "Bugatti", aliases: ["bugatti"] },
+  { canonical: "Koenigsegg", aliases: ["koenigsegg"] },
+  { canonical: "Peugeot", aliases: ["peugeot"] },
+  { canonical: "Renault", aliases: ["renault"] },
+  { canonical: "Citroen", aliases: ["citroen"] },
+  { canonical: "Skoda", aliases: ["skoda"] },
+  { canonical: "Seat", aliases: ["seat"] },
+  { canonical: "Opel", aliases: ["opel"] },
+  { canonical: "Vauxhall", aliases: ["vauxhall"] },
+  { canonical: "Lancia", aliases: ["lancia"] },
+  { canonical: "Volvo", aliases: ["volvo"] },
+  { canonical: "Saab", aliases: ["saab"] },
+  { canonical: "Tesla", aliases: ["tesla"] },
+  { canonical: "Chevrolet", aliases: ["chevrolet", "chevy"] },
+  { canonical: "Ford", aliases: ["ford"] },
+  { canonical: "Dodge", aliases: ["dodge"] },
+  { canonical: "Chrysler", aliases: ["chrysler"] },
+  { canonical: "Jeep", aliases: ["jeep"] },
+  { canonical: "Cadillac", aliases: ["cadillac"] },
+  { canonical: "GMC", aliases: ["gmc"] },
+  { canonical: "Hummer", aliases: ["hummer"] },
+  { canonical: "Ram", aliases: ["ram"] },
+];
+
+const VEHICLE_COLOR_WORDS = new Set([
+  "black",
+  "white",
+  "silver",
+  "grey",
+  "gray",
+  "red",
+  "blue",
+  "green",
+  "yellow",
+  "orange",
+  "purple",
+  "pink",
+  "gold",
+  "brown",
+  "beige",
+  "tan",
+  "chrome",
+  "matte",
+  "carbon",
+  "metallic",
+  "pearl",
+]);
+
+function isColorToken(token: string) {
+  const cleaned = String(token ?? "").toLowerCase();
+  if (!cleaned) return false;
+  if (VEHICLE_COLOR_WORDS.has(cleaned)) return true;
+  const parts = cleaned.split(/[^a-z]+/).filter(Boolean);
+  return parts.length > 0 && parts.every((part) => VEHICLE_COLOR_WORDS.has(part));
+}
+
+const VEHICLE_STOP_WORDS = new Set([
+  "DIECAST",
+  "MODEL",
+  "CAR",
+  "SCALE",
+  "EDITION",
+  "LIMITED",
+  "EXCLUSIVE",
+  "VERSION",
+  "VER",
+  "RESERVE",
+  "CHASE",
+  "SET",
+  "SERIES",
+  "COLLECTION",
+  "WITH",
+  "W",
+  "W/",
+  "RHD",
+  "LHD",
+]);
+
+const VEHICLE_UPPER_WORDS = new Set([
+  "GT",
+  "GTR",
+  "GT-R",
+  "GTS",
+  "GTO",
+  "RS",
+  "RSR",
+  "AMG",
+  "LBWK",
+  "LB",
+  "RWB",
+  "JDM",
+  "EVO",
+  "NSX",
+  "ZL1",
+  "ZR1",
+  "TRD",
+  "STI",
+  "TYPE",
+  "TYPE-R",
+  "TYPE-S",
+  "V6",
+  "V8",
+  "V10",
+  "V12",
+  "FD",
+  "FC",
+  "EK9",
+  "EG6",
+  "DC2",
+  "S15",
+  "S13",
+  "S14",
+  "AE86",
+  "R32",
+  "R33",
+  "R34",
+]);
+
+const MAKE_LOOKUP = VEHICLE_MAKE_ALIASES.flatMap((entry) =>
+  entry.aliases.map((alias) => ({
+    canonical: entry.canonical,
+    alias,
+    pattern: new RegExp(
+      `\\b${alias
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        .replace(/\\s+/g, "\\s+")
+        .replace(/-/g, "[-\\s]?")}\\b`,
+      "i"
+    ),
+    length: alias.length,
+  }))
+).sort((a, b) => b.length - a.length);
+
+const VEHICLE_CACHE = new Map<string, { make: string; model: string }>();
+
+function stripDiecastBrands(value: string, extra: string[] = []) {
+  let out = String(value ?? "");
+  const list = Array.from(new Set([...getDiecastBrands(), ...extra])).filter(
+    Boolean
+  );
+  for (const brand of list) {
+    const pattern = new RegExp(
+      `\\b${brand
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        .replace(/\\s+/g, "\\s+")
+        .replace(/-/g, "[-\\s]?")}\\b`,
+      "ig"
+    );
+    out = out.replace(pattern, " ");
+  }
+  return out.replace(/\s{2,}/g, " ").trim();
+}
+
+function stripVehicleMake(value: string, make: string | null | undefined) {
+  const raw = String(value ?? "");
+  const mk = String(make ?? "").trim();
+  if (!raw || !mk || mk === "Unknown") return raw;
+  const pattern = new RegExp(
+    `\\b${mk
+      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      .replace(/\\s+/g, "\\s+")
+      .replace(/-/g, "[-\\s]?")}\\b`,
+    "ig"
+  );
+  return raw.replace(pattern, " ").replace(/\s{2,}/g, " ").trim();
+}
+
 function formatName(row: SheetRow) {
   const title = row.product?.title ?? "";
-  return normalizeTitleBrandAliases(title).trim() || "Untitled";
+  return cleanDiecastTitle(normalizeTitleBrandAliases(title).trim()) || "Untitled";
 }
 
 function normalizeSheetRows(data: any[]): SheetRow[] {
@@ -163,15 +408,327 @@ function cleanupModel(raw: string, brand: string) {
   return tokens.map(formatToken).join(" ").trim() || "Unknown";
 }
 
+function cleanDiecastTitle(value: string) {
+  let out = String(value ?? "");
+  const patterns = [
+    /\bdiecast\s+car\s+models?\b/gi,
+    /\bdiecast\s+model\s+cars?\b/gi,
+    /\bdiecast\s+models?\b/gi,
+    /\bdiecast\s+cars?\b/gi,
+    /\bdiecast\s+model\b/gi,
+    /\bmodel\s+cars?\b/gi,
+    /\bcar\s+models?\b/gi,
+  ];
+  for (const pattern of patterns) {
+    out = out.replace(pattern, " ");
+  }
+  out = out.replace(/\(\s*\)/g, " ");
+  out = out.replace(/\[\s*\]/g, " ");
+  out = out.replace(/\s{2,}/g, " ").trim();
+  return out;
+}
+
 function formatModel(row: SheetRow) {
-  const raw = row.product?.model ?? "";
-  const brand = formatBrand(row);
-  if (raw.trim()) return cleanupModel(raw, brand);
-  const inferred = inferFieldsFromTitle(row.product?.title ?? "");
-  return cleanupModel(inferred.model ?? "", brand);
+  return formatVehicleModel(row);
 }
 
 function modelSortKey(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inferVehicleMakeModel(row: SheetRow) {
+  const cacheKey = row.id || row.product?.id || "";
+  if (cacheKey && VEHICLE_CACHE.has(cacheKey)) {
+    return VEHICLE_CACHE.get(cacheKey)!;
+  }
+
+  const titleRaw = normalizeTitleBrandAliases(row.product?.title ?? "");
+  const extra = [row.product?.model ?? "", row.product?.variation ?? ""]
+    .filter(Boolean)
+    .join(" ");
+  const extraBrands = [row.product?.brand ?? ""].filter(Boolean) as string[];
+  const combined = stripDiecastBrands(`${titleRaw} ${extra}`.trim(), extraBrands);
+  const lower = combined.toLowerCase();
+
+  let make: string | null = null;
+  let makePattern: RegExp | null = null;
+  for (const entry of MAKE_LOOKUP) {
+    if (entry.pattern.test(lower)) {
+      make = entry.canonical;
+      makePattern = entry.pattern;
+      break;
+    }
+  }
+
+  let working = combined;
+  if (makePattern) {
+    if (
+      make === "Land Rover" &&
+      /range\\s+rover/i.test(makePattern.source)
+    ) {
+      if (/\\bland\\s+rover\\b/i.test(combined)) {
+        makePattern = /\bland\s+rover\b/i;
+      } else {
+        makePattern = null;
+      }
+    }
+  }
+  if (makePattern) {
+    const makeGlobal = new RegExp(makePattern.source, "ig");
+    working = working.replace(makeGlobal, " ");
+  }
+
+  working = working
+    .replace(/\[[^\]]+\]|\([^)]*\)/g, " ")
+    .replace(/\b1\s*[:/]\s*\d+\b/gi, " ")
+    .replace(/\b1\s*-\s*\d+\b/gi, " ")
+    .replace(/\bscale\b/gi, " ")
+    .replace(/[,|]/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  const tokens = working.split(/\s+/).filter(Boolean);
+  while (tokens.length) {
+    const token = tokens[0];
+    if (!token) {
+      tokens.shift();
+      continue;
+    }
+    if (isColorToken(token)) {
+      tokens.shift();
+      continue;
+    }
+    const upper = token.toUpperCase();
+    if (VEHICLE_STOP_WORDS.has(upper)) {
+      tokens.shift();
+      continue;
+    }
+    if (/^(19|20)\d{2}$/.test(token)) {
+      tokens.shift();
+      continue;
+    }
+    if (/^\d{4,}[A-Z-]*$/i.test(token)) {
+      tokens.shift();
+      continue;
+    }
+    break;
+  }
+
+  const modelTokens: string[] = [];
+  for (const token of tokens) {
+    if (!token) continue;
+    const upper = token.toUpperCase();
+    if (VEHICLE_STOP_WORDS.has(upper)) break;
+    if (isColorToken(token)) break;
+    modelTokens.push(token);
+    if (modelTokens.length >= 8) break;
+  }
+
+  let cleanedTokens = modelTokens.filter(Boolean);
+  const deduped: string[] = [];
+  for (const token of cleanedTokens) {
+    const last = deduped[deduped.length - 1];
+    if (last && last.toLowerCase() === token.toLowerCase()) continue;
+    deduped.push(token);
+  }
+  cleanedTokens = deduped;
+
+  if (cleanedTokens.length > 1 && cleanedTokens.length % 2 === 0) {
+    const half = cleanedTokens.length / 2;
+    const firstHalf = cleanedTokens.slice(0, half);
+    const secondHalf = cleanedTokens.slice(half);
+    const matches = firstHalf.every(
+      (token, idx) => token.toLowerCase() === secondHalf[idx]?.toLowerCase()
+    );
+    if (matches) cleanedTokens = firstHalf;
+  }
+
+  let modelText = cleanedTokens.join(" ").trim();
+  if (!modelText) {
+    const fallback =
+      row.product?.model ??
+      inferFieldsFromTitle(row.product?.title ?? "").model ??
+      "";
+    modelText = cleanupModel(fallback, make ?? "");
+  }
+
+  if (make && modelText.toLowerCase().startsWith(make.toLowerCase())) {
+    modelText = modelText.slice(make.length).trim();
+  }
+
+  const formatPart = (part: string) => {
+    if (!part) return "";
+    const upper = part.toUpperCase();
+    if (/[0-9]/.test(part)) return upper;
+    if (VEHICLE_UPPER_WORDS.has(upper)) return upper;
+    if (part.length <= 2) return upper;
+    return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+  };
+
+  const formatToken = (token: string) => {
+    const parts = token.split(/[-/]/);
+    const seps = token.match(/[-/]/g) ?? [];
+    const nextParts = parts.map(formatPart);
+    let out = "";
+    for (let i = 0; i < nextParts.length; i += 1) {
+      out += nextParts[i];
+      if (seps[i]) out += seps[i];
+    }
+    return out;
+  };
+
+  const model = modelText
+    ? modelText
+        .split(/\s+/)
+        .map(formatToken)
+        .join(" ")
+        .trim()
+    : "Unknown";
+
+  const result = {
+    make: make ?? "Unknown",
+    model: model || "Unknown",
+  };
+
+  if (cacheKey) VEHICLE_CACHE.set(cacheKey, result);
+  return result;
+}
+
+function formatVehicleMake(row: SheetRow) {
+  return inferVehicleMakeModel(row).make || "Unknown";
+}
+
+function formatVehicleModel(row: SheetRow) {
+  return inferVehicleMakeModel(row).model || "Unknown";
+}
+
+function formatVehicleDisplayModel(row: SheetRow) {
+  const inferred = inferVehicleMakeModel(row);
+  const make = inferred.make || "Unknown";
+  const model = inferred.model || "Unknown";
+  if (make === "Unknown") return model;
+  if (model === "Unknown") return make;
+  if (model.toLowerCase().startsWith(make.toLowerCase())) return model;
+  return `${make} ${model}`.trim();
+}
+
+function inferVehicleMakeModelFromFields(fields: {
+  id?: string;
+  title?: string | null;
+  brand?: string | null;
+  model?: string | null;
+  variation?: string | null;
+}) {
+  const row: SheetRow = {
+    id: fields.id ?? "",
+    condition: null,
+    ship_class: null,
+    qty: null,
+    price: null,
+    product: {
+      id: fields.id ?? "",
+      title: fields.title ?? "",
+      brand: fields.brand ?? null,
+      model: fields.model ?? null,
+      variation: fields.variation ?? null,
+      image_urls: null,
+    },
+  };
+  return inferVehicleMakeModel(row);
+}
+
+function normalizeModelValue(value: string, make: string, extraBrands: string[] = []) {
+  let cleaned = stripDiecastBrands(value, extraBrands);
+  cleaned = stripVehicleMake(cleaned, make);
+  cleaned = cleaned.replace(/\b1\s*[:/]\s*\d+\b/gi, " ");
+  cleaned = cleaned.replace(/\bscale\b/gi, " ");
+  cleaned = cleaned.replace(/\bmodel\b/gi, " ");
+  cleaned = cleaned.replace(/\bdiecast\b/gi, " ");
+  cleaned = cleaned.replace(/[,|]/g, " ");
+  cleaned = cleaned.replace(/\s{2,}/g, " ").trim();
+  if (!cleaned) return "";
+  const normalized = cleanupModel(cleaned, make);
+  return normalized === "Unknown" ? "" : normalized;
+}
+
+function tokenize(value: string) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function includesAllTokens(haystack: string, needle: string) {
+  const hayTokens = new Set(tokenize(haystack));
+  const needleTokens = tokenize(needle);
+  if (!needleTokens.length) return false;
+  return needleTokens.every((token) => hayTokens.has(token));
+}
+
+function shouldReplaceModel(current: string, inferred: string) {
+  const currentClean = current.trim();
+  if (!currentClean) return true;
+  if (currentClean.length <= 2) return true;
+  const upper = currentClean.toUpperCase();
+  if (VEHICLE_STOP_WORDS.has(upper)) return true;
+  if (includesAllTokens(currentClean, inferred)) return false;
+  if (!includesAllTokens(inferred, currentClean) && inferred.length > currentClean.length) {
+    return true;
+  }
+  return false;
+}
+
+function updateTitleWithMakeModel(
+  title: string,
+  make: string,
+  model: string
+) {
+  const base = String(title ?? "").trim();
+  if (!base) return `${make} ${model}`.trim();
+  const hasMake = includesAllTokens(base, make);
+  const hasModel = includesAllTokens(base, model);
+  if (hasMake && hasModel) return base;
+  let addition = "";
+  if (!hasMake && !hasModel) {
+    addition = `${make} ${model}`;
+  } else if (!hasMake) {
+    addition = make;
+  } else if (!hasModel) {
+    addition = model;
+  }
+  if (!addition) return base;
+  return `${base} ${addition}`.replace(/\s{2,}/g, " ").trim();
+}
+
+function normalizeForCompare(value: string) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function ensureMakeInModel(make: string, model: string) {
+  const mk = String(make ?? "").trim();
+  const md = String(model ?? "").trim();
+  if (!mk) return md;
+  if (!md) return mk;
+  const mkNorm = normalizeForCompare(mk);
+  const mdNorm = normalizeForCompare(md);
+  if (!mkNorm || !mdNorm) return `${mk} ${md}`.trim();
+  if (mdNorm.startsWith(mkNorm)) return md;
+  if (includesAllTokens(mdNorm, mkNorm) || includesAllTokens(mkNorm, mdNorm)) {
+    return md;
+  }
+  return `${mk} ${md}`.trim();
+}
+
+function vehicleSortKey(value: string) {
   return value
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
@@ -557,13 +1114,21 @@ export default function InventorySheetPage() {
   const [exportingCards, setExportingCards] = React.useState(false);
   const [exportMsg, setExportMsg] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState(false);
+  const [cardGroupMode, setCardGroupMode] = React.useState<
+    "brand" | "ship_class" | "ship_class_brand" | "brand_ship_class" | "none"
+  >("ship_class_brand");
+  const [syncingModel, setSyncingModel] = React.useState(false);
+  const [brandSyncTick, setBrandSyncTick] = React.useState(0);
 
   const totalQty = React.useMemo(
     () => rows.reduce((sum, row) => sum + Number(row.qty ?? 0), 0),
     [rows]
   );
 
-  const groupedRows = React.useMemo(() => groupRows(rows), [rows]);
+  const groupedRows = React.useMemo(
+    () => groupRows(rows),
+    [rows, brandSyncTick]
+  );
 
   async function loadPage(nextPage: number, replace = false) {
     if (loading) return;
@@ -576,7 +1141,7 @@ export default function InventorySheetPage() {
     const { data, error: qErr } = await supabase
       .from("product_variants")
       .select(
-        "id,condition,qty,price, product:products(id,title,brand,model,variation,image_urls)"
+        "id,condition,ship_class,qty,price, product:products(id,title,brand,model,variation,image_urls)"
       )
       .order("created_at", { ascending: false })
       .range(from, to);
@@ -597,19 +1162,19 @@ export default function InventorySheetPage() {
   function groupRows(source: SheetRow[]) {
     const map = new Map<string, SheetRow[]>();
     for (const row of source) {
-      const brand = formatBrand(row);
-      const list = map.get(brand) ?? [];
+      const make = formatVehicleMake(row);
+      const list = map.get(make) ?? [];
       list.push(row);
-      map.set(brand, list);
+      map.set(make, list);
     }
     const entries = Array.from(map.entries()).sort((a, b) =>
       a[0].localeCompare(b[0])
     );
-    return entries.map(([brand, list]) => ({
-      brand,
+    return entries.map(([make, list]) => ({
+      brand: make,
       rows: list.sort((a, b) => {
-        const aKey = modelSortKey(formatModel(a));
-        const bKey = modelSortKey(formatModel(b));
+        const aKey = vehicleSortKey(formatVehicleModel(a));
+        const bKey = vehicleSortKey(formatVehicleModel(b));
         const modelCmp = aKey.localeCompare(bKey);
         if (modelCmp !== 0) return modelCmp;
         return formatName(a).localeCompare(formatName(b));
@@ -624,15 +1189,48 @@ export default function InventorySheetPage() {
       const from = pageIndex * EXPORT_PAGE_SIZE;
       const to = from + EXPORT_PAGE_SIZE - 1;
       const { data, error: qErr } = await supabase
-        .from("product_variants")
-        .select(
-          "id,condition,qty,price, product:products(id,title,brand,model,variation,image_urls)"
-        )
+      .from("product_variants")
+      .select(
+        "id,condition,ship_class,qty,price, product:products(id,title,brand,model,variation,image_urls)"
+      )
         .order("created_at", { ascending: false })
         .range(from, to);
 
       if (qErr) throw new Error(qErr.message || "Failed to export inventory.");
       const batch = normalizeSheetRows((data as any[]) ?? []);
+      all = [...all, ...batch];
+      if (batch.length < EXPORT_PAGE_SIZE) break;
+      pageIndex += 1;
+    }
+    return all;
+  }
+
+  async function fetchAllProducts() {
+    let all: Array<{
+      id: string;
+      title: string | null;
+      brand: string | null;
+      model: string | null;
+      variation: string | null;
+    }> = [];
+    let pageIndex = 0;
+    while (true) {
+      const from = pageIndex * EXPORT_PAGE_SIZE;
+      const to = from + EXPORT_PAGE_SIZE - 1;
+      const { data, error: qErr } = await supabase
+        .from("products")
+        .select("id,title,brand,model,variation")
+        .order("created_at", { ascending: false })
+        .range(from, to);
+
+      if (qErr) throw new Error(qErr.message || "Failed to load products.");
+      const batch = (data ?? []) as Array<{
+        id: string;
+        title: string | null;
+        brand: string | null;
+        model: string | null;
+        variation: string | null;
+      }>;
       all = [...all, ...batch];
       if (batch.length < EXPORT_PAGE_SIZE) break;
       pageIndex += 1;
@@ -646,13 +1244,23 @@ export default function InventorySheetPage() {
     setExportMsg(null);
     try {
       const allRows = await fetchAllRows();
-      const headers = ["Name", "Car Model", "Condition", "Qty", "Price", "Photo URL"];
+      const headers = [
+        "Name",
+        "Make",
+        "Model",
+        "Condition",
+        "Qty",
+        "Price",
+        "Photo URL",
+      ];
       const lines = [headers.join(",")];
       for (const row of allRows) {
         const photoUrl = row.product?.image_urls?.[0] ?? "";
+        const inferred = inferVehicleMakeModel(row);
         const values = [
           formatName(row),
-          formatModel(row),
+          inferred.make,
+          inferred.model,
           formatCondition(row.condition),
           Number(row.qty ?? 0),
           Number(row.price ?? 0),
@@ -676,12 +1284,31 @@ export default function InventorySheetPage() {
     }
   }
 
-  function fileSafe(value: string) {
+  function fileSafe(value: string, maxLength = 80) {
     return value
       .replace(/[^a-z0-9\-_ ]/gi, "")
       .trim()
       .replace(/\s+/g, "_")
-      .slice(0, 80);
+      .slice(0, maxLength);
+  }
+
+  function formatShipClassFolder(row: SheetRow) {
+    const raw = String(row.ship_class ?? "UNASSIGNED").trim();
+    const pretty = raw
+      ? raw
+          .replace(/_/g, " ")
+          .toLowerCase()
+          .replace(/\b\w/g, (char) => char.toUpperCase())
+      : "UNASSIGNED";
+    return fileSafe(pretty) || "UNASSIGNED";
+  }
+
+  function formatExportFileName(row: SheetRow) {
+    const makeModel = formatVehicleDisplayModel(row);
+    if (makeModel && !/^unknown$/i.test(makeModel)) return makeModel;
+    const fallback = formatName(row);
+    if (fallback && !/^untitled$/i.test(fallback)) return fallback;
+    return "item";
   }
 
   function extractExtension(url: string) {
@@ -708,7 +1335,8 @@ export default function InventorySheetPage() {
 
       const headers = [
         "Name",
-        "Car Model",
+        "Make",
+        "Model",
         "Condition",
         "Qty",
         "Price",
@@ -729,10 +1357,12 @@ export default function InventorySheetPage() {
             const res = await fetch(photoUrl);
             if (res.ok) {
               const blob = await res.blob();
-              const base = fileSafe(formatName(row)) || "item";
+              const base = fileSafe(formatExportFileName(row), 140) || "item";
               const ext = extractExtension(photoUrl);
-              photoFile = `${base}_${row.id.slice(0, 8)}${ext}`;
-              zip.file(`photos/${photoFile}`, blob);
+              const shipFolder = formatShipClassFolder(row);
+              const brandFolder = fileSafe(formatBrand(row)) || "Unknown";
+              photoFile = `${shipFolder}/${brandFolder}/${base}_${row.id.slice(0, 8)}${ext}`;
+              zip.file(photoFile, blob);
               addedPhotos += 1;
             } else {
               skippedPhotos += 1;
@@ -742,9 +1372,11 @@ export default function InventorySheetPage() {
           }
         }
 
+        const inferred = inferVehicleMakeModel(row);
         const values = [
           formatName(row),
-          formatModel(row),
+          inferred.make,
+          inferred.model,
           formatCondition(row.condition),
           Number(row.qty ?? 0),
           Number(row.price ?? 0),
@@ -776,6 +1408,113 @@ export default function InventorySheetPage() {
     }
   }
 
+  async function syncProductMakeModel() {
+    if (syncingModel) return;
+    const confirmed = confirm(
+      "This will update product titles and model fields using inferred make/model data. Continue?"
+    );
+    if (!confirmed) return;
+
+    setSyncingModel(true);
+    setExportMsg(null);
+    setError(null);
+    try {
+      const products = await fetchAllProducts();
+      const updates: Array<{ id: string; title?: string | null; model?: string | null }> = [];
+
+      for (const product of products) {
+        const inferred = inferVehicleMakeModelFromFields(product);
+        const make = inferred.make && inferred.make !== "Unknown" ? inferred.make : "";
+        const model = inferred.model && inferred.model !== "Unknown" ? inferred.model : "";
+
+        const currentModel = String(product.model ?? "").trim();
+        const cleanedModel = normalizeModelValue(currentModel, make, [
+          product.brand ?? "",
+        ]);
+        const nextModel = model
+          ? shouldReplaceModel(cleanedModel, model)
+            ? model
+            : cleanedModel
+          : cleanedModel;
+        const combinedModel = make ? ensureMakeInModel(make, nextModel) : nextModel;
+
+        const currentTitle = String(product.title ?? "").trim();
+        const nextTitle =
+          make && model ? updateTitleWithMakeModel(currentTitle, make, model) : currentTitle;
+        const cleanedTitle = cleanDiecastTitle(nextTitle || currentTitle);
+        const safeTitle = cleanedTitle.trim() || currentTitle.trim();
+
+        const modelChanged =
+          Boolean(combinedModel) &&
+          normalizeForCompare(combinedModel) !== normalizeForCompare(currentModel);
+        const titleChanged = safeTitle !== currentTitle;
+
+        if (modelChanged || titleChanged) {
+          updates.push({
+            id: product.id,
+            title: safeTitle,
+            ...(modelChanged ? { model: combinedModel } : {}),
+          });
+        }
+      }
+
+      if (!updates.length) {
+        setExportMsg("No updates needed.");
+        return;
+      }
+
+      const batchSize = 100;
+      let updated = 0;
+      for (let i = 0; i < updates.length; i += batchSize) {
+        const batch = updates.slice(i, i + batchSize);
+        const { error: upErr } = await supabase
+          .from("products")
+          .upsert(batch, { onConflict: "id" });
+        if (upErr) throw upErr;
+        updated += batch.length;
+        if (updated % 200 === 0) {
+          setExportMsg(`Updated ${updated} of ${updates.length} products...`);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      }
+
+      setExportMsg(`Updated ${updated} products.`);
+      VEHICLE_CACHE.clear();
+      await loadPage(0, true);
+    } catch (err: any) {
+      setError(err?.message ?? "Update failed.");
+    } finally {
+      setSyncingModel(false);
+    }
+  }
+
+  function getCardFolder(
+    zip: any,
+    row: SheetRow,
+    mode:
+      | "brand"
+      | "ship_class"
+      | "ship_class_brand"
+      | "brand_ship_class"
+      | "none"
+  ) {
+    const brand = fileSafe(formatBrand(row)) || "Unknown";
+    const shipClass = formatShipClassFolder(row);
+
+    if (mode === "none") return zip;
+    if (mode === "brand") return zip.folder(brand) ?? zip;
+    if (mode === "ship_class") return zip.folder(shipClass) ?? zip;
+    if (mode === "ship_class_brand") {
+      const shipFolder = zip.folder(shipClass) ?? zip;
+      return shipFolder.folder(brand) ?? shipFolder;
+    }
+    if (mode === "brand_ship_class") {
+      const brandFolder = zip.folder(brand) ?? zip;
+      return brandFolder.folder(shipClass) ?? brandFolder;
+    }
+    return zip;
+  }
+
   async function downloadCardsZip() {
     if (exportingCards) return;
     setExportingCards(true);
@@ -801,20 +1540,18 @@ export default function InventorySheetPage() {
       setExportMsg(`Rendering 0 of ${total} cards...`);
 
       for (const group of grouped) {
-        const brandFolder =
-          zip.folder(fileSafe(group.brand) || "Unknown") ?? zip;
-
         for (const row of group.rows) {
+          const targetFolder = getCardFolder(zip, row, cardGroupMode);
           const imageUrl = row.product?.image_urls?.[0] ?? "";
           const image = imageUrl ? await loadImageBitmap(imageUrl) : null;
           if (!imageUrl || !image) missingImage += 1;
 
           renderCardCanvas(ctx, row, image);
           const blob = await canvasToBlob(canvas, "image/png");
-          const safeName = fileSafe(formatName(row)) || "item";
+          const safeName = fileSafe(formatExportFileName(row), 140) || "item";
           const condition = fileSafe(formatCompactCondition(row.condition));
           const name = `${safeName}_${condition}_${row.id.slice(0, 8)}.png`;
-          brandFolder.file(name, blob);
+          targetFolder.file(name, blob);
 
           if (image && "close" in image) {
             try {
@@ -843,7 +1580,10 @@ export default function InventorySheetPage() {
       link.remove();
       URL.revokeObjectURL(url);
 
-      const summary = [`${generated} cards`];
+      const summary = [
+        `${generated} cards`,
+        `grouped by ${cardGroupMode.replace(/_/g, " ")}`,
+      ];
       if (missingImage) summary.push(`${missingImage} missing images`);
       setExportMsg(summary.join(" | "));
     } catch (err: any) {
@@ -918,7 +1658,7 @@ export default function InventorySheetPage() {
                 <tr>
                   <td class="photo">${imageCell}</td>
                   <td>${escapeCsv(formatName(row))}</td>
-                  <td class="muted">${escapeCsv(formatModel(row))}</td>
+                  <td class="muted">${escapeCsv(formatVehicleDisplayModel(row))}</td>
                   <td class="muted">${escapeCsv(formatCondition(row.condition))}</td>
                   <td class="num">${Number(row.qty ?? 0)}</td>
                   <td class="num">${formatPHP(Number(row.price ?? 0))}</td>
@@ -1062,7 +1802,7 @@ export default function InventorySheetPage() {
             <tr>
               <th>Photo</th>
               <th>Name</th>
-              <th>Car Model</th>
+              <th>Model</th>
               <th>Condition</th>
               <th style="text-align:right;">Qty</th>
               <th style="text-align:right;">Price</th>
@@ -1097,6 +1837,27 @@ export default function InventorySheetPage() {
 
   React.useEffect(() => {
     loadPage(0, true);
+  }, []);
+
+  React.useEffect(() => {
+    let active = true;
+    supabase
+      .from("brand_tabs")
+      .select("name")
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) return;
+        const list = (data ?? [])
+          .map((row: any) => String(row.name ?? "").trim())
+          .filter(Boolean);
+        if (list.length) {
+          setRuntimeDiecastBrands(list);
+          setBrandSyncTick((tick) => tick + 1);
+        }
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   React.useEffect(() => {
@@ -1152,11 +1913,41 @@ export default function InventorySheetPage() {
           <Button
             variant="secondary"
             size="sm"
-            onClick={downloadCardsZip}
-            disabled={exportingCards}
+            onClick={syncProductMakeModel}
+            disabled={syncingModel}
           >
-            {exportingCards ? "Preparing..." : "Download Cards ZIP"}
+            {syncingModel ? "Syncing..." : "Sync Make/Model"}
           </Button>
+          <div className="flex items-center gap-2">
+            <select
+              className="h-9 rounded-md border border-white/10 bg-bg-900/60 px-2 text-xs text-white/80"
+              value={cardGroupMode}
+              onChange={(e) =>
+                setCardGroupMode(
+                  e.target.value as
+                    | "brand"
+                    | "ship_class"
+                    | "ship_class_brand"
+                    | "brand_ship_class"
+                    | "none"
+                )
+              }
+            >
+              <option value="brand">Group by brand</option>
+              <option value="ship_class">Group by ship class</option>
+              <option value="ship_class_brand">Ship class -> brand</option>
+              <option value="brand_ship_class">Brand -> ship class</option>
+              <option value="none">No folders</option>
+            </select>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={downloadCardsZip}
+              disabled={exportingCards}
+            >
+              {exportingCards ? "Preparing..." : "Download Cards ZIP"}
+            </Button>
+          </div>
           <Button
             variant="secondary"
             size="sm"
@@ -1182,7 +1973,7 @@ export default function InventorySheetPage() {
               <tr className="text-left text-white/70">
                 <th className="px-4 py-3">Photo</th>
                 <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Car Model</th>
+                <th className="px-4 py-3">Model</th>
                 <th className="px-4 py-3">Condition</th>
                 <th className="px-4 py-3 text-right">Qty</th>
                 <th className="px-4 py-3 text-right">Price</th>
@@ -1219,7 +2010,7 @@ export default function InventorySheetPage() {
                       </td>
                       <td className="px-4 py-3">{formatName(row)}</td>
                       <td className="px-4 py-3 text-white/70">
-                        {formatModel(row)}
+                        {formatVehicleDisplayModel(row)}
                       </td>
                       <td className="px-4 py-3 text-white/70">
                         {formatCondition(row.condition)}

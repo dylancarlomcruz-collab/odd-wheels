@@ -151,6 +151,8 @@ export default function ProductCard({
   );
   const previewEntry = previewStack[previewStack.length - 1];
   const previewProduct = previewEntry?.product ?? product;
+  const displayTitle = formatTitle(product.title) || product.title;
+  const previewDisplayTitle = formatTitle(previewProduct.title) || previewProduct.title;
   const previewSelectedId =
     previewEntry?.selectedId ?? previewProduct.options[0]?.id ?? "";
   const previewSelected = React.useMemo(
@@ -687,7 +689,7 @@ export default function ProductCard({
                     <div className="min-w-0">
                       <div className="text-xs text-white/50">Preview</div>
                       <div className="text-base font-semibold leading-snug line-clamp-2 sm:text-lg">
-                        {previewProduct.title}
+                        {previewDisplayTitle}
                       </div>
                       <div className="text-xs text-white/60 sm:text-sm">
                         {previewProduct.brand ?? "-"}
@@ -726,7 +728,7 @@ export default function ProductCard({
                           src={activeImageSrc || activeImage}
                           srcSet={activeImageSrcSet || undefined}
                           sizes="(min-width: 1024px) 720px, 90vw"
-                          alt={previewProduct.title}
+                          alt={previewDisplayTitle}
                           className="h-80 w-full object-contain bg-neutral-50"
                           loading="lazy"
                           decoding="async"
@@ -1037,7 +1039,7 @@ export default function ProductCard({
                   <div className="min-w-0">
                     <div className="text-xs text-white/50">Issue photos</div>
                     <div className="text-base font-semibold leading-snug line-clamp-2 sm:text-lg">
-                      {product.title}
+                      {displayTitle}
                     </div>
                     <div className="text-xs text-white/60 sm:text-sm">
                       {selected?.condition ?? "-"}
@@ -1130,7 +1132,7 @@ export default function ProductCard({
                   Choose variant
                 </div>
                 <div className="text-sm font-semibold text-white">
-                  {product.title}
+                  {displayTitle}
                 </div>
               </div>
               <button
@@ -1233,7 +1235,7 @@ export default function ProductCard({
         }
       }}
       className="group relative w-full text-left"
-      aria-label={`Preview ${product.title}`}
+      aria-label={`Preview ${displayTitle}`}
     >
       <div className="relative overflow-hidden rounded-[28px] border border-amber-300/30 bg-[#0f1016] px-4 pb-4 pt-4 shadow-[0_12px_32px_rgba(0,0,0,0.5)]">
         <div className="absolute inset-0 bg-[radial-gradient(140px_140px_at_85%_10%,rgba(255,176,90,0.28),transparent_65%),radial-gradient(200px_200px_at_15%_85%,rgba(255,210,140,0.16),transparent_70%),linear-gradient(180deg,#0f1016,#171826)]" />
@@ -1250,7 +1252,7 @@ export default function ProductCard({
                   src={mobilePrimarySrc || mobilePrimaryImage}
                   srcSet={mobilePrimarySrcSet}
                   sizes="90vw"
-                  alt={product.title}
+                  alt={displayTitle}
                   className="h-full w-full object-contain"
                   style={parsedCardImage ? cropStyle(parsedCardImage.crop) : undefined}
                   loading="lazy"
@@ -1268,7 +1270,7 @@ export default function ProductCard({
           </div>
 
           <div className="mt-1 text-[13px] font-medium leading-snug text-white/90 tracking-tight line-clamp-2">
-            {product.title}
+            {displayTitle}
           </div>
 
           <div className="mt-2 flex items-center justify-between">
@@ -1315,7 +1317,7 @@ export default function ProductCard({
             openPreview();
           }}
           className="relative aspect-[4/3] w-full overflow-hidden bg-black/10 flex items-center justify-center"
-          aria-label={`Preview ${product.title}`}
+          aria-label={`Preview ${displayTitle}`}
         >
           {parsedCardImage ? (
             <div ref={imageRef} className="h-full w-full bg-neutral-50">
@@ -1324,7 +1326,7 @@ export default function ProductCard({
                 src={cardImageFinalSrc}
                 srcSet={cardImageFinalSrcSet}
                 sizes="(min-width: 1024px) 240px, (min-width: 640px) 200px, 45vw"
-                alt={product.title}
+                alt={displayTitle}
                 className="h-full w-full object-contain"
                 style={cropStyle(parsedCardImage.crop)}
                 loading="lazy"
@@ -1357,7 +1359,7 @@ export default function ProductCard({
                 : "min-h-[3rem] text-left text-base leading-normal text-white font-semibold line-clamp-2 sm:min-h-[3.5rem] sm:text-lg"
             }
           >
-            {product.title}
+            {displayTitle}
           </button>
 
           <div

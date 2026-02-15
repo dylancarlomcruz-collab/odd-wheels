@@ -138,20 +138,37 @@ export default function AdminSalesPage() {
   const today = React.useMemo(() => new Date(), []);
   const [from, setFrom] = React.useState(() => {
     const d = new Date();
-    d.setDate(d.getDate() - 6);
-    return ymd(d);
+    const first = new Date(d.getFullYear(), d.getMonth(), 1);
+    return ymd(first);
   });
   const [to, setTo] = React.useState(() => ymd(today));
 
   const [loading, setLoading] = React.useState(false);
   const [orders, setOrders] = React.useState<any[]>([]);
+  const [orderSummaries, setOrderSummaries] = React.useState<
+    Array<{
+      id: string;
+      created_at: string;
+      channel: string;
+      revenue: number;
+      cogs: number;
+      discount_total: number;
+      shipping_discount: number;
+    }>
+  >([]);
   const [daily, setDaily] = React.useState<{ date: string; total: number; count: number }[]>([]);
   const [selectedDailyDate, setSelectedDailyDate] = React.useState<string | null>(null);
   const [selectedOrderId, setSelectedOrderId] = React.useState<string | null>(null);
   const [selectedOrder, setSelectedOrder] = React.useState<any | null>(null);
   const [selectedOrderItems, setSelectedOrderItems] = React.useState<any[]>([]);
+  const [itemSummaries, setItemSummaries] = React.useState<
+    Array<{ key: string; name: string; qty: number; sales: number; cogs: number; profit: number }>
+  >([]);
   const [orderDetailsLoading, setOrderDetailsLoading] = React.useState(false);
   const [orderDetailsError, setOrderDetailsError] = React.useState<string | null>(null);
+  const [selectedKpi, setSelectedKpi] = React.useState<
+    "sales" | "orders" | "aov" | "cogs" | "profit" | "margin" | null
+  >(null);
   const [topItems, setTopItems] = React.useState<
     { key: string; name: string; qty: number; sales: number; cogs: number; profit: number }[]
   >([]);
@@ -181,12 +198,18 @@ export default function AdminSalesPage() {
   async function run() {
     setLoading(true);
     try {
+      const num = (value: any) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : 0;
+      };
       const startISO = `${from}T00:00:00`;
       const endISO = `${to}T23:59:59`;
 
       let { data: o, error } = await supabase
         .from("orders")
-        .select("id,created_at,total,channel,payment_status")
+        .select(
+          "id,created_at,total,channel,payment_status,discount_total,shipping_discount"
+        )
         .or("payment_status.eq.PAID,channel.eq.POS")
         .gte("created_at", startISO)
         .lte("created_at", endISO)
@@ -196,7 +219,9 @@ export default function AdminSalesPage() {
       if (error && String(error.message ?? "").includes("channel")) {
         const retry = await supabase
           .from("orders")
-          .select("id,created_at,total,channel,payment_status")
+          .select(
+            "id,created_at,total,channel,payment_status,discount_total,shipping_discount"
+          )
           .eq("payment_status", "PAID")
           .gte("created_at", startISO)
           .lte("created_at", endISO)
@@ -210,6 +235,15 @@ export default function AdminSalesPage() {
 
       const list = (o as any[]) ?? [];
       setOrders(list);
+      const discountByOrder = new Map<string, number>();
+      list.forEach((row) => {
+        const discountTotal = num(row?.discount_total);
+        const shippingDiscount = num(row?.shipping_discount);
+        const itemDiscount = Math.max(0, discountTotal - shippingDiscount);
+        if (itemDiscount > 0 && row?.id) {
+          discountByOrder.set(String(row.id), itemDiscount);
+        }
+      });
 
       // Top items
       const ids = list.map((x) => x.id);
@@ -217,6 +251,8 @@ export default function AdminSalesPage() {
         setTopItems([]);
         setDaily([]);
         setChannelBreakdown({});
+        setOrderSummaries([]);
+        setItemSummaries([]);
         setTotals({
           sales: 0,
           count: 0,
@@ -261,17 +297,27 @@ export default function AdminSalesPage() {
           if (v?.id) fallbackVariants.set(String(v.id), v);
         });
       }
-      const imap = new Map<string, { key: string; name: string; qty: number; sales: number; cogs: number; profit: number }>();
-      const omap = new Map<string, { revenue: number; cogs: number }>();
-      let revenueTotal = 0;
-      let cogsTotal = 0;
+      const imap = new Map<
+        string,
+        { key: string; name: string; qty: number; sales: number; cogs: number; profit: number }
+      >();
+      const orderRaw = new Map<string, { revenue: number; cogs: number }>();
+      const itemEntries: Array<{
+        orderId: string;
+        key: string;
+        name: string;
+        qty: number;
+        sales: number;
+        cogs: number;
+      }> = [];
+      let missingOrderCounter = 0;
 
       for (const it of rows) {
         const name = buildItemLabel(it);
-        const qtyRaw = Number(it.qty ?? 0);
+        const qtyRaw = num(it.qty ?? 0);
         const qty = Number.isFinite(qtyRaw) ? qtyRaw : 0;
-        const lineTotalRaw = Number(it.line_total ?? 0);
-        const unitRaw = Number(
+        const lineTotalRaw = num(it.line_total ?? 0);
+        const unitRaw = num(
           it?.price_each ??
             it?.unit_price ??
             it?.product_variant?.price ??
@@ -283,7 +329,7 @@ export default function AdminSalesPage() {
           Number.isFinite(lineTotalRaw) && lineTotalRaw > 0
             ? lineTotalRaw
             : safeUnit * qty;
-        const costEachRaw = Number(
+        const costEachRaw = num(
           it?.cost_each ??
             it?.product_variant?.cost ??
             fallbackVariants.get(String(it?.item_id ?? ""))?.cost ??
@@ -291,26 +337,74 @@ export default function AdminSalesPage() {
         );
         const costEach = Number.isFinite(costEachRaw) ? costEachRaw : 0;
         const itemCogs = qty * costEach;
-        revenueTotal += sales;
-        cogsTotal += itemCogs;
-
-        const orderId = it?.order_id ? String(it.order_id) : "";
-        if (orderId) {
-          const curOrder = omap.get(orderId) ?? { revenue: 0, cogs: 0 };
-          curOrder.revenue += sales;
-          curOrder.cogs += itemCogs;
-          omap.set(orderId, curOrder);
-        }
 
         const variantId = it?.variant_id ? String(it.variant_id) : "";
         const key = variantId ? `variant:${variantId}` : `name:${name}`;
-        const cur = imap.get(key) ?? { key, name, qty: 0, sales: 0, cogs: 0, profit: 0 };
-        cur.qty += qty;
-        cur.sales += sales;
-        cur.cogs += itemCogs;
+        let orderId = it?.order_id ? String(it.order_id) : "";
+        if (!orderId) {
+          orderId = `missing-${missingOrderCounter++}`;
+        }
+
+        itemEntries.push({
+          orderId,
+          key,
+          name,
+          qty,
+          sales,
+          cogs: itemCogs,
+        });
+
+        const curOrder = orderRaw.get(orderId) ?? { revenue: 0, cogs: 0 };
+        curOrder.revenue += sales;
+        curOrder.cogs += itemCogs;
+        orderRaw.set(orderId, curOrder);
+      }
+
+      const orderAdjusted = new Map<string, { revenue: number; cogs: number; factor: number }>();
+      let revenueTotal = 0;
+      let cogsTotal = 0;
+
+      for (const [orderId, cur] of orderRaw.entries()) {
+        const discount = Math.min(discountByOrder.get(orderId) ?? 0, cur.revenue);
+        const revenue = cur.revenue - discount;
+        const factor = cur.revenue > 0 ? revenue / cur.revenue : 1;
+        orderAdjusted.set(orderId, { revenue, cogs: cur.cogs, factor });
+        revenueTotal += revenue;
+        cogsTotal += cur.cogs;
+      }
+
+      const summaries = list.map((row) => {
+        const id = String(row.id);
+        const adjusted = orderAdjusted.get(id);
+        return {
+          id,
+          created_at: row.created_at,
+          channel: String(row.channel ?? "WEB").toUpperCase(),
+          revenue: adjusted?.revenue ?? 0,
+          cogs: adjusted?.cogs ?? 0,
+          discount_total: num(row?.discount_total),
+          shipping_discount: num(row?.shipping_discount),
+        };
+      });
+      setOrderSummaries(summaries);
+
+      for (const entry of itemEntries) {
+        const factor = orderAdjusted.get(entry.orderId)?.factor ?? 1;
+        const adjustedSales = entry.sales * factor;
+        const cur = imap.get(entry.key) ?? {
+          key: entry.key,
+          name: entry.name,
+          qty: 0,
+          sales: 0,
+          cogs: 0,
+          profit: 0,
+        };
+        cur.qty += entry.qty;
+        cur.sales += adjustedSales;
+        cur.cogs += entry.cogs;
         cur.profit = cur.sales - cur.cogs;
-        if (cur.name === "Item" && name !== "Item") cur.name = name;
-        imap.set(key, cur);
+        if (cur.name === "Item" && entry.name !== "Item") cur.name = entry.name;
+        imap.set(entry.key, cur);
       }
 
       const grossProfit = revenueTotal - cogsTotal;
@@ -331,7 +425,7 @@ export default function AdminSalesPage() {
       for (const row of list) {
         const dt = new Date(row.created_at);
         const key = ymd(dt);
-        const amt = omap.get(String(row.id))?.revenue ?? 0;
+        const amt = orderAdjusted.get(String(row.id))?.revenue ?? 0;
 
         const cur = dmap.get(key) ?? { date: key, total: 0, count: 0 };
         cur.total += amt;
@@ -350,6 +444,9 @@ export default function AdminSalesPage() {
 
       const tops = Array.from(imap.values()).sort((a, b) => b.sales - a.sales).slice(0, 15);
       setTopItems(tops);
+      setItemSummaries(
+        Array.from(imap.values()).sort((a, b) => b.profit - a.profit)
+      );
     } catch (e: any) {
       console.error(e);
       alert(e?.message ?? "Failed to load sales report");
@@ -365,6 +462,14 @@ export default function AdminSalesPage() {
 
 
   const channels = Object.entries(channelBreakdown).sort((a, b) => b[1].sales - a[1].sales);
+  const itemSummarySorted = React.useMemo(() => {
+    return [...itemSummaries].sort((a, b) => b.profit - a.profit);
+  }, [itemSummaries]);
+  const orderSummarySorted = React.useMemo(() => {
+    return [...orderSummaries].sort((a, b) =>
+      String(b.created_at).localeCompare(String(a.created_at))
+    );
+  }, [orderSummaries]);
   const selectedDailyOrders = React.useMemo(() => {
     if (!selectedDailyDate) return [];
     return orders.filter((o) => ymd(new Date(o.created_at)) === selectedDailyDate);
@@ -434,7 +539,11 @@ export default function AdminSalesPage() {
           </CardHeader>
           <CardBody className="space-y-6">
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-              <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+              <button
+                type="button"
+                onClick={() => setSelectedKpi("sales")}
+                className="text-left rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 transition hover:border-amber-500/40 hover:bg-amber-500/10"
+              >
                 <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
                   <span>Total Sales</span>
                   <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-200">
@@ -442,8 +551,12 @@ export default function AdminSalesPage() {
                   </span>
                 </div>
                 <div className="mt-2 text-2xl font-semibold text-amber-200">{peso(totals.sales)}</div>
-              </div>
-              <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedKpi("orders")}
+                className="text-left rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 transition hover:border-sky-500/40 hover:bg-sky-500/10"
+              >
                 <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
                   <span>Orders</span>
                   <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-sky-500/30 bg-sky-500/10 text-sky-200">
@@ -451,8 +564,12 @@ export default function AdminSalesPage() {
                   </span>
                 </div>
                 <div className="mt-2 text-2xl font-semibold text-sky-200">{totals.count}</div>
-              </div>
-              <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4">
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedKpi("aov")}
+                className="text-left rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4 transition hover:border-violet-500/40 hover:bg-violet-500/10"
+              >
                 <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
                   <span>Avg Order Value</span>
                   <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-violet-500/30 bg-violet-500/10 text-violet-200">
@@ -460,8 +577,12 @@ export default function AdminSalesPage() {
                   </span>
                 </div>
                 <div className="mt-2 text-2xl font-semibold text-violet-200">{peso(totals.aov)}</div>
-              </div>
-              <div className="rounded-2xl border border-orange-500/20 bg-orange-500/5 p-4">
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedKpi("cogs")}
+                className="text-left rounded-2xl border border-orange-500/20 bg-orange-500/5 p-4 transition hover:border-orange-500/40 hover:bg-orange-500/10"
+              >
                 <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
                   <span>COGS</span>
                   <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-orange-500/30 bg-orange-500/10 text-orange-200">
@@ -469,8 +590,12 @@ export default function AdminSalesPage() {
                   </span>
                 </div>
                 <div className="mt-2 text-2xl font-semibold text-orange-200">{peso(totals.cogs)}</div>
-              </div>
-              <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedKpi("profit")}
+                className="text-left rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 transition hover:border-emerald-500/40 hover:bg-emerald-500/10"
+              >
                 <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
                   <span>Gross Profit</span>
                   <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-200">
@@ -478,8 +603,12 @@ export default function AdminSalesPage() {
                   </span>
                 </div>
                 <div className="mt-2 text-2xl font-semibold text-emerald-200">{peso(totals.grossProfit)}</div>
-              </div>
-              <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-4">
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedKpi("margin")}
+                className="text-left rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-4 transition hover:border-indigo-500/40 hover:bg-indigo-500/10"
+              >
                 <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
                   <span>Gross Margin</span>
                   <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-indigo-500/30 bg-indigo-500/10 text-indigo-200">
@@ -487,7 +616,7 @@ export default function AdminSalesPage() {
                   </span>
                 </div>
                 <div className="mt-2 text-2xl font-semibold text-indigo-200">{formatPercent(totals.grossMargin)}</div>
-              </div>
+              </button>
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
@@ -659,6 +788,159 @@ export default function AdminSalesPage() {
                   );
                 })}
               </div>
+            )}
+          </div>
+        </DetailsModal>
+
+        <DetailsModal
+          open={Boolean(selectedKpi)}
+          onClose={() => setSelectedKpi(null)}
+          title={
+            selectedKpi === "sales"
+              ? "Total Sales"
+              : selectedKpi === "orders"
+              ? "Orders"
+              : selectedKpi === "aov"
+              ? "Average Order Value"
+              : selectedKpi === "cogs"
+              ? "COGS"
+              : selectedKpi === "profit"
+              ? "Gross Profit"
+              : selectedKpi === "margin"
+              ? "Gross Margin"
+              : "Details"
+          }
+        >
+          <div className="space-y-4">
+            {selectedKpi === "sales" ? (
+              <div className="text-sm text-white/70">
+                Total sales = sum of each order&apos;s net revenue (item total minus
+                item-level discounts). Shipping-only discounts are excluded from
+                sales.
+              </div>
+            ) : null}
+            {selectedKpi === "orders" ? (
+              <div className="text-sm text-white/70">
+                Orders = count of PAID orders plus POS channel orders within the
+                selected date range.
+              </div>
+            ) : null}
+            {selectedKpi === "aov" ? (
+              <div className="text-sm text-white/70">
+                Average order value = Total Sales ÷ Orders.
+              </div>
+            ) : null}
+            {selectedKpi === "cogs" ? (
+              <div className="text-sm text-white/70">
+                COGS = sum of item costs (cost_each × qty) for all orders in range.
+              </div>
+            ) : null}
+            {selectedKpi === "profit" ? (
+              <div className="text-sm text-white/70">
+                Gross profit = Total Sales − COGS.
+              </div>
+            ) : null}
+            {selectedKpi === "margin" ? (
+              <div className="text-sm text-white/70">
+                Gross margin = (Gross Profit ÷ Total Sales) × 100%.
+              </div>
+            ) : null}
+
+            <div className="rounded-xl border border-white/10 bg-paper/5 p-3 text-sm text-white/80">
+              <div className="flex flex-wrap items-center gap-3">
+                <div>Total Sales: <span className="font-semibold">{peso(totals.sales)}</span></div>
+                <div>Orders: <span className="font-semibold">{totals.count}</span></div>
+                <div>AOV: <span className="font-semibold">{peso(totals.aov)}</span></div>
+                <div>COGS: <span className="font-semibold">{peso(totals.cogs)}</span></div>
+                <div>Profit: <span className="font-semibold">{peso(totals.grossProfit)}</span></div>
+                <div>Margin: <span className="font-semibold">{formatPercent(totals.grossMargin)}</span></div>
+              </div>
+            </div>
+
+            {selectedKpi === "profit" ? (
+              <div className="space-y-2">
+                {itemSummarySorted.length === 0 ? (
+                  <div className="text-sm text-white/60">No items found.</div>
+                ) : (
+                  itemSummarySorted.slice(0, 200).map((it) => (
+                    <div
+                      key={it.key}
+                      className="flex w-full items-center justify-between gap-3 rounded-xl border border-white/10 bg-paper/5 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-medium truncate">{it.name}</div>
+                        <div className="text-xs text-white/60">
+                          Units {it.qty} · Revenue {peso(it.sales)} · COGS {peso(it.cogs)}
+                        </div>
+                      </div>
+                      <div className="text-right text-sm">
+                        <div className={`font-semibold ${it.profit >= 0 ? "text-emerald-300" : "text-red-300"}`}>
+                          {peso(it.profit)}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+                {itemSummarySorted.length > 200 ? (
+                  <div className="text-xs text-white/50">
+                    Showing top 200 items by profit.
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  {orderSummarySorted.length === 0 ? (
+                    <div className="text-sm text-white/60">No orders found.</div>
+                  ) : (
+                    orderSummarySorted.slice(0, 100).map((o) => {
+                      const time = new Date(o.created_at).toLocaleString("en-PH", {
+                        month: "short",
+                        day: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      });
+                      const itemDiscount = Math.max(0, o.discount_total - o.shipping_discount);
+                      const profit = o.revenue - o.cogs;
+                      return (
+                        <button
+                          key={o.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedKpi(null);
+                            setSelectedOrderId(o.id);
+                          }}
+                          className="flex w-full items-center justify-between gap-3 rounded-xl border border-white/10 bg-paper/5 px-3 py-2 text-left transition hover:border-white/20 hover:bg-bg-900/40"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-medium">
+                              Order #{o.id.slice(0, 8)}
+                            </div>
+                            <div className="text-xs text-white/60">
+                              {time} · {o.channel}
+                            </div>
+                            <div className="text-xs text-white/60">
+                              Item discount: {peso(itemDiscount)}
+                            </div>
+                          </div>
+                          <div className="text-right text-sm">
+                            <div className="font-semibold">{peso(o.revenue)}</div>
+                            <div className="text-xs text-white/60">
+                              COGS {peso(o.cogs)} · Profit {peso(profit)}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+
+                {orderSummarySorted.length > 100 ? (
+                  <div className="text-xs text-white/50">
+                    Showing 100 most recent orders.
+                  </div>
+                ) : null}
+              </>
             )}
           </div>
         </DetailsModal>
