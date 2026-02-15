@@ -649,37 +649,41 @@ export function InventoryEditorDrawer({
       onClick={onClose}
     >
       <div
-        className="h-full w-full max-w-4xl overflow-y-auto bg-bg-900 border-l border-white/10 shadow-2xl"
+        className="h-full w-full max-w-full sm:max-w-4xl overflow-y-auto bg-bg-900 border-l border-white/10 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 flex items-center justify-between gap-3 border-b border-white/10 bg-bg-900/90 px-6 py-4 backdrop-blur">
-          <div>
-            <div className="text-lg font-semibold">{product.title}</div>
-            <div className="text-sm text-white/60">Edit product and variants</div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Checkbox
-              checked={isActive}
-              onChange={setIsActive}
-              label="Active in shop"
-            />
-            <Button
-              variant="danger"
-              onClick={deleteProduct}
-              disabled={saving || deletingProduct}
-            >
-              {deletingProduct ? "Deleting..." : "Delete"}
-            </Button>
-            <Button variant="ghost" onClick={onClose}>
-              Close
-            </Button>
-            <Button onClick={save} disabled={saving}>
-              {saving ? "Saving..." : "Save"}
-            </Button>
+        <div className="sticky top-0 border-b border-white/10 bg-bg-900/90 px-4 py-3 backdrop-blur sm:px-6 sm:py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-lg font-semibold">{product.title}</div>
+              <div className="text-sm text-white/60">Edit product and variants</div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+              <Checkbox
+                checked={isActive}
+                onChange={setIsActive}
+                label="Active in shop"
+              />
+              <div className="hidden sm:flex items-center gap-2">
+                <Button
+                  variant="danger"
+                  onClick={deleteProduct}
+                  disabled={saving || deletingProduct}
+                >
+                  {deletingProduct ? "Deleting..." : "Delete"}
+                </Button>
+                <Button variant="ghost" onClick={onClose}>
+                  Close
+                </Button>
+                <Button onClick={save} disabled={saving}>
+                  {saving ? "Saving..." : "Save"}
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="space-y-6 p-6">
+        <div className="space-y-6 px-4 pb-28 pt-4 sm:p-6 sm:pb-6">
           <div className="rounded-2xl border border-white/10 bg-bg-900/50 p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div className="font-semibold">Product identity</div>
@@ -1050,46 +1054,92 @@ export function InventoryEditorDrawer({
           </div>
         </div>
 
+        <div className="sticky bottom-0 z-10 border-t border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:hidden">
+          <div className="grid gap-2">
+            <Button
+              variant="danger"
+              onClick={deleteProduct}
+              disabled={saving || deletingProduct}
+            >
+              {deletingProduct ? "Deleting..." : "Delete"}
+            </Button>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="ghost" onClick={onClose}>
+                Close
+              </Button>
+              <Button onClick={save} disabled={saving}>
+                {saving ? "Saving..." : "Save"}
+              </Button>
+            </div>
+          </div>
+        </div>
+
         {cropEditor ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-0 py-0 sm:px-4 sm:py-6">
             <button
               type="button"
               className="absolute inset-0 bg-black/60 backdrop-blur-sm"
               onClick={() => setCropEditor(null)}
               aria-label="Close crop editor"
             />
-            <div className="relative w-full max-w-2xl rounded-2xl border border-white/10 bg-bg-900/95 p-5 shadow-soft">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs text-white/50">Product card preview</div>
-                  <div className="text-lg font-semibold">Adjust image crop</div>
+            <div className="relative w-full h-full sm:h-auto sm:max-w-2xl overflow-y-auto rounded-none sm:rounded-2xl border border-white/10 bg-bg-900/95 p-4 sm:p-5 shadow-soft">
+              <div className="sticky top-0 z-10 -mx-4 -mt-4 mb-4 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:static sm:m-0 sm:border-0 sm:bg-transparent sm:p-0">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-white/50">Product card preview</div>
+                    <div className="text-lg font-semibold">Adjust image crop</div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setCropEditor(null)}
+                  >
+                    Close
+                  </Button>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setCropEditor(null)}
-                >
-                  Close
-                </Button>
               </div>
 
               <div className="mt-4 grid gap-4 md:grid-cols-[1.2fr_1fr]">
-                <div
-                  ref={cropFrameRef}
-                  className="relative aspect-[4/3] overflow-hidden rounded-xl border border-white/10 bg-neutral-50 cursor-move select-none touch-none"
-                  onPointerDown={beginCropDrag}
-                  onPointerMove={updateCropDrag}
-                  onPointerUp={endCropDrag}
-                  onPointerCancel={endCropDrag}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={cropEditor.baseUrl}
-                    alt="Card preview"
-                    className="h-full w-full object-contain"
-                    style={cropStyle(cropEditor.crop)}
-                  />
-                  <div className="pointer-events-none absolute inset-0 border border-white/70 shadow-[0_0_0_9999px_rgba(255,255,255,0.6)] dark:border-white/40 dark:shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]" />
+                <div className="space-y-4">
+                  <div
+                    ref={cropFrameRef}
+                    className="relative aspect-[4/3] overflow-hidden rounded-xl border border-white/10 bg-neutral-50 cursor-move select-none touch-none"
+                    onPointerDown={beginCropDrag}
+                    onPointerMove={updateCropDrag}
+                    onPointerUp={endCropDrag}
+                    onPointerCancel={endCropDrag}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={cropEditor.baseUrl}
+                      alt="Card preview"
+                      className="h-full w-full object-contain"
+                      style={cropStyle(cropEditor.crop)}
+                    />
+                    <div className="pointer-events-none absolute inset-0 border border-white/70 shadow-[0_0_0_9999px_rgba(255,255,255,0.6)] dark:border-white/40 dark:shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]" />
+                  </div>
+                  <div className="md:hidden space-y-2">
+                    <div className="text-xs text-white/60">Card preview</div>
+                    <div className="rounded-[22px] border border-amber-300/30 bg-[#0f1016] p-3 shadow-[0_10px_24px_rgba(0,0,0,0.45)]">
+                      <div className="text-center text-[10px] font-extrabold tracking-[0.24em] text-amber-300/90 uppercase mb-2">
+                        {String(brand || "Brand").toUpperCase()}
+                      </div>
+                      <div className="rounded-2xl border border-white/30 bg-[#fffdf8] overflow-hidden">
+                        <div className="relative aspect-[4/3] w-full overflow-hidden">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={cropEditor.baseUrl}
+                            alt="Card preview"
+                            className="h-full w-full object-contain bg-white"
+                            style={cropStyle(cropEditor.crop)}
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-2 text-[11px] text-white/80 line-clamp-2">
+                        {title || "Product title"}
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="space-y-4">
@@ -1117,7 +1167,7 @@ export function InventoryEditorDrawer({
                             : prev
                         )
                       }
-                      className="mt-2 w-full"
+                      className="mt-2 w-full accent-amber-400"
                     />
                   </div>
 
@@ -1142,7 +1192,7 @@ export function InventoryEditorDrawer({
                             : prev
                         )
                       }
-                      className="mt-2 w-full"
+                      className="mt-2 w-full accent-amber-400"
                     />
                   </div>
 
@@ -1167,13 +1217,36 @@ export function InventoryEditorDrawer({
                             : prev
                         )
                       }
-                      className="mt-2 w-full"
+                      className="mt-2 w-full accent-amber-400"
                     />
+                  </div>
+
+                  <div className="hidden md:block space-y-2 pt-2">
+                    <div className="text-xs text-white/60">Card preview</div>
+                    <div className="rounded-[22px] border border-amber-300/30 bg-[#0f1016] p-3 shadow-[0_10px_24px_rgba(0,0,0,0.45)]">
+                      <div className="text-center text-[10px] font-extrabold tracking-[0.24em] text-amber-300/90 uppercase mb-2">
+                        {String(brand || "Brand").toUpperCase()}
+                      </div>
+                      <div className="rounded-2xl border border-white/30 bg-[#fffdf8] overflow-hidden">
+                        <div className="relative aspect-[4/3] w-full overflow-hidden">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={cropEditor.baseUrl}
+                            alt="Card preview"
+                            className="h-full w-full object-contain bg-white"
+                            style={cropStyle(cropEditor.crop)}
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-2 text-[11px] text-white/80 line-clamp-2">
+                        {title || "Product title"}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+              <div className="mt-4 hidden sm:flex flex-wrap items-center justify-between gap-2">
                 <Button
                   variant="ghost"
                   onClick={() =>
@@ -1200,6 +1273,38 @@ export function InventoryEditorDrawer({
                   >
                     Apply
                   </Button>
+                </div>
+              </div>
+
+              <div className="sticky bottom-0 z-10 -mx-4 mt-4 border-t border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:hidden">
+                <div className="grid gap-2">
+                  <Button
+                    variant="ghost"
+                    onClick={() =>
+                      setCropEditor((prev) =>
+                        prev ? { ...prev, crop: { zoom: 1, x: 0, y: 0 } } : prev
+                      )
+                    }
+                  >
+                    Reset
+                  </Button>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button variant="ghost" onClick={() => setCropEditor(null)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        const nextUrl = applyImageCrop(
+                          cropEditor.baseUrl,
+                          cropEditor.crop
+                        );
+                        updateImageUrlAtIndex(cropEditor.index, nextUrl);
+                        setCropEditor(null);
+                      }}
+                    >
+                      Apply
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>

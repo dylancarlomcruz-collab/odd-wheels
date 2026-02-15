@@ -1251,7 +1251,7 @@ export default function ProductCard({
                   srcSet={mobilePrimarySrcSet}
                   sizes="90vw"
                   alt={product.title}
-                  className="h-full w-full object-cover"
+                  className="h-full w-full object-contain"
                   style={parsedCardImage ? cropStyle(parsedCardImage.crop) : undefined}
                   loading="lazy"
                   decoding="async"
