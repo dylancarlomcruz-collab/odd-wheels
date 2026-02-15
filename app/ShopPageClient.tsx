@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { SlidersHorizontal, X } from "lucide-react";
+import { ArrowUp, SlidersHorizontal, X } from "lucide-react";
 import ProductCard, { type ShopProduct } from "@/components/ProductCard";
 import { supabase } from "@/lib/supabase/browser";
 import { useCart } from "@/hooks/useCart";
@@ -224,7 +224,10 @@ export default function ShopPageClient() {
   const [clickMap, setClickMap] = React.useState<Record<string, number>>({});
   const [addMap, setAddMap] = React.useState<Record<string, number>>({});
   const [cartMap, setCartMap] = React.useState<Record<string, number>>({});
-  const [wideView, setWideView] = React.useState(false);
+  const [viewMode, setViewMode] = React.useState<"single" | "double" | "quad">(
+    "single"
+  );
+  const [isDesktop, setIsDesktop] = React.useState(false);
   const [tourPromptOpen, setTourPromptOpen] = React.useState(false);
   const [tourActive, setTourActive] = React.useState(false);
   const [tourStepIndex, setTourStepIndex] = React.useState(0);
@@ -247,7 +250,32 @@ export default function ShopPageClient() {
   const [showBackToTop, setShowBackToTop] = React.useState(false);
   const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
   const { sortBy, priceDir } = useShopSort();
-  const pageSize = wideView ? PAGE_SIZE_WIDE : PAGE_SIZE;
+  const isSingleView = viewMode === "single";
+  const isDoubleView = viewMode === "double";
+  const isQuadView = viewMode === "quad";
+  const normalizedViewMode = isDesktop && isDoubleView ? "single" : viewMode;
+  const viewModeLabel =
+    normalizedViewMode === "single"
+      ? "1-up"
+      : normalizedViewMode === "double"
+      ? "2-up"
+      : "4-up";
+  const nextViewMode = isDesktop
+    ? normalizedViewMode === "quad"
+      ? "single"
+      : "quad"
+    : normalizedViewMode === "single"
+    ? "double"
+    : normalizedViewMode === "double"
+    ? "quad"
+    : "single";
+  const nextViewModeLabel =
+    nextViewMode === "single"
+      ? "1-up"
+      : nextViewMode === "double"
+      ? "2-up"
+      : "4-up";
+  const pageSize = isQuadView ? PAGE_SIZE_WIDE : PAGE_SIZE;
   const resultsRef = React.useRef<HTMLDivElement | null>(null);
   const lastScrolledQuery = React.useRef<string>("");
   const lastRecentRefresh = React.useRef<number>(0);
@@ -282,7 +310,7 @@ export default function ShopPageClient() {
         key: "view",
         selector: "[data-tour='shop-view']",
         title: "View toggle",
-        body: "Switch between standard and wide grid views.",
+        body: "Switch between single, double, and quad grid views.",
       },
     ],
     []
@@ -392,15 +420,33 @@ export default function ShopPageClient() {
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
-    setWideView(false);
+    setViewMode("single");
   }, []);
 
-  const toggleWideView = React.useCallback(() => {
-    setWideView((prev) => {
-      const next = !prev;
-      return next;
-    });
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const update = () => setIsDesktop(window.innerWidth >= 640);
+    update();
+    window.addEventListener("resize", update, { passive: true });
+    return () => window.removeEventListener("resize", update);
   }, []);
+
+  React.useEffect(() => {
+    if (isDesktop && viewMode === "double") {
+      setViewMode("single");
+    }
+  }, [isDesktop, viewMode]);
+
+  const toggleViewMode = React.useCallback(() => {
+    setViewMode((prev) => {
+      if (isDesktop) {
+        return prev === "quad" ? "single" : "quad";
+      }
+      if (prev === "single") return "double";
+      if (prev === "double") return "quad";
+      return "single";
+    });
+  }, [isDesktop]);
 
   React.useEffect(() => {
     let mounted = true;
@@ -706,6 +752,70 @@ export default function ShopPageClient() {
   const canExpandBrands = allBrandTabs.length > visibleBrandTabs.length;
   const moreLabel = showAllBrands ? "Show less" : "Show more";
 
+  const nowTs = Date.now();
+  const getCreatedTime = React.useCallback(
+    (p: ShopProduct) =>
+      p.created_at ? new Date(p.created_at).getTime() : 0,
+    []
+  );
+  const getAgeDays = React.useCallback(
+    (p: ShopProduct) => (nowTs - getCreatedTime(p)) / (1000 * 60 * 60 * 24),
+    [getCreatedTime, nowTs]
+  );
+  const getRecencyBoost = React.useCallback(
+    (p: ShopProduct) => {
+      const age = getAgeDays(p);
+      if (!Number.isFinite(age)) return 0;
+      return Math.max(0, 30 - age) / 30;
+    },
+    [getAgeDays]
+  );
+  const getBasePopularityScore = React.useCallback(
+    (p: ShopProduct) => {
+      const clicks = clickMap[p.key] ?? 0;
+      const adds = addMap[p.key] ?? 0;
+      const carts = cartMap[p.key] ?? 0;
+      return clicks * 1 + adds * 3 + carts * 5;
+    },
+    [addMap, cartMap, clickMap]
+  );
+
+  const searchTermTokens = React.useMemo(
+    () => buildSearchTermTokens(searchQuery),
+    [searchQuery]
+  );
+
+  const popularKeywordTokens = React.useMemo(() => {
+    if (searchTermTokens.length) return searchTermTokens;
+    if (lastSearch) return buildSearchTermTokens(lastSearch);
+    return [];
+  }, [searchTermTokens, lastSearch]);
+
+  const getKeywordScore = React.useCallback(
+    (p: ShopProduct) => {
+      if (!popularKeywordTokens.length) return 0;
+      const text = buildProductSearchText(p);
+      const padded = ` ${text} `;
+      let best = 0;
+      for (const tokens of popularKeywordTokens) {
+        let score = 0;
+        for (const t of tokens) {
+          if (!t) continue;
+          if (padded.includes(` ${t} `)) score += 2;
+          else if (padded.includes(t)) score += 1;
+        }
+        best = Math.max(best, score);
+      }
+      return best;
+    },
+    [popularKeywordTokens]
+  );
+
+  const getPopularSortScore = React.useCallback(
+    (p: ShopProduct) => getBasePopularityScore(p) + getKeywordScore(p) * 8,
+    [getBasePopularityScore, getKeywordScore]
+  );
+
   const sortedProducts = React.useMemo(() => {
     const withIndex = shopProducts.map((p, index) => {
       const clicks = clickMap[p.key] ?? 0;
@@ -717,21 +827,14 @@ export default function ShopPageClient() {
           1000 * 60 * 60 * 24 * 14;
       const lowStock = (p.minQty ?? 0) > 0 && (p.minQty ?? 0) <= 2;
       const score =
-        clicks * 0.15 +
-        adds * 0.4 +
-        sales * 0.8 +
+        getBasePopularityScore(p) * 0.6 +
         (isNew ? 2 : 0) +
         (lowStock ? 1 : 0);
       return { product: p, index, score };
     });
     withIndex.sort((a, b) => b.score - a.score || a.index - b.index);
     return withIndex.map((item) => item.product);
-  }, [shopProducts, clickMap, addMap, salesMap]);
-
-  const searchTermTokens = React.useMemo(
-    () => buildSearchTermTokens(searchQuery),
-    [searchQuery]
-  );
+  }, [shopProducts, clickMap, addMap, cartMap, getBasePopularityScore]);
 
   const searchFiltered = React.useMemo(() => {
     if (!searchTermTokens.length) return sortedProducts;
@@ -771,31 +874,73 @@ export default function ShopPageClient() {
   }, [searchFiltered, selectedBrands, selectedCategories, selectedConditions]);
 
   const sortedFiltered = React.useMemo(() => {
-    if (sortBy === "relevance") return filtered;
     const list = filtered.slice();
     const getMinPrice = (p: ShopProduct) =>
       p.minEffectivePrice ?? p.minPrice ?? 0;
+
+    const getSearchScore = (p: ShopProduct) => {
+      if (!searchTermTokens.length) return 0;
+      const text = buildProductSearchText(p);
+      const padded = ` ${text} `;
+      let best = 0;
+      for (const tokens of searchTermTokens) {
+        let score = 0;
+        for (const t of tokens) {
+          if (padded.includes(` ${t} `)) score += 3;
+          else if (padded.includes(t)) score += 1;
+        }
+        best = Math.max(best, score);
+      }
+      return best;
+    };
+
+    if (sortBy === "relevance") {
+      list.sort((a, b) => {
+        const aScore =
+          getSearchScore(a) * 4 + getRecencyBoost(a) * 2 + getBasePopularityScore(a) * 0.1;
+        const bScore =
+          getSearchScore(b) * 4 + getRecencyBoost(b) * 2 + getBasePopularityScore(b) * 0.1;
+        if (bScore !== aScore) return bScore - aScore;
+        return getCreatedTime(b) - getCreatedTime(a);
+      });
+      return list;
+    }
+
     if (sortBy === "newest") {
-      list.sort(
-        (a, b) =>
-          new Date(b.created_at ?? 0).getTime() -
-          new Date(a.created_at ?? 0).getTime()
-      );
-    } else if (sortBy === "price") {
+      list.sort((a, b) => getCreatedTime(b) - getCreatedTime(a));
+      return list;
+    }
+
+    if (sortBy === "price") {
       list.sort((a, b) =>
         priceDir === "asc"
           ? getMinPrice(a) - getMinPrice(b)
           : getMinPrice(b) - getMinPrice(a)
       );
-    } else if (sortBy === "popular") {
-      list.sort((a, b) => {
-        const aScore = (clickMap[a.key] ?? 0) + (addMap[a.key] ?? 0) * 2;
-        const bScore = (clickMap[b.key] ?? 0) + (addMap[b.key] ?? 0) * 2;
-        return bScore - aScore;
-      });
+      return list;
     }
+
+    if (sortBy === "popular") {
+      list.sort((a, b) => {
+        const aScore = getPopularSortScore(a);
+        const bScore = getPopularSortScore(b);
+        if (bScore !== aScore) return bScore - aScore;
+        return getCreatedTime(b) - getCreatedTime(a);
+      });
+      return list;
+    }
+
     return list;
-  }, [filtered, sortBy, priceDir, clickMap, addMap]);
+  }, [
+    filtered,
+    sortBy,
+    priceDir,
+    getCreatedTime,
+    getRecencyBoost,
+    getBasePopularityScore,
+    getPopularSortScore,
+    searchTermTokens,
+  ]);
 
   const newArrivals = React.useMemo(() => {
     const now = Date.now();
@@ -1362,12 +1507,11 @@ export default function ShopPageClient() {
               </button>
               <button
                 type="button"
-                onClick={toggleWideView}
+                onClick={toggleViewMode}
                 data-tour="shop-view"
                 className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-bg-950/50 text-white/70 transition hover:bg-bg-950/70 hover:text-white"
-                aria-pressed={wideView}
-                aria-label={wideView ? "Standard view" : "Wide view"}
-                title={wideView ? "Standard view" : "Wide view"}
+                aria-label={`View mode ${viewModeLabel}. Switch to ${nextViewModeLabel}.`}
+                title={`Switch to ${nextViewModeLabel}`}
               >
                 <svg
                   viewBox="0 0 20 20"
@@ -1505,9 +1649,11 @@ export default function ShopPageClient() {
       <div
         data-tour="shop-grid"
         className={
-          wideView
-            ? "mt-3 grid grid-cols-4 gap-2 sm:grid-cols-4 sm:gap-4 md:grid-cols-6 lg:grid-cols-8"
-            : "mt-3 grid grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4"
+          isSingleView
+            ? "mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4"
+            : isDoubleView
+            ? "mt-3 grid grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4"
+            : "mt-3 grid grid-cols-4 gap-2 sm:grid-cols-4 sm:gap-4 md:grid-cols-6 lg:grid-cols-8"
         }
       >
         {mainSection ? (
@@ -1570,7 +1716,8 @@ export default function ShopPageClient() {
                     <ProductCard
                       key={`${section.key}-${p.key}`}
                       product={p}
-                      wideView={wideView}
+                      wideView={isQuadView}
+                      mobileVariant={isSingleView ? "diecast" : undefined}
                       onAddToCart={(opt) => onAdd(p, opt)}
                       onImageClick={
                         isAdmin
@@ -1590,7 +1737,8 @@ export default function ShopPageClient() {
                   <ProductCard
                     key={`all-${p.key}`}
                     product={p}
-                    wideView={wideView}
+                    wideView={isQuadView}
+                    mobileVariant={isSingleView ? "diecast" : undefined}
                     onAddToCart={(opt) => onAdd(p, opt)}
                     onImageClick={
                       isAdmin
@@ -1655,9 +1803,11 @@ export default function ShopPageClient() {
         <button
           type="button"
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          className="fixed bottom-5 right-4 z-40 rounded-full border border-white/10 bg-black/70 px-4 py-2 text-xs text-white/80 shadow-lg hover:bg-black/80 sm:text-sm"
+          className="fixed bottom-6 right-5 z-40 inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white/80 shadow-lg hover:bg-black/80"
+          aria-label="Back to top"
+          title="Back to top"
         >
-          Back to top
+          <ArrowUp className="h-5 w-5" />
         </button>
       ) : null}
       </main>

@@ -32,33 +32,91 @@ export default function SearchContent() {
   const [scaleFilter, setScaleFilter] = React.useState("all");
   const [minPrice, setMinPrice] = React.useState("");
   const [maxPrice, setMaxPrice] = React.useState("");
-  const [wideView, setWideView] = React.useState(false);
+  const [viewMode, setViewMode] = React.useState<"single" | "double" | "quad">(
+    "single"
+  );
+  const [isDesktop, setIsDesktop] = React.useState(false);
+
+  const isSingleView = viewMode === "single";
+  const isDoubleView = viewMode === "double";
+  const isQuadView = viewMode === "quad";
+  const normalizedViewMode = isDesktop && isDoubleView ? "single" : viewMode;
+  const viewModeLabel =
+    normalizedViewMode === "single"
+      ? "1-up"
+      : normalizedViewMode === "double"
+      ? "2-up"
+      : "4-up";
+  const nextViewMode = isDesktop
+    ? normalizedViewMode === "quad"
+      ? "single"
+      : "quad"
+    : normalizedViewMode === "single"
+    ? "double"
+    : normalizedViewMode === "double"
+    ? "quad"
+    : "single";
+  const nextViewModeLabel =
+    nextViewMode === "single"
+      ? "1-up"
+      : nextViewMode === "double"
+      ? "2-up"
+      : "4-up";
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
     const saved = window.localStorage.getItem(GRID_VIEW_STORAGE_KEY);
-    setWideView(saved === "wide");
+    if (saved === "single" || saved === "double" || saved === "quad") {
+      setViewMode(saved);
+      return;
+    }
+    if (saved === "wide") {
+      setViewMode("quad");
+      return;
+    }
+    setViewMode("single");
   }, []);
 
-  const toggleWideView = React.useCallback(() => {
-    setWideView((prev) => {
-      const next = !prev;
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const update = () => setIsDesktop(window.innerWidth >= 640);
+    update();
+    window.addEventListener("resize", update, { passive: true });
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  React.useEffect(() => {
+    if (isDesktop && viewMode === "double") {
+      setViewMode("single");
+    }
+  }, [isDesktop, viewMode]);
+
+  const toggleViewMode = React.useCallback(() => {
+    setViewMode((prev) => {
+      const next = isDesktop
+        ? prev === "quad"
+          ? "single"
+          : "quad"
+        : prev === "single"
+        ? "double"
+        : prev === "double"
+        ? "quad"
+        : "single";
       if (typeof window !== "undefined") {
-        window.localStorage.setItem(
-          GRID_VIEW_STORAGE_KEY,
-          next ? "wide" : "standard"
-        );
+        window.localStorage.setItem(GRID_VIEW_STORAGE_KEY, next);
       }
       return next;
     });
-  }, []);
+  }, [isDesktop]);
 
   const productGridClass = React.useMemo(
     () =>
-      wideView
-        ? "grid grid-cols-4 gap-3 sm:grid-cols-4 sm:gap-4 md:grid-cols-6 lg:grid-cols-8"
-        : "grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4",
-    [wideView]
+      isSingleView
+        ? "grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4"
+        : isDoubleView
+        ? "grid grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4"
+        : "grid grid-cols-4 gap-2 sm:grid-cols-4 sm:gap-4 md:grid-cols-6 lg:grid-cols-8",
+    [isSingleView, isDoubleView, isQuadView]
   );
 
   const brandOptions = React.useMemo(() => {
@@ -298,11 +356,10 @@ export default function SearchContent() {
         </div>
         <button
           type="button"
-          onClick={toggleWideView}
+          onClick={toggleViewMode}
           className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-bg-950/50 text-white/70 transition hover:bg-bg-950/70 hover:text-white"
-          aria-pressed={wideView}
-          aria-label={wideView ? "Standard view" : "Wide view"}
-          title={wideView ? "Standard view" : "Wide view"}
+          aria-label={`View mode ${viewModeLabel}. Switch to ${nextViewModeLabel}.`}
+          title={`Switch to ${nextViewModeLabel}`}
         >
           <svg
             viewBox="0 0 20 20"
@@ -422,7 +479,8 @@ export default function SearchContent() {
                   <ProductCard
                     key={p.key}
                     product={p}
-                    wideView={wideView}
+                    wideView={isQuadView}
+                    mobileVariant={isSingleView ? "diecast" : undefined}
                     onAddToCart={(opt) => onAdd(p, opt)}
                     onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
                     onProductClick={(item) => recordClick(item.key)}
@@ -440,7 +498,8 @@ export default function SearchContent() {
                   <ProductCard
                     key={p.key}
                     product={p}
-                    wideView={wideView}
+                    wideView={isQuadView}
+                    mobileVariant={isSingleView ? "diecast" : undefined}
                     onAddToCart={(opt) => onAdd(p, opt)}
                     onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
                     onProductClick={(item) => recordClick(item.key)}
@@ -458,7 +517,8 @@ export default function SearchContent() {
                   <ProductCard
                     key={p.key}
                     product={p}
-                    wideView={wideView}
+                    wideView={isQuadView}
+                    mobileVariant={isSingleView ? "diecast" : undefined}
                     onAddToCart={(opt) => onAdd(p, opt)}
                     onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
                     onProductClick={(item) => recordClick(item.key)}
@@ -478,7 +538,8 @@ export default function SearchContent() {
             <ProductCard
               key={p.key}
               product={p}
-              wideView={wideView}
+              wideView={isQuadView}
+              mobileVariant={isSingleView ? "diecast" : undefined}
               onAddToCart={(opt) => onAdd(p, opt)}
               onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
               onProductClick={(item) => recordClick(item.key)}

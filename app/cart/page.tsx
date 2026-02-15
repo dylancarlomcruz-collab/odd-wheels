@@ -799,11 +799,12 @@ function CartContent() {
             </div>
           </CardHeader>
           <CardBody>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {completeSetProducts.map((item) => (
                 <ProductCard
                   key={item.key}
                   product={item}
+                  mobileVariant="diecast"
                   onAddToCart={(opt) => onAddSuggestion(item, opt)}
                   onRelatedAddToCart={(related, opt) =>
                     onAddSuggestion(related, opt)

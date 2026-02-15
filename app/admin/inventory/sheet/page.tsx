@@ -30,6 +30,9 @@ type SheetRow = {
 
 const PAGE_SIZE = 200;
 const EXPORT_PAGE_SIZE = 1000;
+const CARD_EXPORT_SIZE = 1080;
+let cachedNoisePattern: CanvasPattern | null = null;
+let cachedNoiseContext: CanvasRenderingContext2D | null = null;
 
 function formatBrand(row: SheetRow) {
   const rawBrand = row.product?.brand ?? "";
@@ -180,12 +183,366 @@ function formatCondition(value: string | null) {
   return formatConditionLabel(value, { upper: true });
 }
 
+const COMPACT_CONDITION_LABELS: Record<string, string> = {
+  sealed: "SEALED",
+  resealed: "RESEAL",
+  near_mint: "NM",
+  unsealed: "UNSEAL",
+  with_issues: "ISSUES",
+  sealed_blister: "BLISTER",
+  unsealed_blister: "BLISTER",
+  blistered: "BLISTER",
+};
+
+function formatCompactCondition(value: string | null) {
+  const key = String(value ?? "").toLowerCase();
+  return COMPACT_CONDITION_LABELS[key] ?? formatCondition(value);
+}
+
 function escapeCsv(value: string | number) {
   const raw = String(value ?? "");
   if (/[",\n]/.test(raw)) {
     return `"${raw.replace(/"/g, '""')}"`;
   }
   return raw;
+}
+
+function drawRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number
+) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
+}
+
+function trackedTextWidth(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  tracking: number
+) {
+  if (!text) return 0;
+  let width = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    width += ctx.measureText(text[i]).width;
+    if (i < text.length - 1) width += tracking;
+  }
+  return width;
+}
+
+function drawTrackedText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  tracking: number
+) {
+  let cursor = x;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    ctx.fillText(char, cursor, y);
+    cursor += ctx.measureText(char).width + tracking;
+  }
+}
+
+function drawTrackedCenteredText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  centerX: number,
+  y: number,
+  tracking: number
+) {
+  const width = trackedTextWidth(ctx, text, tracking);
+  drawTrackedText(ctx, text, centerX - width / 2, y, tracking);
+}
+
+function truncateText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let truncated = text;
+  while (truncated.length > 0) {
+    const next = `${truncated}...`;
+    if (ctx.measureText(next).width <= maxWidth) return next;
+    truncated = truncated.slice(0, -1);
+  }
+  return text;
+}
+
+function wrapText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  maxLines: number
+) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = "";
+
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    const test = current ? `${current} ${word}` : word;
+    if (ctx.measureText(test).width <= maxWidth) {
+      current = test;
+      continue;
+    }
+    if (lines.length + 1 >= maxLines) {
+      const remaining = `${current} ${word} ${words.slice(i + 1).join(" ")}`.trim();
+      lines.push(truncateText(ctx, remaining, maxWidth));
+      return lines;
+    }
+    if (current) lines.push(current);
+    current = word;
+  }
+
+  if (current) lines.push(current);
+  return lines.slice(0, maxLines);
+}
+
+function drawContainImage(
+  ctx: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+) {
+  const imgWidth =
+    (image as HTMLImageElement).naturalWidth ||
+    (image as ImageBitmap).width ||
+    width;
+  const imgHeight =
+    (image as HTMLImageElement).naturalHeight ||
+    (image as ImageBitmap).height ||
+    height;
+  const scale = Math.min(width / imgWidth, height / imgHeight);
+  const drawWidth = imgWidth * scale;
+  const drawHeight = imgHeight * scale;
+  const drawX = x + (width - drawWidth) / 2;
+  const drawY = y + (height - drawHeight) / 2;
+  ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type = "image/png", quality = 0.92) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error("Failed to render card image."));
+      },
+      type,
+      quality
+    );
+  });
+}
+
+async function loadImageBitmap(url: string) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if ("createImageBitmap" in window) {
+      return await createImageBitmap(blob);
+    }
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(blob);
+    const imagePromise = new Promise<HTMLImageElement>((resolve, reject) => {
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Image failed to load"));
+    });
+    img.src = objectUrl;
+    const imageEl = await imagePromise;
+    URL.revokeObjectURL(objectUrl);
+    return imageEl;
+  } catch {
+    return null;
+  }
+}
+
+function getNoisePattern(ctx: CanvasRenderingContext2D) {
+  if (cachedNoisePattern && cachedNoiseContext === ctx) return cachedNoisePattern;
+  const noiseCanvas = document.createElement("canvas");
+  noiseCanvas.width = 128;
+  noiseCanvas.height = 128;
+  const noiseCtx = noiseCanvas.getContext("2d");
+  if (!noiseCtx) return null;
+  const imageData = noiseCtx.createImageData(128, 128);
+  for (let i = 0; i < imageData.data.length; i += 4) {
+    const value = Math.floor(Math.random() * 255);
+    imageData.data[i] = value;
+    imageData.data[i + 1] = value;
+    imageData.data[i + 2] = value;
+    imageData.data[i + 3] = Math.floor(Math.random() * 35);
+  }
+  noiseCtx.putImageData(imageData, 0, 0);
+  cachedNoisePattern = ctx.createPattern(noiseCanvas, "repeat");
+  cachedNoiseContext = ctx;
+  return cachedNoisePattern;
+}
+
+function renderCardCanvas(
+  ctx: CanvasRenderingContext2D,
+  row: SheetRow,
+  image: CanvasImageSource | null
+) {
+  const size = CARD_EXPORT_SIZE;
+  ctx.clearRect(0, 0, size, size);
+
+  const bg = ctx.createLinearGradient(0, 0, 0, size);
+  bg.addColorStop(0, "#0f1016");
+  bg.addColorStop(1, "#171826");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, size, size);
+
+  const glow1 = ctx.createRadialGradient(
+    size * 0.85,
+    size * 0.1,
+    0,
+    size * 0.85,
+    size * 0.1,
+    size * 0.38
+  );
+  glow1.addColorStop(0, "rgba(255,176,90,0.25)");
+  glow1.addColorStop(1, "rgba(255,176,90,0)");
+  ctx.fillStyle = glow1;
+  ctx.fillRect(0, 0, size, size);
+
+  const glow2 = ctx.createRadialGradient(
+    size * 0.2,
+    size * 0.85,
+    0,
+    size * 0.2,
+    size * 0.85,
+    size * 0.5
+  );
+  glow2.addColorStop(0, "rgba(255,210,140,0.14)");
+  glow2.addColorStop(1, "rgba(255,210,140,0)");
+  ctx.fillStyle = glow2;
+  ctx.fillRect(0, 0, size, size);
+
+  const noise = getNoisePattern(ctx);
+  if (noise) {
+    ctx.save();
+    ctx.globalAlpha = 0.08;
+    ctx.fillStyle = noise;
+    ctx.fillRect(0, 0, size, size);
+    ctx.restore();
+  }
+
+  ctx.save();
+  ctx.shadowColor = "rgba(255,176,90,0.35)";
+  ctx.shadowBlur = 18;
+  ctx.strokeStyle = "rgba(255,176,90,0.55)";
+  ctx.lineWidth = 2;
+  drawRoundedRect(ctx, 14, 14, size - 28, size - 28, 56);
+  ctx.stroke();
+  ctx.restore();
+
+  const brand = formatBrand(row).toUpperCase();
+  ctx.save();
+  ctx.fillStyle = "rgba(255,198,106,0.95)";
+  ctx.font = '900 34px "Arial Black", Impact, sans-serif';
+  ctx.textBaseline = "middle";
+  drawTrackedCenteredText(ctx, brand, size / 2, 90, 8);
+  ctx.restore();
+
+  const panelWidth = Math.round(size * 0.82);
+  const panelHeight = Math.round(size * 0.58);
+  const panelX = Math.round((size - panelWidth) / 2);
+  const panelY = 150;
+
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.25)";
+  ctx.shadowBlur = 28;
+  ctx.shadowOffsetY = 16;
+  ctx.fillStyle = "#fffdf8";
+  drawRoundedRect(ctx, panelX, panelY, panelWidth, panelHeight, 34);
+  ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.strokeStyle = "rgba(0,0,0,0.06)";
+  ctx.lineWidth = 2;
+  drawRoundedRect(ctx, panelX + 1, panelY + 1, panelWidth - 2, panelHeight - 2, 32);
+  ctx.stroke();
+  ctx.restore();
+
+  const imagePadding = 26;
+  const imgX = panelX + imagePadding;
+  const imgY = panelY + imagePadding;
+  const imgW = panelWidth - imagePadding * 2;
+  const imgH = panelHeight - imagePadding * 2;
+
+  if (image) {
+    drawContainImage(ctx, image, imgX, imgY, imgW, imgH);
+  } else {
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.05)";
+    drawRoundedRect(ctx, imgX, imgY, imgW, imgH, 22);
+    ctx.fill();
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.font = '600 28px "Segoe UI", Arial, sans-serif';
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("No image", imgX + imgW / 2, imgY + imgH / 2);
+    ctx.restore();
+  }
+
+  const title = formatName(row);
+  ctx.save();
+  ctx.fillStyle = "rgba(255,255,255,0.92)";
+  ctx.font = '600 30px "Segoe UI", Arial, sans-serif';
+  ctx.textBaseline = "top";
+  const titleX = 70;
+  const titleY = panelY + panelHeight + 44;
+  const titleLines = wrapText(ctx, title, size - titleX * 2, 2);
+  const lineHeight = 38;
+  titleLines.forEach((line, i) => {
+    ctx.fillText(line, titleX, titleY + i * lineHeight);
+  });
+  ctx.restore();
+
+  const condition = formatCompactCondition(row.condition);
+  ctx.save();
+  ctx.font = '700 20px "Segoe UI", Arial, sans-serif';
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  const pillPaddingX = 18;
+  const pillHeight = 44;
+  const pillTextWidth = ctx.measureText(condition).width;
+  const pillWidth = Math.max(pillTextWidth + pillPaddingX * 2, 120);
+  const pillX = 70;
+  const pillY = size - 70 - pillHeight;
+  ctx.fillStyle = "rgba(255,180,90,0.16)";
+  ctx.strokeStyle = "rgba(255,180,90,0.55)";
+  ctx.lineWidth = 2;
+  drawRoundedRect(ctx, pillX, pillY, pillWidth, pillHeight, pillHeight / 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#6ef2d6";
+  ctx.fillText(condition, pillX + pillPaddingX, pillY + pillHeight / 2);
+  ctx.restore();
+
+  const priceLabel =
+    row.price === null || row.price === undefined
+      ? "-"
+      : formatPHP(Number(row.price));
+  ctx.save();
+  ctx.font = '800 60px "Arial Black", Impact, sans-serif';
+  ctx.fillStyle = "rgba(255,198,106,0.98)";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(priceLabel, size - 70, size - 70);
+  ctx.restore();
 }
 
 export default function InventorySheetPage() {
@@ -197,6 +554,7 @@ export default function InventorySheetPage() {
   const [exporting, setExporting] = React.useState(false);
   const [exportingZip, setExportingZip] = React.useState(false);
   const [exportingSheet, setExportingSheet] = React.useState(false);
+  const [exportingCards, setExportingCards] = React.useState(false);
   const [exportMsg, setExportMsg] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState(false);
 
@@ -415,6 +773,83 @@ export default function InventorySheetPage() {
       setError(err?.message ?? "Export failed.");
     } finally {
       setExportingZip(false);
+    }
+  }
+
+  async function downloadCardsZip() {
+    if (exportingCards) return;
+    setExportingCards(true);
+    setExportMsg(null);
+    setError(null);
+
+    try {
+      const allRows = await fetchAllRows();
+      const grouped = groupRows(allRows);
+      const JSZip = (await import("jszip")).default;
+      const zip = new JSZip();
+
+      const canvas = document.createElement("canvas");
+      canvas.width = CARD_EXPORT_SIZE;
+      canvas.height = CARD_EXPORT_SIZE;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas not available.");
+
+      let generated = 0;
+      let missingImage = 0;
+      let processed = 0;
+      const total = allRows.length;
+      setExportMsg(`Rendering 0 of ${total} cards...`);
+
+      for (const group of grouped) {
+        const brandFolder =
+          zip.folder(fileSafe(group.brand) || "Unknown") ?? zip;
+
+        for (const row of group.rows) {
+          const imageUrl = row.product?.image_urls?.[0] ?? "";
+          const image = imageUrl ? await loadImageBitmap(imageUrl) : null;
+          if (!imageUrl || !image) missingImage += 1;
+
+          renderCardCanvas(ctx, row, image);
+          const blob = await canvasToBlob(canvas, "image/png");
+          const safeName = fileSafe(formatName(row)) || "item";
+          const condition = fileSafe(formatCompactCondition(row.condition));
+          const name = `${safeName}_${condition}_${row.id.slice(0, 8)}.png`;
+          brandFolder.file(name, blob);
+
+          if (image && "close" in image) {
+            try {
+              (image as ImageBitmap).close();
+            } catch {
+              // ignore
+            }
+          }
+
+          generated += 1;
+          processed += 1;
+          if (processed % 15 === 0) {
+            setExportMsg(`Rendering ${processed} of ${total} cards...`);
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          }
+        }
+      }
+
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(zipBlob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "inventory-cards.zip";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+
+      const summary = [`${generated} cards`];
+      if (missingImage) summary.push(`${missingImage} missing images`);
+      setExportMsg(summary.join(" | "));
+    } catch (err: any) {
+      setError(err?.message ?? "Export failed.");
+    } finally {
+      setExportingCards(false);
     }
   }
 
@@ -713,6 +1148,14 @@ export default function InventorySheetPage() {
             disabled={exportingSheet}
           >
             {exportingSheet ? "Preparing..." : "Download HTML (Photos)"}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={downloadCardsZip}
+            disabled={exportingCards}
+          >
+            {exportingCards ? "Preparing..." : "Download Cards ZIP"}
           </Button>
           <Button
             variant="secondary"

@@ -1776,6 +1776,39 @@ begin
 end;
 $$;
 
+-- Product image features (embeddings, OCR, color)
+create table if not exists public.product_image_features (
+  product_id uuid not null references public.products(id) on delete cascade,
+  image_url text not null,
+  clip_embedding real[],
+  ocr_text text,
+  ocr_tokens text[],
+  color_hist real[],
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (product_id, image_url)
+);
+
+alter table public.product_image_features
+  add column if not exists clip_embedding real[],
+  add column if not exists ocr_text text,
+  add column if not exists ocr_tokens text[],
+  add column if not exists color_hist real[],
+  add column if not exists updated_at timestamptz not null default now();
+
+create index if not exists idx_product_image_features_product
+  on public.product_image_features (product_id);
+
+alter table public.product_image_features enable row level security;
+
+drop policy if exists "staff read product image features" on public.product_image_features;
+create policy "staff read product image features" on public.product_image_features
+for select using (public.is_staff());
+
+drop policy if exists "staff manage product image features" on public.product_image_features;
+create policy "staff manage product image features" on public.product_image_features
+for all using (public.is_staff()) with check (public.is_staff());
+
 create or replace function public.fn_buyer_update_payment_method(
   p_order_id uuid,
   p_payment_method text
@@ -3036,3 +3069,16 @@ begin
   end if;
 end;
 $$;
+
+-- Auto-match improvements: support multiple hashes per image
+alter table public.product_image_hashes
+  drop constraint if exists product_image_hashes_pkey;
+
+alter table public.product_image_hashes
+  add constraint product_image_hashes_pkey primary key (product_id, image_url, hash_algo);
+
+create index if not exists idx_product_image_hashes_algo_hash
+  on public.product_image_hashes (hash_algo, image_hash);
+
+alter table public.product_upload_matches
+  add column if not exists upload_hashes jsonb;

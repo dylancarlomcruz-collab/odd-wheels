@@ -147,6 +147,7 @@ type ReviewMatch = {
   created_at: string;
   upload_url: string;
   upload_hash: string | null;
+  upload_hashes?: { hash_algo: string; image_hash: string }[] | null;
   status: string;
   review_reason: string | null;
   candidates: any;
@@ -156,6 +157,7 @@ type UploadCandidate = {
   image_url: string;
   distance: number;
   confidence: number;
+  algo_distances?: Record<string, number>;
 };
 
 const BULK_CONDITIONS: VariantCondition[] = [
@@ -168,6 +170,16 @@ const BULK_CONDITIONS: VariantCondition[] = [
   "sealed_blister",
   "unsealed_blister",
 ];
+
+const WARM_HASH_DEFAULT_IMAGES = 8;
+const WARM_HASH_DEFAULT_PRODUCTS = 20;
+const WARM_HASH_MAX_IMAGES = 50;
+const WARM_HASH_MAX_PRODUCTS = 500;
+const WARM_FEATURE_DEFAULT_IMAGES = 6;
+const WARM_FEATURE_DEFAULT_PRODUCTS = 20;
+const WARM_FEATURE_MAX_IMAGES = 30;
+const WARM_FEATURE_MAX_PRODUCTS = 500;
+const WARM_BATCH_RETRY_LIMIT = 3;
 
 function autoMatchBadgeClass(status: string) {
   switch (status) {
@@ -213,6 +225,17 @@ function normalizeCandidates(raw: any): UploadCandidate[] {
 function n(v: any, fallback = 0) {
   const x = Number(v);
   return Number.isFinite(x) ? x : fallback;
+}
+
+function clampBatchValue(
+  raw: string,
+  min: number,
+  max: number,
+  fallback: number
+) {
+  const value = Math.trunc(Number(raw));
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(value, min), max);
 }
 
 function parseBulkNumber(raw: string | undefined, fallback = NaN) {
@@ -550,6 +573,32 @@ export default function AdminInventoryPage() {
     current: number;
     total: number;
   } | null>(null);
+  const [warmUpFrom, setWarmUpFrom] = React.useState(0);
+  const warmUpFromRef = React.useRef(0);
+  const [warmUpMaxImages, setWarmUpMaxImages] = React.useState(
+    String(WARM_HASH_DEFAULT_IMAGES)
+  );
+  const [warmUpMaxProducts, setWarmUpMaxProducts] = React.useState(
+    String(WARM_HASH_DEFAULT_PRODUCTS)
+  );
+  const [warmUpLoading, setWarmUpLoading] = React.useState(false);
+  const [warmUpAuto, setWarmUpAuto] = React.useState(false);
+  const warmUpAutoRef = React.useRef(false);
+  const [warmUpMsg, setWarmUpMsg] = React.useState<string | null>(null);
+  const [warmFeatureFrom, setWarmFeatureFrom] = React.useState(0);
+  const warmFeatureFromRef = React.useRef(0);
+  const [warmFeatureMaxImages, setWarmFeatureMaxImages] =
+    React.useState(String(WARM_FEATURE_DEFAULT_IMAGES));
+  const [warmFeatureMaxProducts, setWarmFeatureMaxProducts] =
+    React.useState(String(WARM_FEATURE_DEFAULT_PRODUCTS));
+  const [warmFeatureIncludeOcr, setWarmFeatureIncludeOcr] =
+    React.useState(false);
+  const [warmFeatureLoading, setWarmFeatureLoading] = React.useState(false);
+  const [warmFeatureAuto, setWarmFeatureAuto] = React.useState(false);
+  const warmFeatureAutoRef = React.useRef(false);
+  const [warmFeatureMsg, setWarmFeatureMsg] = React.useState<string | null>(
+    null
+  );
 
   // Auto-match review queue
   const [reviewMatches, setReviewMatches] = React.useState<ReviewMatch[]>([]);
@@ -558,6 +607,17 @@ export default function AdminInventoryPage() {
   const [reviewActionId, setReviewActionId] = React.useState<string | null>(
     null
   );
+  const [reviewProductMap, setReviewProductMap] = React.useState<
+    Record<string, Product>
+  >({});
+  const productEditorRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    return () => {
+      warmUpAutoRef.current = false;
+      warmFeatureAutoRef.current = false;
+    };
+  }, []);
 
   // Product fields (edit)
   const [title, setTitle] = React.useState("");
@@ -973,6 +1033,10 @@ export default function AdminInventoryPage() {
     }
 
     await loadProduct(data as Product);
+    productEditorRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
   }
 
   function clearProduct() {
@@ -1391,7 +1455,13 @@ export default function AdminInventoryPage() {
             headers: { Authorization: `Bearer ${token}` },
             body: form,
           });
-          const json = await res.json();
+          const raw = await res.text();
+          let json: any = null;
+          try {
+            json = raw ? JSON.parse(raw) : null;
+          } catch {
+            throw new Error(raw || `Upload failed (${res.status})`);
+          }
           if (!json?.ok) {
             results.push({
               ok: false,
@@ -1443,17 +1513,65 @@ export default function AdminInventoryPage() {
     setReviewLoading(true);
     setReviewError(null);
     try {
-      const { data, error } = await supabase
+      let data: ReviewMatch[] | null = null;
+      let error: { message?: string } | null = null;
+      const initial = await supabase
         .from("product_upload_matches")
         .select(
-          "id,created_at,upload_url,upload_hash,status,review_reason,candidates"
+          "id,created_at,upload_url,upload_hash,upload_hashes,status,review_reason,candidates"
         )
         .eq("status", "NEEDS_REVIEW")
         .order("created_at", { ascending: false })
         .limit(50);
+      data = initial.data as ReviewMatch[] | null;
+      error = initial.error as { message?: string } | null;
 
-      if (error) throw error;
-      setReviewMatches((data as ReviewMatch[]) ?? []);
+      if (error) {
+        const msg = String(error.message ?? "");
+        if (msg.includes("upload_hashes")) {
+          const retry = await supabase
+            .from("product_upload_matches")
+            .select(
+              "id,created_at,upload_url,upload_hash,status,review_reason,candidates"
+            )
+            .eq("status", "NEEDS_REVIEW")
+            .order("created_at", { ascending: false })
+            .limit(50);
+          if (retry.error) throw retry.error;
+          data = retry.data as ReviewMatch[] | null;
+        } else {
+          throw error;
+        }
+      }
+      const matches = (data as ReviewMatch[]) ?? [];
+      setReviewMatches(matches);
+
+      const candidateIds = new Set<string>();
+      matches.forEach((match) => {
+        normalizeCandidates(match.candidates).forEach((candidate) => {
+          if (candidate?.product_id) candidateIds.add(candidate.product_id);
+        });
+      });
+
+      if (candidateIds.size > 0) {
+        const ids = Array.from(candidateIds);
+        const { data: productsData, error: productsError } = await supabase
+          .from("products")
+          .select("id,title,brand,model,variation,image_urls,is_active,created_at")
+          .in("id", ids);
+
+        if (!productsError && productsData) {
+          const map: Record<string, Product> = {};
+          (productsData as Product[]).forEach((product) => {
+            map[product.id] = product;
+          });
+          setReviewProductMap(map);
+        } else {
+          setReviewProductMap({});
+        }
+      } else {
+        setReviewProductMap({});
+      }
     } catch (e: any) {
       setReviewError(e?.message ?? "Failed to load review queue.");
       setReviewMatches([]);
@@ -1492,16 +1610,31 @@ export default function AdminInventoryPage() {
 
       if (updateError) throw updateError;
 
-      if (match.upload_hash) {
-        await supabase.from("product_image_hashes").upsert(
-          {
-            product_id: candidate.product_id,
-            image_url: match.upload_url,
-            image_hash: match.upload_hash,
-            hash_algo: "dhash-64",
-          },
-          { onConflict: "product_id,image_url" }
-        );
+      const uploadHashes = Array.isArray(match.upload_hashes)
+        ? match.upload_hashes
+        : [];
+      const hashRows = uploadHashes
+        .filter((hash) => hash?.hash_algo && hash?.image_hash)
+        .map((hash) => ({
+          product_id: candidate.product_id,
+          image_url: match.upload_url,
+          image_hash: hash.image_hash,
+          hash_algo: hash.hash_algo,
+        }));
+
+      if (!hashRows.length && match.upload_hash) {
+        hashRows.push({
+          product_id: candidate.product_id,
+          image_url: match.upload_url,
+          image_hash: match.upload_hash,
+          hash_algo: "dhash-64",
+        });
+      }
+
+      if (hashRows.length) {
+        await supabase.from("product_image_hashes").upsert(hashRows, {
+          onConflict: "product_id,image_url,hash_algo",
+        });
       }
 
       await supabase
@@ -1546,6 +1679,249 @@ export default function AdminInventoryPage() {
       });
     } finally {
       setReviewActionId(null);
+    }
+  }
+
+  function resetWarmUp() {
+    warmUpFromRef.current = 0;
+    setWarmUpFrom(0);
+    setWarmUpMsg(null);
+  }
+
+  function resetWarmFeatureWarmUp() {
+    warmFeatureFromRef.current = 0;
+    setWarmFeatureFrom(0);
+    setWarmFeatureMsg(null);
+  }
+
+  function stopWarmUpAuto() {
+    warmUpAutoRef.current = false;
+    setWarmUpAuto(false);
+  }
+
+  function stopWarmFeatureAuto() {
+    warmFeatureAutoRef.current = false;
+    setWarmFeatureAuto(false);
+  }
+
+  async function runWarmUpBatch(): Promise<any | null> {
+    setWarmUpLoading(true);
+    setWarmUpMsg(null);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) throw new Error("Not authenticated.");
+
+      const maxImages = clampBatchValue(
+        warmUpMaxImages,
+        1,
+        WARM_HASH_MAX_IMAGES,
+        WARM_HASH_DEFAULT_IMAGES
+      );
+      const maxProducts = clampBatchValue(
+        warmUpMaxProducts,
+        1,
+        WARM_HASH_MAX_PRODUCTS,
+        WARM_HASH_DEFAULT_PRODUCTS
+      );
+      if (String(maxImages) !== warmUpMaxImages) {
+        setWarmUpMaxImages(String(maxImages));
+      }
+      if (String(maxProducts) !== warmUpMaxProducts) {
+        setWarmUpMaxProducts(String(maxProducts));
+      }
+      const from = warmUpFromRef.current;
+
+      const res = await fetch("/api/images/warm-hashes", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from,
+          maxImages,
+          maxProducts,
+        }),
+      });
+
+      const raw = await res.text();
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {
+        throw new Error(raw || `Warm up failed (${res.status})`);
+      }
+
+      if (!json?.ok) {
+        const detail = json?.stage
+          ? `${json?.error ?? "Warm up failed."} (stage: ${json.stage})`
+          : json?.error ?? "Warm up failed.";
+        throw new Error(detail);
+      }
+
+      const nextFrom = Number.isFinite(json?.nextFrom)
+        ? Number(json.nextFrom)
+        : from;
+      warmUpFromRef.current = nextFrom;
+      setWarmUpFrom(nextFrom);
+
+      const warmUpNote =
+        json?.stoppedEarly && json?.timeBudgetMs
+          ? ` Stopped early to keep the batch under ${Math.round(
+              Number(json.timeBudgetMs) / 1000
+            )}s.`
+          : "";
+      setWarmUpMsg(
+        `Batch done. Hashed ${json?.hashedImages ?? 0} new images, scanned ${
+          json?.processedProducts ?? 0
+        } products. Next batch starts at ${nextFrom}.${warmUpNote}`
+      );
+      return json;
+    } catch (e: any) {
+      setWarmUpMsg(e?.message ?? "Warm up failed.");
+      return null;
+    } finally {
+      setWarmUpLoading(false);
+    }
+  }
+
+  async function runWarmFeatureBatch(): Promise<any | null> {
+    setWarmFeatureLoading(true);
+    setWarmFeatureMsg(null);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) throw new Error("Not authenticated.");
+
+      const maxImages = clampBatchValue(
+        warmFeatureMaxImages,
+        1,
+        WARM_FEATURE_MAX_IMAGES,
+        WARM_FEATURE_DEFAULT_IMAGES
+      );
+      const maxProducts = clampBatchValue(
+        warmFeatureMaxProducts,
+        1,
+        WARM_FEATURE_MAX_PRODUCTS,
+        WARM_FEATURE_DEFAULT_PRODUCTS
+      );
+      if (String(maxImages) !== warmFeatureMaxImages) {
+        setWarmFeatureMaxImages(String(maxImages));
+      }
+      if (String(maxProducts) !== warmFeatureMaxProducts) {
+        setWarmFeatureMaxProducts(String(maxProducts));
+      }
+      const from = warmFeatureFromRef.current;
+
+      const res = await fetch("/api/images/warm-features", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from,
+          maxImages,
+          maxProducts,
+          includeOcr: warmFeatureIncludeOcr,
+        }),
+      });
+
+      const raw = await res.text();
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {
+        throw new Error(raw || `Warm up failed (${res.status})`);
+      }
+
+      if (!json?.ok) {
+        const detail = json?.stage
+          ? `${json?.error ?? "Warm up failed."} (stage: ${json.stage})`
+          : json?.error ?? "Warm up failed.";
+        throw new Error(detail);
+      }
+
+      const nextFrom = Number.isFinite(json?.nextFrom)
+        ? Number(json.nextFrom)
+        : from;
+      warmFeatureFromRef.current = nextFrom;
+      setWarmFeatureFrom(nextFrom);
+
+      const warmFeatureNote =
+        json?.stoppedEarly && json?.timeBudgetMs
+          ? ` Stopped early to keep the batch under ${Math.round(
+              Number(json.timeBudgetMs) / 1000
+            )}s.`
+          : "";
+      setWarmFeatureMsg(
+        `Batch done. Updated ${json?.updatedImages ?? 0} images, scanned ${
+          json?.processedProducts ?? 0
+        } products. Next batch starts at ${nextFrom}.${warmFeatureNote}`
+      );
+      return json;
+    } catch (e: any) {
+      setWarmFeatureMsg(e?.message ?? "Warm up failed.");
+      return null;
+    } finally {
+      setWarmFeatureLoading(false);
+    }
+  }
+
+  async function runWarmUpContinuous() {
+    if (warmUpAutoRef.current) return;
+    warmUpAutoRef.current = true;
+    setWarmUpAuto(true);
+    try {
+      let failures = 0;
+      while (warmUpAutoRef.current) {
+        const before = warmUpFromRef.current;
+        const result = await runWarmUpBatch();
+        if (!result) {
+          failures += 1;
+          if (failures >= WARM_BATCH_RETRY_LIMIT) break;
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          continue;
+        }
+        failures = 0;
+        const nextFrom = Number.isFinite(result?.nextFrom)
+          ? Number(result.nextFrom)
+          : before;
+        const processed = Number(result?.processedProducts ?? 0);
+        if (processed === 0 || nextFrom === before) break;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    } finally {
+      stopWarmUpAuto();
+    }
+  }
+
+  async function runWarmFeatureContinuous() {
+    if (warmFeatureAutoRef.current) return;
+    warmFeatureAutoRef.current = true;
+    setWarmFeatureAuto(true);
+    try {
+      let failures = 0;
+      while (warmFeatureAutoRef.current) {
+        const before = warmFeatureFromRef.current;
+        const result = await runWarmFeatureBatch();
+        if (!result) {
+          failures += 1;
+          if (failures >= WARM_BATCH_RETRY_LIMIT) break;
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          continue;
+        }
+        failures = 0;
+        const nextFrom = Number.isFinite(result?.nextFrom)
+          ? Number(result.nextFrom)
+          : before;
+        const processed = Number(result?.processedProducts ?? 0);
+        if (processed === 0 || nextFrom === before) break;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    } finally {
+      stopWarmFeatureAuto();
     }
   }
 
@@ -2613,7 +2989,10 @@ export default function AdminInventoryPage() {
           </div>
 
           {/* Search */}
-          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+          <div
+            ref={productEditorRef}
+            className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3"
+          >
             <div className="font-semibold">Search products</div>
             <div className="flex gap-2">
               <div className="flex-1">
@@ -2962,6 +3341,126 @@ export default function AdminInventoryPage() {
                 })}
               </div>
             ) : null}
+
+            <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm font-medium">Warm up hashes</div>
+                <Badge>Run once</Badge>
+              </div>
+              <div className="text-xs text-white/60">
+                Builds missing image hashes in small batches so uploads stay fast
+                and don’t time out.
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Input
+                  label="Max images per batch"
+                  type="number"
+                  min="1"
+                  max={WARM_HASH_MAX_IMAGES}
+                  step="1"
+                  value={warmUpMaxImages}
+                  onChange={(e) => setWarmUpMaxImages(e.target.value)}
+                />
+                <Input
+                  label="Max products per batch"
+                  type="number"
+                  min="1"
+                  max={WARM_HASH_MAX_PRODUCTS}
+                  step="1"
+                  value={warmUpMaxProducts}
+                  onChange={(e) => setWarmUpMaxProducts(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={runWarmUpBatch}
+                  disabled={warmUpLoading || warmUpAuto}
+                >
+                  {warmUpLoading ? "Warming..." : "Run batch"}
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={warmUpAuto ? stopWarmUpAuto : runWarmUpContinuous}
+                  disabled={!warmUpAuto && warmUpLoading}
+                >
+                  {warmUpAuto ? "Stop" : "Run until done"}
+                </Button>
+                <Button variant="ghost" onClick={resetWarmUp}>
+                  Reset cursor
+                </Button>
+                <div className="text-xs text-white/60">
+                  Cursor: {warmUpFrom}
+                </div>
+              </div>
+              {warmUpMsg ? (
+                <div className="text-xs text-white/70">{warmUpMsg}</div>
+              ) : null}
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm font-medium">Warm up features</div>
+                <Badge>Run once</Badge>
+              </div>
+              <div className="text-xs text-white/60">
+                Builds CLIP + color features (and optional OCR) so auto-match is more accurate.
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Input
+                  label="Max images per batch"
+                  type="number"
+                  min="1"
+                  max={WARM_FEATURE_MAX_IMAGES}
+                  step="1"
+                  value={warmFeatureMaxImages}
+                  onChange={(e) => setWarmFeatureMaxImages(e.target.value)}
+                />
+                <Input
+                  label="Max products per batch"
+                  type="number"
+                  min="1"
+                  max={WARM_FEATURE_MAX_PRODUCTS}
+                  step="1"
+                  value={warmFeatureMaxProducts}
+                  onChange={(e) => setWarmFeatureMaxProducts(e.target.value)}
+                />
+              </div>
+              <div className="flex items-center gap-2 text-xs text-white/70">
+                <Checkbox
+                  checked={warmFeatureIncludeOcr}
+                  onChange={(checked) =>
+                    setWarmFeatureIncludeOcr(Boolean(checked))
+                  }
+                />
+                Include OCR (slower but helps with boxed product text).
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={runWarmFeatureBatch}
+                  disabled={warmFeatureLoading || warmFeatureAuto}
+                >
+                  {warmFeatureLoading ? "Warming..." : "Run batch"}
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={warmFeatureAuto ? stopWarmFeatureAuto : runWarmFeatureContinuous}
+                  disabled={!warmFeatureAuto && warmFeatureLoading}
+                >
+                  {warmFeatureAuto ? "Stop" : "Run until done"}
+                </Button>
+                <Button variant="ghost" onClick={resetWarmFeatureWarmUp}>
+                  Reset cursor
+                </Button>
+                <div className="text-xs text-white/60">
+                  Cursor: {warmFeatureFrom}
+                </div>
+              </div>
+              {warmFeatureMsg ? (
+                <div className="text-xs text-white/70">{warmFeatureMsg}</div>
+              ) : null}
+            </div>
           </div>
 
           {/* Auto-match review queue */}
@@ -3045,14 +3544,48 @@ export default function AdminInventoryPage() {
                               key={`${match.id}-${candidate.product_id}-${idx}`}
                               className="rounded-lg border border-white/10 bg-paper/5 p-2 flex flex-col gap-2"
                             >
-                              <div className="text-xs text-white/70">
-                                Product {candidate.product_id.slice(0, 8)}...
-                              </div>
-                              <div className="text-[11px] text-white/50">
-                                Confidence{" "}
-                                {Math.round(candidate.confidence * 1000) / 10}% ·
-                                Distance {candidate.distance}
-                              </div>
+                              {(() => {
+                                const product = reviewProductMap[candidate.product_id];
+                                const title =
+                                  product?.title ??
+                                  `Product ${candidate.product_id.slice(0, 8)}...`;
+                                const meta = [product?.brand, product?.model, product?.variation]
+                                  .filter(Boolean)
+                                  .join(" ");
+                                const thumb =
+                                  (Array.isArray(product?.image_urls) && product.image_urls.length
+                                    ? product.image_urls[0]
+                                    : null) ?? candidate.image_url;
+                                return (
+                                  <div className="flex gap-2">
+                                    <div className="h-12 w-12 rounded-lg border border-white/10 bg-bg-950/60 overflow-hidden flex-shrink-0">
+                                      {thumb ? (
+                                        // eslint-disable-next-line @next/next/no-img-element
+                                        <img
+                                          src={thumb}
+                                          alt={title}
+                                          className="h-full w-full object-cover"
+                                        />
+                                      ) : null}
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <div className="text-xs text-white/80 truncate">
+                                        {title}
+                                      </div>
+                                      {meta ? (
+                                        <div className="text-[11px] text-white/50 truncate">
+                                          {meta}
+                                        </div>
+                                      ) : null}
+                                      <div className="text-[11px] text-white/50">
+                                        Confidence{" "}
+                                        {Math.round(candidate.confidence * 1000) / 10}% - Distance{" "}
+                                        {candidate.distance}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })()}
                               <div className="flex flex-wrap items-center gap-2">
                                 <Button
                                   size="sm"

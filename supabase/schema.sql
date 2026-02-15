@@ -1109,11 +1109,14 @@ create table if not exists public.product_image_hashes (
   image_hash text not null,
   hash_algo text not null default 'dhash-64',
   created_at timestamptz not null default now(),
-  primary key (product_id, image_url)
+  primary key (product_id, image_url, hash_algo)
 );
 
 create index if not exists idx_product_image_hashes_product
   on public.product_image_hashes (product_id);
+
+create index if not exists idx_product_image_hashes_algo_hash
+  on public.product_image_hashes (hash_algo, image_hash);
 
 alter table public.product_image_hashes enable row level security;
 
@@ -1131,6 +1134,7 @@ create table if not exists public.product_upload_matches (
   uploader_user_id uuid references auth.users(id) on delete set null,
   upload_url text not null,
   upload_hash text,
+  upload_hashes jsonb,
   status text not null default 'NEEDS_REVIEW'
     check (status in ('APPLIED','NEEDS_REVIEW','NO_MATCH','ERROR')),
   review_reason text,
@@ -1153,4 +1157,30 @@ for select using (public.is_staff());
 
 drop policy if exists "staff manage product upload matches" on public.product_upload_matches;
 create policy "staff manage product upload matches" on public.product_upload_matches
+for all using (public.is_staff()) with check (public.is_staff());
+
+-- Product image features (embeddings, OCR, color)
+create table if not exists public.product_image_features (
+  product_id uuid not null references public.products(id) on delete cascade,
+  image_url text not null,
+  clip_embedding real[],
+  ocr_text text,
+  ocr_tokens text[],
+  color_hist real[],
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (product_id, image_url)
+);
+
+create index if not exists idx_product_image_features_product
+  on public.product_image_features (product_id);
+
+alter table public.product_image_features enable row level security;
+
+drop policy if exists "staff read product image features" on public.product_image_features;
+create policy "staff read product image features" on public.product_image_features
+for select using (public.is_staff());
+
+drop policy if exists "staff manage product image features" on public.product_image_features;
+create policy "staff manage product image features" on public.product_image_features
 for all using (public.is_staff()) with check (public.is_staff());
