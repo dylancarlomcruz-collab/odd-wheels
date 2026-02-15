@@ -1242,30 +1242,28 @@ export default function ProductCard({
           <div className="text-center text-[11px] font-extrabold tracking-[0.28em] text-amber-300/90 uppercase mb-2 drop-shadow-[0_1px_6px_rgba(0,0,0,0.45)]">
             {String(product.brand ?? "Mini GT").toUpperCase()}
           </div>
-          <div className="mb-2 rounded-2xl border border-white/30 bg-[#fffdf8] p-3 shadow-[0_12px_25px_rgba(0,0,0,0.18)]">
-            <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl">
-              <div className="absolute inset-0 rounded-xl border border-black/5 bg-white overflow-hidden">
-                {mobilePrimaryImage ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={mobilePrimarySrc || mobilePrimaryImage}
-                    srcSet={mobilePrimarySrcSet}
-                    sizes="90vw"
-                    alt={product.title}
-                    className="h-full w-full object-contain"
-                    style={parsedCardImage ? cropStyle(parsedCardImage.crop) : undefined}
-                    loading="lazy"
-                    decoding="async"
-                    onError={(e) =>
-                      applyImageFallback(e.currentTarget, mobilePrimaryImage)
-                    }
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center text-sm text-neutral-400">
-                    No image
-                  </div>
-                )}
-              </div>
+          <div className="mb-2 rounded-2xl border border-white/30 bg-[#fffdf8] shadow-[0_12px_25px_rgba(0,0,0,0.18)] overflow-hidden">
+            <div className="relative aspect-[4/3] w-full overflow-hidden">
+              {mobilePrimaryImage ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={mobilePrimarySrc || mobilePrimaryImage}
+                  srcSet={mobilePrimarySrcSet}
+                  sizes="90vw"
+                  alt={product.title}
+                  className="h-full w-full object-cover"
+                  style={parsedCardImage ? cropStyle(parsedCardImage.crop) : undefined}
+                  loading="lazy"
+                  decoding="async"
+                  onError={(e) =>
+                    applyImageFallback(e.currentTarget, mobilePrimaryImage)
+                  }
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-neutral-400">
+                  No image
+                </div>
+              )}
             </div>
           </div>
 
