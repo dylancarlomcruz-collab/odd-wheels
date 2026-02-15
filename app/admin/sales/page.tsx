@@ -55,6 +55,96 @@ function parseJsonMaybe(v: any) {
   return null;
 }
 
+function formatPickupDayLabel(value: string) {
+  const day = value.trim().toUpperCase();
+  if (day === "MON") return "Monday";
+  if (day === "TUE") return "Tuesday";
+  if (day === "WED") return "Wednesday";
+  if (day === "THU") return "Thursday";
+  if (day === "FRI") return "Friday";
+  if (day === "SAT") return "Saturday";
+  if (day === "SUN") return "Sunday";
+  return value;
+}
+
+function mergeShippingDetails(order: any) {
+  let details = parseJsonMaybe(order?.shipping_details) ?? {};
+  const addressRaw = typeof order?.address === "string" ? order.address.trim() : "";
+  const addressJson = addressRaw ? parseJsonMaybe(addressRaw) : null;
+  if (addressJson && typeof addressJson === "object") {
+    details = { ...addressJson, ...details };
+  } else if (addressRaw) {
+    const hasAddress =
+      details.full_address ||
+      details.address ||
+      details.dropoff_address ||
+      details.pickup_location;
+    if (!hasAddress) details = { ...details, full_address: addressRaw };
+  }
+  return details;
+}
+
+function buildShippingSummary(order: any) {
+  const details = mergeShippingDetails(order);
+  const method = String(details.method ?? order?.shipping_method ?? "").trim();
+  const methodLabel = method || String(order?.shipping_method ?? "-");
+  const receiverName =
+    details.receiver_name ||
+    [details.first_name, details.last_name].filter(Boolean).join(" ") ||
+    order?.customer_name ||
+    "Guest";
+  const receiverPhone =
+    details.receiver_phone || details.phone || order?.customer_phone || order?.contact || "-";
+  const receiverEmail = details.receiver_email || details.email || order?.customer_email || "";
+
+  const dropoff = typeof details.dropoff_address === "string" ? details.dropoff_address.trim() : "";
+  const pickupLocation =
+    typeof details.pickup_location === "string" ? details.pickup_location.trim() : "";
+  const pickupDirectory =
+    typeof details.pickup_directory === "string" ? details.pickup_directory.trim() : "";
+  const fullAddress = typeof details.full_address === "string" ? details.full_address.trim() : "";
+  const detailAddress = typeof details.address === "string" ? details.address.trim() : "";
+  const address =
+    method.toUpperCase() === "PICKUP"
+      ? pickupLocation || detailAddress || fullAddress
+      : method.toUpperCase() === "LBC"
+      ? dropoff || fullAddress || detailAddress
+      : fullAddress || dropoff || detailAddress;
+
+  const branch =
+    [details.branch_name || details.branch, details.branch_city]
+      .filter(Boolean)
+      .join(", ") || "";
+  const notes = details.notes || details.note || "";
+  const pickupDay =
+    typeof details.pickup_day === "string"
+      ? formatPickupDayLabel(details.pickup_day)
+      : "";
+  const pickupSlot =
+    typeof details.pickup_slot === "string" ? details.pickup_slot.trim() : "";
+  const text = typeof details.text === "string" ? details.text.trim() : "";
+
+  const lines: string[] = [];
+  if (text) lines.push(text);
+  if (address && !lines.some((l) => l.includes(address))) lines.push(address);
+  if (pickupDirectory) lines.push(`Directory: ${pickupDirectory}`);
+  if (branch) lines.push(`Branch: ${branch}`);
+  if (pickupDay || pickupSlot) {
+    const slot = [pickupDay, pickupSlot].filter(Boolean).join(" ");
+    lines.push(`Pickup: ${slot}`);
+  }
+  if (notes) lines.push(`Notes: ${notes}`);
+
+  return {
+    method: methodLabel,
+    receiverName,
+    receiverPhone,
+    receiverEmail,
+    address: address || "-",
+    lines,
+  };
+}
+
 function getItemTitle(it: any) {
   return (
     it?.item_name ||
@@ -164,6 +254,7 @@ export default function AdminSalesPage() {
   const [itemSummaries, setItemSummaries] = React.useState<
     Array<{ key: string; name: string; qty: number; sales: number; cogs: number; profit: number }>
   >([]);
+  const [selectedChannel, setSelectedChannel] = React.useState<string | null>(null);
   const [orderDetailsLoading, setOrderDetailsLoading] = React.useState(false);
   const [orderDetailsError, setOrderDetailsError] = React.useState<string | null>(null);
   const [selectedKpi, setSelectedKpi] = React.useState<
@@ -470,6 +561,12 @@ export default function AdminSalesPage() {
       String(b.created_at).localeCompare(String(a.created_at))
     );
   }, [orderSummaries]);
+  const channelOrders = React.useMemo(() => {
+    if (!selectedChannel) return [];
+    return orderSummarySorted.filter(
+      (o) => String(o.channel ?? "WEB").toUpperCase() === selectedChannel
+    );
+  }, [orderSummarySorted, selectedChannel]);
   const selectedDailyOrders = React.useMemo(() => {
     if (!selectedDailyDate) return [];
     return orders.filter((o) => ymd(new Date(o.created_at)) === selectedDailyDate);
@@ -686,11 +783,16 @@ export default function AdminSalesPage() {
                     <div className="text-sm text-white/60">No data.</div>
                   ) : (
                     channels.map(([ch, v]) => (
-                      <div key={ch} className="flex items-center justify-between rounded-xl border border-white/10 bg-paper/5 px-3 py-2">
+                      <button
+                        key={ch}
+                        type="button"
+                        onClick={() => setSelectedChannel(ch)}
+                        className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-paper/5 px-3 py-2 text-left transition hover:border-white/20 hover:bg-bg-900/40"
+                      >
                         <div className="text-sm text-white/80">{ch}</div>
                         <div className="text-sm text-white/60">{v.count} orders</div>
                         <div className="font-semibold">{peso(v.sales)}</div>
-                      </div>
+                      </button>
                     ))
                   )}
                 </div>
@@ -946,6 +1048,64 @@ export default function AdminSalesPage() {
         </DetailsModal>
 
         <DetailsModal
+          open={Boolean(selectedChannel)}
+          onClose={() => setSelectedChannel(null)}
+          title={selectedChannel ? `${selectedChannel} Orders` : "Channel Orders"}
+        >
+          <div className="space-y-3">
+            <div className="text-sm text-white/70">
+              Showing orders for channel{" "}
+              <span className="text-white font-semibold">{selectedChannel}</span>.
+            </div>
+            {channelOrders.length === 0 ? (
+              <div className="text-sm text-white/60">No orders found.</div>
+            ) : (
+              <div className="space-y-2">
+                {channelOrders.map((o) => {
+                  const time = new Date(o.created_at).toLocaleString("en-PH", {
+                    month: "short",
+                    day: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  });
+                  const itemDiscount = Math.max(0, o.discount_total - o.shipping_discount);
+                  const profit = o.revenue - o.cogs;
+                  return (
+                    <button
+                      key={o.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedChannel(null);
+                        setSelectedOrderId(o.id);
+                      }}
+                      className="flex w-full items-center justify-between gap-3 rounded-xl border border-white/10 bg-paper/5 px-3 py-2 text-left transition hover:border-white/20 hover:bg-bg-900/40"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-medium">
+                          Order #{o.id.slice(0, 8)}
+                        </div>
+                        <div className="text-xs text-white/60">
+                          {time} · {o.channel}
+                        </div>
+                        <div className="text-xs text-white/60">
+                          Item discount: {peso(itemDiscount)}
+                        </div>
+                      </div>
+                      <div className="text-right text-sm">
+                        <div className="font-semibold">{peso(o.revenue)}</div>
+                        <div className="text-xs text-white/60">
+                          COGS {peso(o.cogs)} · Profit {peso(profit)}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </DetailsModal>
+
+        <DetailsModal
           open={Boolean(selectedOrderId)}
           onClose={() => setSelectedOrderId(null)}
           title={
@@ -990,17 +1150,19 @@ export default function AdminSalesPage() {
                   <div className="text-[11px] uppercase tracking-wide text-white/50">
                     Customer
                   </div>
-                  <div className="mt-1 font-medium">
-                    {selectedOrder.customer_name || "Guest"}
-                  </div>
-                  <div className="text-sm text-white/70">
-                    {selectedOrder.customer_phone ||
-                      selectedOrder.contact ||
-                      "-"}
-                  </div>
-                  <div className="mt-1 text-sm text-white/70">
-                    {selectedOrder.address || "-"}
-                  </div>
+                  {(() => {
+                    const ship = buildShippingSummary(selectedOrder);
+                    return (
+                      <>
+                        <div className="mt-1 font-medium">{ship.receiverName}</div>
+                        <div className="text-sm text-white/70">{ship.receiverPhone}</div>
+                        {ship.receiverEmail ? (
+                          <div className="text-sm text-white/70">{ship.receiverEmail}</div>
+                        ) : null}
+                        <div className="mt-1 text-sm text-white/70">{ship.address}</div>
+                      </>
+                    );
+                  })()}
                 </div>
                 <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
                   <div className="text-[11px] uppercase tracking-wide text-white/50">
@@ -1034,16 +1196,27 @@ export default function AdminSalesPage() {
                 <div className="text-[11px] uppercase tracking-wide text-white/50">
                   Shipping
                 </div>
-                <div className="mt-1 text-sm text-white/80">
-                  Method: {selectedOrder.shipping_method || "-"}
-                </div>
-                <div className="mt-1 text-sm text-white/70">
-                  {(() => {
-                    const details = parseJsonMaybe(selectedOrder.shipping_details) ?? {};
-                    const text = String(details.text ?? "").trim();
-                    return text || "No shipping details.";
-                  })()}
-                </div>
+                {(() => {
+                  const ship = buildShippingSummary(selectedOrder);
+                  return (
+                    <>
+                      <div className="mt-1 text-sm text-white/80">
+                        Method: {ship.method || "-"}
+                      </div>
+                      {ship.lines.length ? (
+                        <div className="mt-1 space-y-1 text-sm text-white/70">
+                          {ship.lines.map((line, idx) => (
+                            <div key={`${line}-${idx}`}>{line}</div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-sm text-white/70">
+                          No shipping details.
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
 
               <div>

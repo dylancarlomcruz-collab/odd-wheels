@@ -1935,8 +1935,8 @@ export default function InventorySheetPage() {
             >
               <option value="brand">Group by brand</option>
               <option value="ship_class">Group by ship class</option>
-              <option value="ship_class_brand">Ship class -> brand</option>
-              <option value="brand_ship_class">Brand -> ship class</option>
+              <option value="ship_class_brand">Ship class → brand</option>
+              <option value="brand_ship_class">Brand → ship class</option>
               <option value="none">No folders</option>
             </select>
             <Button
