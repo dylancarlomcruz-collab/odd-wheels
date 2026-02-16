@@ -610,6 +610,12 @@ export default function AdminInventoryPage() {
   const [reviewProductMap, setReviewProductMap] = React.useState<
     Record<string, Product>
   >({});
+  const [bulkUploadLoading, setBulkUploadLoading] = React.useState(false);
+  const [bulkUploadMsg, setBulkUploadMsg] = React.useState<string | null>(null);
+  const [bulkAssignId, setBulkAssignId] = React.useState<string | null>(null);
+  const [bulkSearchTerm, setBulkSearchTerm] = React.useState("");
+  const [bulkSearchResults, setBulkSearchResults] = React.useState<Product[]>([]);
+  const [bulkSearchLoading, setBulkSearchLoading] = React.useState(false);
   const productEditorRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
@@ -1520,7 +1526,7 @@ export default function AdminInventoryPage() {
         .select(
           "id,created_at,upload_url,upload_hash,upload_hashes,status,review_reason,candidates"
         )
-        .eq("status", "NEEDS_REVIEW")
+        .in("status", ["NEEDS_REVIEW", "NO_MATCH"])
         .order("created_at", { ascending: false })
         .limit(50);
       data = initial.data as ReviewMatch[] | null;
@@ -1534,7 +1540,7 @@ export default function AdminInventoryPage() {
             .select(
               "id,created_at,upload_url,upload_hash,status,review_reason,candidates"
             )
-            .eq("status", "NEEDS_REVIEW")
+            .in("status", ["NEEDS_REVIEW", "NO_MATCH"])
             .order("created_at", { ascending: false })
             .limit(50);
           if (retry.error) throw retry.error;
@@ -1937,6 +1943,116 @@ export default function AdminInventoryPage() {
     const j = await r.json();
     if (!j.ok || !j.publicUrl) throw new Error(j.error ?? "Upload failed");
     return j.publicUrl as string;
+  }
+
+  async function uploadBulkPhotos(files: File[]) {
+    if (!files.length) return;
+    setBulkUploadLoading(true);
+    setBulkUploadMsg(null);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const userId = sessionData?.session?.user?.id ?? null;
+      const folderId = `bulk-${new Date().toISOString().slice(0, 10)}`;
+      let uploaded = 0;
+
+      for (const file of files) {
+        try {
+          const url = await uploadFileToStorage(file, folderId);
+          const payload: any = {
+            upload_url: url,
+            status: "NO_MATCH",
+            review_reason: "MANUAL_UPLOAD",
+          };
+          if (userId) payload.uploader_user_id = userId;
+          const { error } = await supabase
+            .from("product_upload_matches")
+            .insert(payload);
+          if (error) throw error;
+          uploaded += 1;
+        } catch (e) {
+          console.error("Bulk upload failed", e);
+        }
+      }
+
+      setBulkUploadMsg(`Uploaded ${uploaded} photo(s) to inbox.`);
+      await loadReviewQueue();
+    } catch (e: any) {
+      setBulkUploadMsg(e?.message ?? "Bulk upload failed.");
+    } finally {
+      setBulkUploadLoading(false);
+    }
+  }
+
+  async function runBulkSearch() {
+    const term = bulkSearchTerm.trim();
+    if (!term) {
+      setBulkSearchResults([]);
+      return;
+    }
+    setBulkSearchLoading(true);
+    try {
+      const ilike = `%${term}%`;
+      const { data, error } = await supabase
+        .from("products")
+        .select("id,title,brand,model,variation,image_urls,is_active")
+        .or(
+          `title.ilike.${ilike},brand.ilike.${ilike},model.ilike.${ilike},variation.ilike.${ilike}`
+        )
+        .limit(20);
+      if (error) throw error;
+      setBulkSearchResults((data as Product[]) ?? []);
+    } catch (e: any) {
+      setBulkSearchResults([]);
+      toast({
+        intent: "error",
+        message: e?.message ?? "Search failed.",
+      });
+    } finally {
+      setBulkSearchLoading(false);
+    }
+  }
+
+  async function assignBulkUpload(match: ReviewMatch, product: Product) {
+    if (!match?.upload_url) return;
+    try {
+      const current = Array.isArray(product.image_urls) ? product.image_urls : [];
+      const filtered = current.filter((url) => url && url !== match.upload_url);
+      const updated = [match.upload_url, ...filtered];
+
+      const { error: updateError } = await supabase
+        .from("products")
+        .update({ image_urls: updated })
+        .eq("id", product.id);
+      if (updateError) throw updateError;
+
+      if (selectedProduct?.id === product.id) {
+        setImages(updated);
+        setSelectedImages((prev) => ({ ...prev, [match.upload_url]: true }));
+      }
+
+      const { error: matchError } = await supabase
+        .from("product_upload_matches")
+        .update({
+          status: "APPLIED",
+          matched_product_id: product.id,
+          matched_image_url: match.upload_url,
+          review_reason: null,
+          applied_at: new Date().toISOString(),
+        })
+        .eq("id", match.id);
+      if (matchError) throw matchError;
+
+      setReviewMatches((prev) => prev.filter((m) => m.id !== match.id));
+      setBulkAssignId(null);
+      setBulkSearchTerm("");
+      setBulkSearchResults([]);
+      toast({ intent: "success", message: "Thumbnail applied." });
+    } catch (e: any) {
+      toast({
+        intent: "error",
+        message: e?.message ?? "Failed to apply photo.",
+      });
+    }
   }
 
   async function uploadImageFile(
@@ -3122,6 +3238,181 @@ export default function AdminInventoryPage() {
                 focusBarcodeInput();
               }}
             />
+          </div>
+
+          {/* Bulk photo inbox */}
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold">Bulk photo inbox</div>
+                <div className="text-xs text-white/60">
+                  Upload multiple photos and assign each to a product. The
+                  uploaded photo becomes the first thumbnail.
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={loadReviewQueue}
+                disabled={reviewLoading}
+              >
+                {reviewLoading ? "Refreshing..." : "Refresh"}
+              </Button>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-[1.2fr_0.8fr]">
+              <div className="space-y-2">
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => {
+                    const list = Array.from(e.target.files ?? []);
+                    if (!list.length) return;
+                    void uploadBulkPhotos(list);
+                    e.currentTarget.value = "";
+                  }}
+                />
+                <div className="text-xs text-white/50">
+                  Select multiple images. They will be stored in the inbox until
+                  you assign them.
+                </div>
+              </div>
+              <div className="text-xs text-white/60">
+                {bulkUploadLoading ? "Uploading..." : bulkUploadMsg}
+              </div>
+            </div>
+
+            {reviewError ? (
+              <div className="text-xs text-red-200">{reviewError}</div>
+            ) : null}
+
+            {!reviewLoading && reviewMatches.length === 0 ? (
+              <div className="text-xs text-white/60">
+                No photos in inbox.
+              </div>
+            ) : null}
+
+            {reviewMatches.length ? (
+              <div className="grid gap-3">
+                {reviewMatches.map((match) => {
+                  const uploadUrl = match.upload_url;
+                  const active = bulkAssignId === match.id;
+                  const createdAt = match.created_at
+                    ? new Date(match.created_at).toLocaleString("en-PH")
+                    : "";
+                  return (
+                    <div
+                      key={match.id}
+                      className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3"
+                    >
+                      <div className="flex flex-wrap items-start gap-3">
+                        <div className="h-16 w-16 rounded-lg border border-white/10 bg-bg-950/60 overflow-hidden flex-shrink-0">
+                          {uploadUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={uploadUrl}
+                              alt="Upload"
+                              className="h-full w-full object-cover"
+                            />
+                          ) : null}
+                        </div>
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="text-sm font-medium truncate">
+                            {match.review_reason ?? "Uploaded photo"}
+                          </div>
+                          {createdAt ? (
+                            <div className="text-xs text-white/50">
+                              {createdAt}
+                            </div>
+                          ) : null}
+                        </div>
+                        <Button
+                          variant={active ? "ghost" : "secondary"}
+                          size="sm"
+                          onClick={() => {
+                            setBulkAssignId(active ? null : match.id);
+                            setBulkSearchTerm("");
+                            setBulkSearchResults([]);
+                          }}
+                        >
+                          {active ? "Close" : "Assign"}
+                        </Button>
+                      </div>
+
+                      {active ? (
+                        <div className="space-y-2">
+                          <div className="flex gap-2">
+                            <Input
+                              className="flex-1"
+                              placeholder="Search product title/brand/model..."
+                              value={bulkSearchTerm}
+                              onChange={(e) => setBulkSearchTerm(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  runBulkSearch();
+                                }
+                              }}
+                            />
+                            <Button
+                              variant="secondary"
+                              onClick={runBulkSearch}
+                              disabled={bulkSearchLoading}
+                            >
+                              {bulkSearchLoading ? "Searching..." : "Search"}
+                            </Button>
+                          </div>
+
+                          {bulkSearchResults.length ? (
+                            <div className="grid gap-2">
+                              {bulkSearchResults.map((p) => {
+                                const img =
+                                  Array.isArray(p.image_urls) && p.image_urls.length
+                                    ? p.image_urls[0]
+                                    : null;
+                                return (
+                                  <button
+                                    key={p.id}
+                                    type="button"
+                                    onClick={() => assignBulkUpload(match, p)}
+                                    className="text-left rounded-xl border border-white/10 bg-paper/5 hover:bg-paper/10 px-3 py-2 flex gap-3"
+                                  >
+                                    <div className="h-12 w-12 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
+                                      {img ? (
+                                        // eslint-disable-next-line @next/next/no-img-element
+                                        <img
+                                          src={img}
+                                          alt={p.title}
+                                          className="h-full w-full object-cover"
+                                        />
+                                      ) : null}
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <div className="font-medium truncate">
+                                        {p.title}
+                                      </div>
+                                      <div className="text-xs text-white/60">
+                                        {p.brand ?? "â€”"} {p.model ? `â€¢ ${p.model}` : ""}{" "}
+                                        {p.variation ? `â€¢ ${p.variation}` : ""}
+                                      </div>
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : bulkSearchTerm ? (
+                            <div className="text-xs text-white/60">
+                              No products found.
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
 
           {/* Product URL lookup */}
