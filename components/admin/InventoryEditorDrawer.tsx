@@ -79,6 +79,7 @@ export function InventoryEditorDrawer({
   const [images, setImages] = React.useState<string[]>([]);
   const [newImage, setNewImage] = React.useState("");
   const [uploadingImages, setUploadingImages] = React.useState(false);
+  const [quickThumbUploading, setQuickThumbUploading] = React.useState(false);
   const [issueUploadId, setIssueUploadId] = React.useState<string | null>(null);
   const [isActive, setIsActive] = React.useState(true);
   const [variants, setVariants] = React.useState<VariantDraft[]>([]);
@@ -99,6 +100,7 @@ export function InventoryEditorDrawer({
     crop: ImageCrop;
     rect: DOMRect;
   } | null>(null);
+  const quickThumbInputRef = React.useRef<HTMLInputElement | null>(null);
 
   React.useEffect(() => {
     if (!product) return;
@@ -126,6 +128,23 @@ export function InventoryEditorDrawer({
 
   const productId = product.id;
 
+  async function uploadImageFileRaw(
+    file: File,
+    productIdForPath: string
+  ): Promise<string> {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("productId", productIdForPath);
+
+    const r = await fetch("/api/images/upload", {
+      method: "POST",
+      body: form,
+    });
+    const j = await r.json();
+    if (!j.ok || !j.publicUrl) throw new Error(j.error ?? "Upload failed");
+    return j.publicUrl as string;
+  }
+
   async function uploadImageFile(
     file: File,
     productIdForPath: string,
@@ -133,19 +152,9 @@ export function InventoryEditorDrawer({
   ) {
     if (!options?.skipLoading) setUploadingImages(true);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("productId", productIdForPath);
-
-      const r = await fetch("/api/images/upload", {
-        method: "POST",
-        body: form,
-      });
-      const j = await r.json();
-      if (!j.ok || !j.publicUrl) throw new Error(j.error ?? "Upload failed");
-
-      const url = j.publicUrl as string;
+      const url = await uploadImageFileRaw(file, productIdForPath);
       setImages((prev) => Array.from(new Set([...prev, url])));
+      return url;
     } finally {
       if (!options?.skipLoading) setUploadingImages(false);
     }
@@ -531,7 +540,7 @@ export function InventoryEditorDrawer({
     }
   }
 
-  async function save() {
+  async function save(options?: { imagesOverride?: string[]; closeAfter?: boolean }) {
     if (!title.trim()) {
       toast({ intent: "error", message: "Title is required." });
       return;
@@ -539,6 +548,7 @@ export function InventoryEditorDrawer({
     setSaving(true);
 
     try {
+      const imagesToSave = options?.imagesOverride ?? images;
       await supabase
         .from("products")
         .update({
@@ -546,7 +556,7 @@ export function InventoryEditorDrawer({
           brand: brand || null,
           model: model || null,
           variation: variation || null,
-          image_urls: images,
+          image_urls: imagesToSave,
           is_active: isActive,
         })
         .eq("id", productId);
@@ -631,7 +641,7 @@ export function InventoryEditorDrawer({
 
       toast({ intent: "success", title: "Saved", message: "Inventory updated." });
       onSaved();
-      onClose();
+      if (options?.closeAfter ?? true) onClose();
     } catch (e: any) {
       toast({
         intent: "error",
@@ -640,6 +650,25 @@ export function InventoryEditorDrawer({
       });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleQuickThumbUpload(file: File) {
+    if (!file) return;
+    setQuickThumbUploading(true);
+    try {
+      const url = await uploadImageFileRaw(file, productId);
+      const nextImages = [url, ...images.filter((u) => u !== url)];
+      setImages(nextImages);
+      await save({ imagesOverride: nextImages, closeAfter: true });
+    } catch (e: any) {
+      toast({
+        intent: "error",
+        title: "Upload failed",
+        message: e?.message ?? "Unable to upload thumbnail.",
+      });
+    } finally {
+      setQuickThumbUploading(false);
     }
   }
 
@@ -684,6 +713,61 @@ export function InventoryEditorDrawer({
         </div>
 
         <div className="space-y-6 px-4 pb-28 pt-4 sm:p-6 sm:pb-6">
+          <div className="rounded-2xl border border-white/10 bg-bg-900/50 p-4 space-y-3 sm:hidden">
+            <div className="flex items-center justify-between">
+              <div className="font-semibold">Thumbnail</div>
+              {images.length ? <Badge>Primary</Badge> : null}
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="h-16 w-16 rounded-lg border border-white/10 bg-bg-800/60 overflow-hidden flex-shrink-0">
+                {(() => {
+                  if (!images[0]) {
+                    return (
+                      <div className="h-full w-full grid place-items-center text-[10px] text-white/50">
+                        No image
+                      </div>
+                    );
+                  }
+                  const preview = parseImageCrop(images[0]);
+                  return (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={preview.src}
+                      alt=""
+                      className="h-full w-full object-contain bg-white"
+                      style={cropStyle(preview.crop)}
+                    />
+                  );
+                })()}
+              </div>
+              <div className="flex-1">
+                <Button
+                  variant="secondary"
+                  className="w-full"
+                  disabled={quickThumbUploading || saving}
+                  onClick={() => quickThumbInputRef.current?.click()}
+                >
+                  {quickThumbUploading ? "Uploading..." : "Upload thumbnail"}
+                </Button>
+                <div className="mt-2 text-xs text-white/60">
+                  Auto-saves and closes after upload.
+                </div>
+              </div>
+            </div>
+            <input
+              ref={quickThumbInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (!f) return;
+                void handleQuickThumbUpload(f);
+                e.currentTarget.value = "";
+              }}
+            />
+          </div>
+
           <div className="rounded-2xl border border-white/10 bg-bg-900/50 p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div className="font-semibold">Product identity</div>
