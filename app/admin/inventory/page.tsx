@@ -612,10 +612,13 @@ export default function AdminInventoryPage() {
   >({});
   const [bulkUploadLoading, setBulkUploadLoading] = React.useState(false);
   const [bulkUploadMsg, setBulkUploadMsg] = React.useState<string | null>(null);
-  const [bulkAssignId, setBulkAssignId] = React.useState<string | null>(null);
-  const [bulkSearchTerm, setBulkSearchTerm] = React.useState("");
-  const [bulkSearchResults, setBulkSearchResults] = React.useState<Product[]>([]);
-  const [bulkSearchLoading, setBulkSearchLoading] = React.useState(false);
+  const [bulkUploadProgress, setBulkUploadProgress] = React.useState<{
+    current: number;
+    total: number;
+  } | null>(null);
+  const [bulkSearchTerms, setBulkSearchTerms] = React.useState<Record<string, string>>({});
+  const [bulkSearchResults, setBulkSearchResults] = React.useState<Record<string, Product[]>>({});
+  const [bulkSearchLoading, setBulkSearchLoading] = React.useState<Record<string, boolean>>({});
   const productEditorRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
@@ -1949,13 +1952,16 @@ export default function AdminInventoryPage() {
     if (!files.length) return;
     setBulkUploadLoading(true);
     setBulkUploadMsg(null);
+    setBulkUploadProgress({ current: 0, total: files.length });
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const userId = sessionData?.session?.user?.id ?? null;
       const folderId = `bulk-${new Date().toISOString().slice(0, 10)}`;
       let uploaded = 0;
 
-      for (const file of files) {
+      for (let idx = 0; idx < files.length; idx += 1) {
+        const file = files[idx];
+        setBulkUploadProgress({ current: idx + 1, total: files.length });
         try {
           const url = await uploadFileToStorage(file, folderId);
           const payload: any = {
@@ -1980,16 +1986,17 @@ export default function AdminInventoryPage() {
       setBulkUploadMsg(e?.message ?? "Bulk upload failed.");
     } finally {
       setBulkUploadLoading(false);
+      setBulkUploadProgress(null);
     }
   }
 
-  async function runBulkSearch() {
-    const term = bulkSearchTerm.trim();
+  async function runBulkSearch(matchId: string) {
+    const term = (bulkSearchTerms[matchId] ?? "").trim();
     if (!term) {
-      setBulkSearchResults([]);
+      setBulkSearchResults((prev) => ({ ...prev, [matchId]: [] }));
       return;
     }
-    setBulkSearchLoading(true);
+    setBulkSearchLoading((prev) => ({ ...prev, [matchId]: true }));
     try {
       const ilike = `%${term}%`;
       const { data, error } = await supabase
@@ -2000,15 +2007,18 @@ export default function AdminInventoryPage() {
         )
         .limit(20);
       if (error) throw error;
-      setBulkSearchResults((data as Product[]) ?? []);
+      setBulkSearchResults((prev) => ({
+        ...prev,
+        [matchId]: (data as Product[]) ?? [],
+      }));
     } catch (e: any) {
-      setBulkSearchResults([]);
+      setBulkSearchResults((prev) => ({ ...prev, [matchId]: [] }));
       toast({
         intent: "error",
         message: e?.message ?? "Search failed.",
       });
     } finally {
-      setBulkSearchLoading(false);
+      setBulkSearchLoading((prev) => ({ ...prev, [matchId]: false }));
     }
   }
 
@@ -2043,9 +2053,8 @@ export default function AdminInventoryPage() {
       if (matchError) throw matchError;
 
       setReviewMatches((prev) => prev.filter((m) => m.id !== match.id));
-      setBulkAssignId(null);
-      setBulkSearchTerm("");
-      setBulkSearchResults([]);
+      setBulkSearchTerms((prev) => ({ ...prev, [match.id]: "" }));
+      setBulkSearchResults((prev) => ({ ...prev, [match.id]: [] }));
       toast({ intent: "success", message: "Thumbnail applied." });
     } catch (e: any) {
       toast({
@@ -3282,6 +3291,16 @@ export default function AdminInventoryPage() {
                 {bulkUploadLoading ? "Uploading..." : bulkUploadMsg}
               </div>
             </div>
+            {bulkUploadProgress ? (
+              <div className="text-xs text-white/60">
+                Uploading {bulkUploadProgress.current} of{" "}
+                {bulkUploadProgress.total} (
+                {Math.round(
+                  (bulkUploadProgress.current / bulkUploadProgress.total) * 100
+                )}
+                %)
+              </div>
+            ) : null}
 
             {reviewError ? (
               <div className="text-xs text-red-200">{reviewError}</div>
@@ -3297,10 +3316,12 @@ export default function AdminInventoryPage() {
               <div className="grid gap-3">
                 {reviewMatches.map((match) => {
                   const uploadUrl = match.upload_url;
-                  const active = bulkAssignId === match.id;
                   const createdAt = match.created_at
                     ? new Date(match.created_at).toLocaleString("en-PH")
                     : "";
+                  const term = bulkSearchTerms[match.id] ?? "";
+                  const results = bulkSearchResults[match.id] ?? [];
+                  const searching = bulkSearchLoading[match.id] ?? false;
                   return (
                     <div
                       key={match.id}
@@ -3327,87 +3348,79 @@ export default function AdminInventoryPage() {
                             </div>
                           ) : null}
                         </div>
-                        <Button
-                          variant={active ? "ghost" : "secondary"}
-                          size="sm"
-                          onClick={() => {
-                            setBulkAssignId(active ? null : match.id);
-                            setBulkSearchTerm("");
-                            setBulkSearchResults([]);
-                          }}
-                        >
-                          {active ? "Close" : "Assign"}
-                        </Button>
                       </div>
 
-                      {active ? (
-                        <div className="space-y-2">
-                          <div className="flex gap-2">
-                            <Input
-                              className="flex-1"
-                              placeholder="Search product title/brand/model..."
-                              value={bulkSearchTerm}
-                              onChange={(e) => setBulkSearchTerm(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  runBulkSearch();
-                                }
-                              }}
-                            />
-                            <Button
-                              variant="secondary"
-                              onClick={runBulkSearch}
-                              disabled={bulkSearchLoading}
-                            >
-                              {bulkSearchLoading ? "Searching..." : "Search"}
-                            </Button>
-                          </div>
-
-                          {bulkSearchResults.length ? (
-                            <div className="grid gap-2">
-                              {bulkSearchResults.map((p) => {
-                                const img =
-                                  Array.isArray(p.image_urls) && p.image_urls.length
-                                    ? p.image_urls[0]
-                                    : null;
-                                return (
-                                  <button
-                                    key={p.id}
-                                    type="button"
-                                    onClick={() => assignBulkUpload(match, p)}
-                                    className="text-left rounded-xl border border-white/10 bg-paper/5 hover:bg-paper/10 px-3 py-2 flex gap-3"
-                                  >
-                                    <div className="h-12 w-12 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
-                                      {img ? (
-                                        // eslint-disable-next-line @next/next/no-img-element
-                                        <img
-                                          src={img}
-                                          alt={p.title}
-                                          className="h-full w-full object-cover"
-                                        />
-                                      ) : null}
-                                    </div>
-                                    <div className="min-w-0 flex-1">
-                                      <div className="font-medium truncate">
-                                        {p.title}
-                                      </div>
-                                      <div className="text-xs text-white/60">
-                                        {p.brand ?? "â€”"} {p.model ? `â€¢ ${p.model}` : ""}{" "}
-                                        {p.variation ? `â€¢ ${p.variation}` : ""}
-                                      </div>
-                                    </div>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          ) : bulkSearchTerm ? (
-                            <div className="text-xs text-white/60">
-                              No products found.
-                            </div>
-                          ) : null}
+                      <div className="space-y-2">
+                        <div className="flex gap-2">
+                          <Input
+                            className="flex-1"
+                            placeholder="Search product title/brand/model..."
+                            value={term}
+                            onChange={(e) =>
+                              setBulkSearchTerms((prev) => ({
+                                ...prev,
+                                [match.id]: e.target.value,
+                              }))
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                runBulkSearch(match.id);
+                              }
+                            }}
+                          />
+                          <Button
+                            variant="secondary"
+                            onClick={() => runBulkSearch(match.id)}
+                            disabled={searching}
+                          >
+                            {searching ? "Searching..." : "Search"}
+                          </Button>
                         </div>
-                      ) : null}
+
+                        {results.length ? (
+                          <div className="grid gap-2">
+                            {results.map((p) => {
+                              const img =
+                                Array.isArray(p.image_urls) && p.image_urls.length
+                                  ? p.image_urls[0]
+                                  : null;
+                              return (
+                                <button
+                                  key={p.id}
+                                  type="button"
+                                  onClick={() => assignBulkUpload(match, p)}
+                                  className="text-left rounded-xl border border-white/10 bg-paper/5 hover:bg-paper/10 px-3 py-2 flex gap-3"
+                                >
+                                  <div className="h-12 w-12 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
+                                    {img ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img
+                                        src={img}
+                                        alt={p.title}
+                                        className="h-full w-full object-cover"
+                                      />
+                                    ) : null}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-medium truncate">
+                                      {p.title}
+                                    </div>
+                                    <div className="text-xs text-white/60">
+                                      {p.brand ?? "â€”"} {p.model ? `â€¢ ${p.model}` : ""}{" "}
+                                      {p.variation ? `â€¢ ${p.variation}` : ""}
+                                    </div>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : term ? (
+                          <div className="text-xs text-white/60">
+                            No products found.
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   );
                 })}
