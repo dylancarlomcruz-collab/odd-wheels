@@ -29,6 +29,9 @@ export type AdminVariant = {
   price: number | null;
   qty: number | null;
   ship_class: string | null;
+  allowed_couriers: string[] | null;
+  allowed_lbc_packages: string[] | null;
+  allowed_jnt_pouches: string[] | null;
   issue_notes: string | null;
   issue_photo_urls: string[] | null;
   public_notes: string | null;
@@ -71,7 +74,7 @@ const SHIP_CLASS_OPTIONS = [
   "HOT_WHEELS_PREMIUM",
   "LOOSE_NO_BOX",
   "LALAMOVE",
-  "DIORAMA",
+  "FIGURES_DIORAMA",
 ];
 
 type InventoryBrowseGridProps = {
@@ -114,6 +117,8 @@ function formatShipClassLabel(value: string) {
   switch (value) {
     case "ACRYLIC_TRUE_SCALE":
       return "Acrylic True-Scale";
+    case "FIGURES_DIORAMA":
+      return "Figures & Diorama";
     case "HOT_WHEELS_MAINLINE":
       return "Hot Wheels Mainline";
     case "HOT_WHEELS_PREMIUM":
@@ -410,8 +415,8 @@ export function InventoryBrowseGrid({
       const hasVariantFilters =
         selectedConditions.length > 0 || selectedShipClasses.length > 0 || applyStockFilter;
       const variantSelect = hasVariantFilters
-        ? "product_variants!inner(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)"
-        : "product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)";
+        ? "product_variants!inner(id,condition,barcode,cost,price,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)"
+        : "product_variants(id,condition,barcode,cost,price,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)";
       let batch: AdminProduct[] = [];
 
       if (rawTerm && safeTerm && isBarcodeLike) {

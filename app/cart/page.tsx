@@ -277,7 +277,7 @@ function CartContent() {
       const baseToast = {
         title: product.title,
         image_url: product.image_url,
-        variant: option.condition,
+        variant: formatConditionLabel(option.condition, { upper: true }),
         price: effectivePrice,
         action: { label: "View cart", href: "/cart" },
       };

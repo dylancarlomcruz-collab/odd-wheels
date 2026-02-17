@@ -66,7 +66,7 @@ const SHIP_CLASS_OPTIONS: ShipClass[] = [
   "HOT_WHEELS_PREMIUM",
   "LOOSE_NO_BOX",
   "LALAMOVE",
-  "DIORAMA",
+  "FIGURES_DIORAMA",
 ];
 
 const COURIER_OPTIONS: Array<{ value: Courier; label: string }> = [
@@ -79,6 +79,8 @@ function formatShipClassLabel(value: string) {
   switch (value) {
     case "ACRYLIC_TRUE_SCALE":
       return "Acrylic True-Scale";
+    case "FIGURES_DIORAMA":
+      return "Figures & Diorama";
     case "HOT_WHEELS_MAINLINE":
       return "Hot Wheels Mainline";
     case "HOT_WHEELS_PREMIUM":
@@ -467,7 +469,7 @@ export default function AdminVouchersPage() {
             </div>
             <div className="space-y-2">
               <div className="text-xs uppercase text-white/50">
-                Include ship classes
+                Include classes
               </div>
               <div className="flex flex-wrap gap-3">
                 {SHIP_CLASS_OPTIONS.map((shipClass) => (
@@ -494,7 +496,7 @@ export default function AdminVouchersPage() {
             </div>
             <div className="space-y-2">
               <div className="text-xs uppercase text-white/50">
-                Exclude ship classes
+                Exclude classes
               </div>
               <div className="flex flex-wrap gap-3">
                 {SHIP_CLASS_OPTIONS.map((shipClass) => (
@@ -686,7 +688,7 @@ export default function AdminVouchersPage() {
                       </div>
                       <div className="space-y-2">
                         <div className="text-xs uppercase text-white/50">
-                          Include ship classes
+                          Include classes
                         </div>
                         <div className="flex flex-wrap gap-3">
                           {SHIP_CLASS_OPTIONS.map((shipClass) => (
@@ -716,7 +718,7 @@ export default function AdminVouchersPage() {
                       </div>
                       <div className="space-y-2">
                         <div className="text-xs uppercase text-white/50">
-                          Exclude ship classes
+                          Exclude classes
                         </div>
                         <div className="flex flex-wrap gap-3">
                           {SHIP_CLASS_OPTIONS.map((shipClass) => (

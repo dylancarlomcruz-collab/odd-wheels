@@ -1,4 +1,4 @@
-import { conditionSortOrder, formatConditionLabel } from "@/lib/conditions";
+import { conditionSortOrder } from "@/lib/conditions";
 import { resolveEffectivePrice } from "@/lib/pricing";
 import type { ShopProduct } from "@/components/ProductCard";
 
@@ -63,10 +63,7 @@ export function collapseVariants(rows: VariantRow[]): ShopProduct[] {
 
     const key = p.id;
     const conditionRaw = String(v.condition ?? "sealed").toLowerCase();
-    const condition = formatConditionLabel(conditionRaw, {
-      upper: true,
-      shipClass: v.ship_class,
-    });
+    const condition = conditionRaw;
     const price = pickNumber(v.price, 0);
     const sale_price =
       Number.isFinite(Number((v as any)?.sale_price)) &&
@@ -187,10 +184,7 @@ export function mapProductsToShopProducts(rows: ProductRow[]): ShopProduct[] {
           : null;
         return {
           id: v.id,
-          condition: formatConditionLabel(conditionRaw, {
-            upper: true,
-            shipClass: v.ship_class,
-          }),
+          condition: conditionRaw,
           price,
           sale_price,
           discount_percent,

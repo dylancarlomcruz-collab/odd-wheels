@@ -25,12 +25,7 @@ export function formatConditionLabel(
 ): string {
   const key = String(value ?? "").toLowerCase() as VariantCondition;
   const label = CONDITION_LABELS[key] ?? String(value ?? "-");
-  const suffix =
-    String(options?.shipClass ?? "").toUpperCase() === "DIORAMA"
-      ? "Diorama"
-      : null;
-  const composed = suffix ? `${label} - ${suffix}` : label;
-  return options?.upper ? composed.toUpperCase() : composed;
+  return options?.upper ? label.toUpperCase() : label;
 }
 
 export function isBlisterCondition(value: string | null | undefined): boolean {

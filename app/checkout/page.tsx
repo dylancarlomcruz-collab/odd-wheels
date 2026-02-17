@@ -29,7 +29,9 @@ import {
   FEES,
   REGION_LABEL,
   LBC_CAPACITY,
+  JNT_CAPACITY,
   type LbcPackage,
+  type JntPouch,
   type Region,
 } from "@/lib/shipping/config";
 import { PHONE_MAX_LENGTH, sanitizePhone, validatePhone11 } from "@/lib/phone";
@@ -42,7 +44,6 @@ import {
   jntFee,
   fitsCapacity,
   lbcFee,
-  recommendJntPouch,
   recommendLbcPackage,
   shipCountsFromLines,
 } from "@/lib/shipping/logic";
@@ -57,6 +58,18 @@ import {
 } from "@/lib/vouchers";
 
 type ShippingMethod = "LALAMOVE" | "JNT" | "LBC" | "PICKUP";
+const SHIPPING_METHODS: ShippingMethod[] = [
+  "LBC",
+  "JNT",
+  "LALAMOVE",
+  "PICKUP",
+];
+const SHIPPING_METHOD_LABELS: Record<ShippingMethod, string> = {
+  LBC: "LBC Pickup",
+  JNT: "J&T",
+  LALAMOVE: "Lalamove",
+  PICKUP: "Store",
+};
 const PHONE_LENGTH = PHONE_MAX_LENGTH;
 
 type VoucherWalletRow = Omit<VoucherWallet, "voucher"> & {
@@ -500,6 +513,53 @@ function formatCourierList(values?: Array<string | null | undefined> | string | 
     .map((value) => formatCourierLabel(value))
     .filter((value) => value.length > 0);
   return list.length ? list.join(", ") : null;
+}
+
+function normalizeSettingList(
+  values?: Array<string | null | undefined> | string | null,
+) {
+  if (Array.isArray(values)) return values;
+  if (typeof values === "string") {
+    const trimmed = values.replace(/[{}]/g, "").trim();
+    if (!trimmed) return [];
+    return trimmed.split(",").map((value) => value.trim());
+  }
+  return [];
+}
+
+function normalizeSettingListUpper(
+  values?: Array<string | null | undefined> | string | null,
+) {
+  return normalizeSettingList(values)
+    .map((value) => String(value ?? "").trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function intersectLists<T>(lists: T[][]) {
+  if (!lists.length) return [];
+  return lists.reduce((acc, list) => acc.filter((value) => list.includes(value)));
+}
+
+function recommendAllowedJntPouch(
+  counts: ReturnType<typeof shipCountsFromLines>,
+  allowed: JntPouch[],
+): { ok: true; pouch: JntPouch } | { ok: false; reason: string } {
+  const ordered: JntPouch[] = ["SMALL", "MEDIUM"];
+  const candidates = allowed.length
+    ? ordered.filter((pouch) => allowed.includes(pouch))
+    : ordered;
+  for (const pouch of candidates) {
+    if (fitsCapacity(counts, JNT_CAPACITY[pouch])) {
+      return { ok: true, pouch };
+    }
+  }
+  if (allowed.length) {
+    return {
+      ok: false,
+      reason: "J&T pouch restrictions do not fit this cart.",
+    };
+  }
+  return { ok: false, reason: "Cart is too large for J&T." };
 }
 
 function VoucherModal({
@@ -1341,12 +1401,139 @@ function CheckoutContent() {
     [selectedLines],
   );
   const hasLalamoveOnly = shipCounts.LALAMOVE > 0;
+  const allowedCourierValues = React.useMemo(() => {
+    const raw = normalizeSettingListUpper(settings?.allowed_couriers ?? null);
+    const unique = Array.from(new Set(raw));
+    return unique.filter(
+      (value): value is ShippingMethod =>
+        value === "LBC" ||
+        value === "JNT" ||
+        value === "LALAMOVE" ||
+        value === "PICKUP",
+    );
+  }, [settings?.allowed_couriers]);
+  const itemCourierValues = React.useMemo(() => {
+    const lists = (selectedLines ?? [])
+      .map((line) =>
+        normalizeSettingListUpper(line.variant.allowed_couriers ?? null),
+      )
+      .filter((list) => list.length > 0);
+    if (!lists.length) return [];
+    const intersection = intersectLists(lists);
+    return intersection.filter(
+      (value): value is ShippingMethod =>
+        value === "LBC" ||
+        value === "JNT" ||
+        value === "LALAMOVE" ||
+        value === "PICKUP",
+    );
+  }, [selectedLines]);
+  const courierRestricted = allowedCourierValues.length > 0;
+  const itemCourierRestricted = itemCourierValues.length > 0;
+  const allowedCourierSet = React.useMemo(
+    () => new Set(allowedCourierValues),
+    [allowedCourierValues],
+  );
+  const itemCourierSet = React.useMemo(
+    () => new Set(itemCourierValues),
+    [itemCourierValues],
+  );
+  const availableShippingMethods = React.useMemo(() => {
+    let base = [...SHIPPING_METHODS];
+    if (courierRestricted) {
+      base = base.filter((method) => allowedCourierSet.has(method));
+    }
+    if (itemCourierRestricted) {
+      base = base.filter((method) => itemCourierSet.has(method));
+    }
+    const restrictionsActive = courierRestricted || itemCourierRestricted;
+    if (!base.length && restrictionsActive) return [];
+    const normalized = base.length ? base : [...SHIPPING_METHODS];
+    if (hasLalamoveOnly) {
+      return normalized.includes("LALAMOVE") ? (["LALAMOVE"] as ShippingMethod[]) : [];
+    }
+    return normalized;
+  }, [
+    courierRestricted,
+    allowedCourierSet,
+    itemCourierRestricted,
+    itemCourierSet,
+    hasLalamoveOnly,
+  ]);
+  const lalamoveRequiredButDisabled =
+    hasLalamoveOnly && !availableShippingMethods.includes("LALAMOVE");
+
+  const allowedLbcPackages = React.useMemo(() => {
+    const raw = normalizeSettingListUpper(
+      settings?.allowed_lbc_packages ?? null,
+    );
+    const unique = Array.from(new Set(raw));
+    return unique.filter(
+      (value): value is LbcPackage =>
+        value === "N_SAKTO" || value === "MINIBOX" || value === "SMALL_BOX",
+    );
+  }, [settings?.allowed_lbc_packages]);
+  const itemLbcPackages = React.useMemo(() => {
+    const lists = (selectedLines ?? [])
+      .map((line) =>
+        normalizeSettingListUpper(line.variant.allowed_lbc_packages ?? null),
+      )
+      .filter((list) => list.length > 0);
+    if (!lists.length) return [];
+    const intersection = intersectLists(lists);
+    return intersection.filter(
+      (value): value is LbcPackage =>
+        value === "N_SAKTO" || value === "MINIBOX" || value === "SMALL_BOX",
+    );
+  }, [selectedLines]);
+  const allowedLbcSet = React.useMemo(
+    () => new Set(allowedLbcPackages),
+    [allowedLbcPackages],
+  );
+  const itemLbcSet = React.useMemo(() => new Set(itemLbcPackages), [itemLbcPackages]);
+  const lbcRestrictionsActive =
+    allowedLbcPackages.length > 0 || itemLbcPackages.length > 0;
+
+  const allowedJntPouches = React.useMemo(() => {
+    const raw = normalizeSettingListUpper(
+      settings?.allowed_jnt_pouches ?? null,
+    );
+    const unique = Array.from(new Set(raw));
+    return unique.filter(
+      (value): value is JntPouch =>
+        value === "SMALL" || value === "MEDIUM",
+    );
+  }, [settings?.allowed_jnt_pouches]);
+  const itemJntPouches = React.useMemo(() => {
+    const lists = (selectedLines ?? [])
+      .map((line) =>
+        normalizeSettingListUpper(line.variant.allowed_jnt_pouches ?? null),
+      )
+      .filter((list) => list.length > 0);
+    if (!lists.length) return [];
+    const intersection = intersectLists(lists);
+    return intersection.filter(
+      (value): value is JntPouch => value === "SMALL" || value === "MEDIUM",
+    );
+  }, [selectedLines]);
+  const itemJntSet = React.useMemo(() => new Set(itemJntPouches), [itemJntPouches]);
+  const jntRestrictionsActive =
+    allowedJntPouches.length > 0 || itemJntPouches.length > 0;
+  const effectiveJntPouches = React.useMemo(() => {
+    if (!jntRestrictionsActive) return [];
+    const base = allowedJntPouches.length
+      ? allowedJntPouches
+      : (["SMALL", "MEDIUM"] as JntPouch[]);
+    if (!itemJntPouches.length) return base;
+    return base.filter((pouch) => itemJntSet.has(pouch));
+  }, [jntRestrictionsActive, allowedJntPouches, itemJntPouches.length, itemJntSet]);
 
   React.useEffect(() => {
-    if (hasLalamoveOnly && shippingMethod !== "LALAMOVE") {
-      setShippingMethod("LALAMOVE");
+    if (!availableShippingMethods.length) return;
+    if (!availableShippingMethods.includes(shippingMethod)) {
+      setShippingMethod(availableShippingMethods[0]);
     }
-  }, [hasLalamoveOnly, shippingMethod]);
+  }, [availableShippingMethods, shippingMethod]);
 
   const lbcFitMap = React.useMemo(
     () => ({
@@ -1362,8 +1549,23 @@ function CheckoutContent() {
     if (lbcFitMap.N_SAKTO) allowed.push("N_SAKTO");
     if (lbcFitMap.MINIBOX) allowed.push("MINIBOX");
     if (lbcFitMap.SMALL_BOX) allowed.push("SMALL_BOX");
-    return allowed;
-  }, [lbcFitMap]);
+    if (!lbcRestrictionsActive) return allowed;
+    let filtered = allowed;
+    if (allowedLbcPackages.length) {
+      filtered = filtered.filter((pack) => allowedLbcSet.has(pack));
+    }
+    if (itemLbcPackages.length) {
+      filtered = filtered.filter((pack) => itemLbcSet.has(pack));
+    }
+    return filtered;
+  }, [
+    lbcFitMap,
+    lbcRestrictionsActive,
+    allowedLbcSet,
+    allowedLbcPackages.length,
+    itemLbcPackages.length,
+    itemLbcSet,
+  ]);
 
   React.useEffect(() => {
     if (shippingMethod !== "LBC") return;
@@ -1376,8 +1578,24 @@ function CheckoutContent() {
   const shippingMeta = React.useMemo(() => {
     const counts = shipCounts;
 
+    if (!availableShippingMethods.length) {
+      return {
+        ok: false as const,
+        error: "No shipping methods available for the selected items.",
+      };
+    }
+
     if (shippingMethod === "JNT") {
-      const rec = recommendJntPouch(counts);
+      if (jntRestrictionsActive && !effectiveJntPouches.length) {
+        return {
+          ok: false as const,
+          error: "J&T pouch restrictions do not fit this cart.",
+        };
+      }
+      const rec = recommendAllowedJntPouch(
+        counts,
+        jntRestrictionsActive ? effectiveJntPouches : allowedJntPouches
+      );
       if (!rec.ok) return { ok: false as const, error: rec.reason };
       return {
         ok: true as const,
@@ -1388,13 +1606,25 @@ function CheckoutContent() {
     }
 
     if (shippingMethod === "LBC") {
+      if (lbcRestrictionsActive && !lbcAllowedPacks.length) {
+        return {
+          ok: false as const,
+          error: "LBC package restrictions do not fit this cart.",
+        };
+      }
       const pack = lbcPackageChoice;
-      if (lbcFitMap[pack]) {
+      if (lbcAllowedPacks.includes(pack) && lbcFitMap[pack]) {
         return {
           ok: true as const,
           label: `LBC ${pack.replaceAll("_", " ")}`,
           fee: lbcFee(pack, region),
           pack,
+        };
+      }
+      if (lbcAllowedPacks.length) {
+        return {
+          ok: false as const,
+          error: "Selected LBC package is not available for this cart.",
         };
       }
       const rec = recommendLbcPackage(counts);
@@ -1420,7 +1650,19 @@ function CheckoutContent() {
     }
 
     return { ok: true as const, label: "Lalamove", fee: 0, pack: null };
-  }, [shipCounts, shippingMethod, region, lbcFitMap, lbcPackageChoice]);
+  }, [
+    shipCounts,
+    shippingMethod,
+    region,
+    lbcFitMap,
+    lbcPackageChoice,
+    lbcAllowedPacks,
+    lbcRestrictionsActive,
+    allowedJntPouches,
+    jntRestrictionsActive,
+    effectiveJntPouches,
+    availableShippingMethods,
+  ]);
 
   // ✅ COP => shipping fee is paid at branch, so DO NOT include shipping fee in total
   const fees = React.useMemo(() => {
@@ -1632,6 +1874,10 @@ function CheckoutContent() {
       return setMsg(
         "Some items are sold out or exceed available stock. Please adjust your cart.",
       );
+
+    if (!shippingMeta.ok) {
+      return setMsg((shippingMeta as any).error ?? "Shipping option is unavailable.");
+    }
 
     const sanitizedPhone = sanitizePhone(phone);
     if (!sanitizedPhone) return setMsg("Please fill in Contact Number.");
@@ -1959,16 +2205,11 @@ function CheckoutContent() {
                   setShippingMethod(e.target.value as ShippingMethod)
                 }
               >
-                <option value="LBC" disabled={hasLalamoveOnly}>
-                  LBC Pickup
-                </option>
-                <option value="JNT" disabled={hasLalamoveOnly}>
-                  J&amp;T
-                </option>
-                <option value="LALAMOVE">Lalamove</option>
-                <option value="PICKUP" disabled={hasLalamoveOnly}>
-                  Store
-                </option>
+                {availableShippingMethods.map((method) => (
+                  <option key={method} value={method}>
+                    {SHIPPING_METHOD_LABELS[method]}
+                  </option>
+                ))}
               </Select>
 
               <Select
@@ -1982,7 +2223,12 @@ function CheckoutContent() {
             </div>
             {hasLalamoveOnly ? (
               <div className="text-xs text-amber-200">
-                Diorama shipping class requires Lalamove delivery.
+                Figures &amp; Diorama class requires Lalamove delivery.
+              </div>
+            ) : null}
+            {lalamoveRequiredButDisabled ? (
+              <div className="text-xs text-red-200">
+                Lalamove is required for these items but is disabled in Settings.
               </div>
             ) : null}
 
@@ -2352,6 +2598,11 @@ function CheckoutContent() {
               ) : null}
             </div>
 
+            {!shippingMeta.ok ? (
+              <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
+                {(shippingMeta as any).error ?? "Shipping option is unavailable."}
+              </div>
+            ) : null}
             {shippingMeta.ok && (shippingMeta as any).warning ? (
               <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-100">
                 {(shippingMeta as any).warning}

@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { Button } from "@/components/ui/Button";
-import type { ShipClass } from "@/lib/shipping/config";
+import type { ShipClass, JntPouch, LbcPackage } from "@/lib/shipping/config";
 
 const PICKUP_DAYS = [
   { key: "MON", label: "Monday" },
@@ -25,6 +25,24 @@ const FREE_SHIPPING_COURIERS = [
   { value: "LALAMOVE", label: "Lalamove" },
 ] as const;
 
+const SHIPPING_METHOD_OPTIONS = [
+  { value: "LBC", label: "LBC" },
+  { value: "JNT", label: "J&T" },
+  { value: "LALAMOVE", label: "Lalamove" },
+  { value: "PICKUP", label: "Store pickup" },
+] as const;
+
+const LBC_PACKAGE_OPTIONS: Array<{ value: LbcPackage; label: string }> = [
+  { value: "N_SAKTO", label: "N-Sakto pouch" },
+  { value: "MINIBOX", label: "Mini Box" },
+  { value: "SMALL_BOX", label: "Small Box" },
+];
+
+const JNT_POUCH_OPTIONS: Array<{ value: JntPouch; label: string }> = [
+  { value: "SMALL", label: "Small pouch" },
+  { value: "MEDIUM", label: "Medium pouch" },
+];
+
 const SHIP_CLASS_OPTIONS: ShipClass[] = [
   "MINI_GT",
   "KAIDO",
@@ -37,7 +55,7 @@ const SHIP_CLASS_OPTIONS: ShipClass[] = [
   "HOT_WHEELS_PREMIUM",
   "LOOSE_NO_BOX",
   "LALAMOVE",
-  "DIORAMA",
+  "FIGURES_DIORAMA",
 ];
 
 type PickupDayKey = (typeof PICKUP_DAYS)[number]["key"];
@@ -125,6 +143,8 @@ function formatShipClassLabel(value: string) {
   switch (value) {
     case "ACRYLIC_TRUE_SCALE":
       return "Acrylic True-Scale";
+    case "FIGURES_DIORAMA":
+      return "Figures & Diorama";
     case "HOT_WHEELS_MAINLINE":
       return "Hot Wheels Mainline";
     case "HOT_WHEELS_PREMIUM":
@@ -155,6 +175,9 @@ export default function AdminSettingsPage() {
   const [freeShippingThreshold, setFreeShippingThreshold] = React.useState("");
   const [freeShippingCouriers, setFreeShippingCouriers] = React.useState<string[]>([]);
   const [freeShippingShipClasses, setFreeShippingShipClasses] = React.useState<ShipClass[]>([]);
+  const [allowedCouriers, setAllowedCouriers] = React.useState<string[]>([]);
+  const [allowedLbcPackages, setAllowedLbcPackages] = React.useState<LbcPackage[]>([]);
+  const [allowedJntPouches, setAllowedJntPouches] = React.useState<JntPouch[]>([]);
   const [protectorStockMainline, setProtectorStockMainline] = React.useState("");
   const [protectorStockPremium, setProtectorStockPremium] = React.useState("");
   const [pickupSchedule, setPickupSchedule] = React.useState<PickupScheduleState>(
@@ -170,6 +193,18 @@ export default function AdminSettingsPage() {
   );
   const freeShippingShipClassSet = React.useMemo(
     () => new Set(SHIP_CLASS_OPTIONS),
+    []
+  );
+  const shippingMethodSet = React.useMemo(
+    () => new Set<string>(SHIPPING_METHOD_OPTIONS.map((c) => c.value)),
+    []
+  );
+  const lbcPackageSet = React.useMemo(
+    () => new Set<string>(LBC_PACKAGE_OPTIONS.map((p) => p.value)),
+    []
+  );
+  const jntPouchSet = React.useMemo(
+    () => new Set<string>(JNT_POUCH_OPTIONS.map((p) => p.value)),
     []
   );
 
@@ -201,6 +236,18 @@ export default function AdminSettingsPage() {
         (value) => freeShippingShipClassSet.has(value as ShipClass)
       ) as ShipClass[];
       setFreeShippingShipClasses(shipClassValues);
+      const allowedCourierValues = normalizeList((data as any).allowed_couriers);
+      setAllowedCouriers(
+        allowedCourierValues.filter((value) => shippingMethodSet.has(value))
+      );
+      const allowedLbcValues = normalizeList((data as any).allowed_lbc_packages).filter(
+        (value) => lbcPackageSet.has(value)
+      ) as LbcPackage[];
+      setAllowedLbcPackages(allowedLbcValues);
+      const allowedJntValues = normalizeList((data as any).allowed_jnt_pouches).filter(
+        (value) => jntPouchSet.has(value)
+      ) as JntPouch[];
+      setAllowedJntPouches(allowedJntValues);
       const fallbackProtector =
         data.protector_stock !== null && data.protector_stock !== undefined
           ? Number(data.protector_stock)
@@ -270,6 +317,9 @@ export default function AdminSettingsPage() {
       free_shipping_ship_classes: freeShippingShipClasses.length
         ? freeShippingShipClasses
         : null,
+      allowed_couriers: allowedCouriers.length ? allowedCouriers : null,
+      allowed_lbc_packages: allowedLbcPackages.length ? allowedLbcPackages : null,
+      allowed_jnt_pouches: allowedJntPouches.length ? allowedJntPouches : null,
       protector_stock_mainline: protectorMainlineValue,
       protector_stock_premium: protectorPremiumValue,
       protector_stock: protectorMainlineValue + protectorPremiumValue,
@@ -419,7 +469,7 @@ export default function AdminSettingsPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <div className="text-sm text-white/70">Eligible ship classes</div>
+              <div className="text-sm text-white/70">Eligible classes</div>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {SHIP_CLASS_OPTIONS.map((shipClass) => (
                   <Checkbox
@@ -434,6 +484,67 @@ export default function AdminSettingsPage() {
                   />
                 ))}
               </div>
+            </div>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+            <div className="font-semibold">Shipping Restrictions</div>
+            <div className="text-sm text-white/60">
+              Limit which couriers and containers are available at checkout. Leave
+              empty to allow all.
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm text-white/70">Allowed couriers</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {SHIPPING_METHOD_OPTIONS.map((method) => (
+                  <Checkbox
+                    key={method.value}
+                    checked={allowedCouriers.includes(method.value)}
+                    onChange={(checked) =>
+                      setAllowedCouriers((prev) =>
+                        toggleListValue(prev, method.value, checked)
+                      )
+                    }
+                    label={method.label}
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm text-white/70">Allowed LBC packages</div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {LBC_PACKAGE_OPTIONS.map((pack) => (
+                  <Checkbox
+                    key={pack.value}
+                    checked={allowedLbcPackages.includes(pack.value)}
+                    onChange={(checked) =>
+                      setAllowedLbcPackages((prev) =>
+                        toggleListValue(prev, pack.value, checked)
+                      )
+                    }
+                    label={pack.label}
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm text-white/70">Allowed J&amp;T pouches</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {JNT_POUCH_OPTIONS.map((pouch) => (
+                  <Checkbox
+                    key={pouch.value}
+                    checked={allowedJntPouches.includes(pouch.value)}
+                    onChange={(checked) =>
+                      setAllowedJntPouches((prev) =>
+                        toggleListValue(prev, pouch.value, checked)
+                      )
+                    }
+                    label={pouch.label}
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="text-xs text-white/50">
+              Figures &amp; Diorama items always require Lalamove delivery.
             </div>
           </div>
           <div className="grid gap-3 md:grid-cols-2">

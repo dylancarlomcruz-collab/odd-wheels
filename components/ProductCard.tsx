@@ -6,7 +6,7 @@ import { ChevronDown, ChevronLeft, ShoppingCart, X } from "lucide-react";
 import { recordRecentView } from "@/lib/recentViews";
 import { normalizeSearchTerm } from "@/lib/search";
 import { formatConditionLabel } from "@/lib/conditions";
-import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
+import { parseImageCrop } from "@/lib/imageCrop";
 import { applyImageFallback, buildSrcSet, getOptimizedImageUrl } from "@/lib/imageUrl";
 import { getOptionPricing, getProductEffectiveRange } from "@/lib/pricing";
 import { formatTitle } from "@/lib/text";
@@ -41,26 +41,37 @@ type PreviewEntry = {
 const COMPACT_CONDITION_LABELS: Record<string, string> = {
   sealed: "SEALED",
   resealed: "RESEAL",
-  near_mint: "NM",
+  near_mint: "NEAR MINT",
   unsealed: "UNSEAL",
   with_issues: "ISSUES",
   sealed_blister: "BLISTER",
   unsealed_blister: "BLISTER",
   blistered: "BLISTER",
 };
-const TRANSPARENT_PIXEL =
-  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+const SUPABASE_PUBLIC_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 
 function getCompactConditionLabel(
   value: string | null | undefined,
-  shipClass?: string | null
+  _shipClass?: string | null
 ) {
   const key = String(value ?? "").toLowerCase();
   const label =
     COMPACT_CONDITION_LABELS[key] ?? String(value ?? "-").toUpperCase();
-  const suffix =
-    String(shipClass ?? "").toUpperCase() === "DIORAMA" ? "DIO" : null;
-  return suffix ? `${label} ${suffix}` : label;
+  return label;
+}
+
+function normalizeImageUrl(raw: string | null | undefined) {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return "";
+  if (trimmed.startsWith("data:")) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  const base = SUPABASE_PUBLIC_URL.replace(/\/$/, "");
+  if (!base) return trimmed;
+  if (trimmed.startsWith("/storage/") || trimmed.startsWith("storage/")) {
+    const path = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+    return `${base}${path}`;
+  }
+  return trimmed;
 }
 
 
@@ -140,8 +151,6 @@ export default function ProductCard({
   const issueTouchStartY = React.useRef<number | null>(null);
   const previewScrollRef = React.useRef<HTMLDivElement | null>(null);
   const cardRef = React.useRef<HTMLDivElement | null>(null);
-  const imageRef = React.useRef<HTMLDivElement | null>(null);
-  const [cardImageReady, setCardImageReady] = React.useState(false);
   const loggedPreviewIds = React.useRef(new Set<string>());
 
   const selected = React.useMemo(
@@ -174,25 +183,46 @@ export default function ProductCard({
     previewPricing?.hasSale ? peso(previewSelected?.price ?? 0) : null;
 
   const cardImages = React.useMemo(() => {
-    const raw = (product.image_urls ?? []).filter(Boolean) as string[];
+    const raw = (product.image_urls ?? [])
+      .map(normalizeImageUrl)
+      .filter(Boolean) as string[];
     const list = raw.length ? raw.slice() : [];
-    if (product.image_url && !list.includes(product.image_url)) {
-      list.unshift(product.image_url);
+    const primary = normalizeImageUrl(product.image_url);
+    if (primary) {
+      const primaryBase = parseImageCrop(primary).src;
+      const hasMatch = list.some(
+        (url) => parseImageCrop(url).src === primaryBase
+      );
+      if (!hasMatch) {
+        list.push(primary);
+      }
     }
     return list;
   }, [product.image_url, product.image_urls]);
 
   const previewImages = React.useMemo(() => {
-    const raw = (previewProduct.image_urls ?? []).filter(Boolean) as string[];
+    const raw = (previewProduct.image_urls ?? [])
+      .map(normalizeImageUrl)
+      .filter(Boolean) as string[];
     const list = raw.length ? raw.slice() : [];
-    if (previewProduct.image_url && !list.includes(previewProduct.image_url)) {
-      list.unshift(previewProduct.image_url);
+    const primary = normalizeImageUrl(previewProduct.image_url);
+    if (primary) {
+      const primaryBase = parseImageCrop(primary).src;
+      const hasMatch = list.some(
+        (url) => parseImageCrop(url).src === primaryBase
+      );
+      if (!hasMatch) {
+        list.push(primary);
+      }
     }
     return list;
   }, [previewProduct.image_url, previewProduct.image_urls]);
 
   const issueImages = React.useMemo(
-    () => (selected?.issue_photo_urls ?? []).filter(Boolean) as string[],
+    () =>
+      (selected?.issue_photo_urls ?? [])
+        .map(normalizeImageUrl)
+        .filter(Boolean) as string[],
     [selected?.issue_photo_urls],
   );
   const previewIsOut = !previewSelected || (previewSelected.qty ?? 0) <= 0;
@@ -239,7 +269,7 @@ export default function ProductCard({
     : displayPrice;
   const wideStrikePrice = hasMultipleVariants ? null : strikePrice;
   const activeImage = previewImages[activeIndex] ?? "";
-  const cardImage = product.image_url ?? cardImages[0] ?? null;
+  const cardImage = cardImages[0] ?? normalizeImageUrl(product.image_url) ?? null;
   const parsedCardImage = React.useMemo(
     () => (cardImage ? parseImageCrop(cardImage) : null),
     [cardImage]
@@ -248,8 +278,8 @@ export default function ProductCard({
     () =>
       parsedCardImage
         ? getOptimizedImageUrl(parsedCardImage.src, {
-            width: 640,
-            quality: 70,
+            width: 480,
+            quality: 100,
             format: "webp",
           })
         : "",
@@ -258,19 +288,15 @@ export default function ProductCard({
   const cardImageSrcSet = React.useMemo(
     () =>
       parsedCardImage
-        ? buildSrcSet(parsedCardImage.src, [240, 320, 480, 640], {
-            quality: 70,
+        ? buildSrcSet(parsedCardImage.src, [200, 320, 480], {
+            quality: 100,
             format: "webp",
           })
         : "",
     [parsedCardImage]
   );
-  const cardImageFinalSrc = cardImageReady
-    ? cardImageSrc || parsedCardImage?.src || ""
-    : TRANSPARENT_PIXEL;
-  const cardImageFinalSrcSet = cardImageReady
-    ? cardImageSrcSet || undefined
-    : undefined;
+  const cardImageFinalSrc = cardImageSrc || parsedCardImage?.src || "";
+  const cardImageFinalSrcSet = cardImageSrcSet || undefined;
   const activeImageSrc = React.useMemo(
     () =>
       activeImage
@@ -337,7 +363,6 @@ export default function ProductCard({
   const onlyOneLeft = (selected?.qty ?? 0) === 1;
   const conditionLabel = formatConditionLabel(selected?.condition ?? "-", {
     upper: true,
-    shipClass: selected?.ship_class,
   });
   const compactConditionLabel = getCompactConditionLabel(
     selected?.condition ?? "-",
@@ -461,56 +486,7 @@ export default function ProductCard({
     setIssueIndex(0);
   }, [selectedId]);
 
-  React.useEffect(() => {
-    setCardImageReady(false);
-  }, [product.key]);
-
-  React.useEffect(() => {
-    const node = imageRef.current;
-    if (!node) return;
-    if (typeof IntersectionObserver === "undefined") {
-      setCardImageReady(true);
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          setCardImageReady(true);
-          observer.disconnect();
-          break;
-        }
-      },
-      { root: null, rootMargin: "300px 0px", threshold: 0.01 }
-    );
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [product.key]);
-
-  React.useEffect(() => {
-    const node = cardRef.current;
-    if (!node) return;
-
-    if (typeof IntersectionObserver === "undefined") {
-      void logProductPreviewOnce(product.key);
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          observer.disconnect();
-          void logProductPreviewOnce(product.key);
-          break;
-        }
-      },
-      { root: null, rootMargin: "0px 0px -20% 0px", threshold: 0.25 }
-    );
-
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [product.key]);
+  // Preview/view events are only recorded on explicit user clicks (openPreview/pushPreview).
 
   function closePreview() {
     setIsOpen(false);
@@ -778,7 +754,9 @@ export default function ProductCard({
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-white/60">Selected condition</span>
                         <span className="text-white/90">
-                          {previewSelected?.condition ?? "-"}
+                          {formatConditionLabel(previewSelected?.condition ?? "-", {
+                            upper: true,
+                          })}
                         </span>
                       </div>
                       <div className="flex items-center justify-between text-sm">
@@ -886,8 +864,9 @@ export default function ProductCard({
                     </div>
                     <div className="mt-3 flex gap-3 overflow-x-auto pb-2">
                       {relatedItems.map((item) => {
-                        const image =
-                          item.image_url ?? item.image_urls?.[0] ?? null;
+                        const image = normalizeImageUrl(
+                          item.image_url ?? item.image_urls?.[0] ?? null
+                        );
                         const defaultOption = item.options[0];
                         const canAdd = Boolean(
                           onRelatedAddToCart &&
@@ -988,7 +967,9 @@ export default function ProductCard({
                   <div className="min-w-0">
                     <div className="text-[11px] text-white/50">Selected</div>
                     <div className="text-sm text-white/80 line-clamp-1">
-                      {previewSelected?.condition ?? "-"}
+                      {formatConditionLabel(previewSelected?.condition ?? "-", {
+                        upper: true,
+                      })}
                     </div>
                   </div>
                   <div className="text-price text-sm whitespace-nowrap">
@@ -1042,7 +1023,9 @@ export default function ProductCard({
                       {displayTitle}
                     </div>
                     <div className="text-xs text-white/60 sm:text-sm">
-                      {selected?.condition ?? "-"}
+                      {formatConditionLabel(selected?.condition ?? "-", {
+                        upper: true,
+                      })}
                     </div>
                   </div>
                   <button
@@ -1253,9 +1236,8 @@ export default function ProductCard({
                   srcSet={mobilePrimarySrcSet}
                   sizes="90vw"
                   alt={displayTitle}
-                  className="h-full w-full object-contain"
-                  style={parsedCardImage ? cropStyle(parsedCardImage.crop) : undefined}
-                  loading="lazy"
+                  className="h-full w-full object-cover object-center"
+                  loading="eager"
                   decoding="async"
                   onError={(e) =>
                     applyImageFallback(e.currentTarget, mobilePrimaryImage)
@@ -1320,7 +1302,7 @@ export default function ProductCard({
           aria-label={`Preview ${displayTitle}`}
         >
           {parsedCardImage ? (
-            <div ref={imageRef} className="h-full w-full bg-neutral-50">
+            <div className="h-full w-full bg-neutral-50">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={cardImageFinalSrc}
@@ -1328,14 +1310,10 @@ export default function ProductCard({
                 sizes="(min-width: 1024px) 240px, (min-width: 640px) 200px, 45vw"
                 alt={displayTitle}
                 className="h-full w-full object-contain"
-                style={cropStyle(parsedCardImage.crop)}
-                loading="lazy"
+                loading="eager"
                 decoding="async"
-                onError={
-                  cardImageReady
-                    ? (e) =>
-                        applyImageFallback(e.currentTarget, parsedCardImage.src)
-                    : undefined
+                onError={(e) =>
+                  applyImageFallback(e.currentTarget, parsedCardImage.src)
                 }
               />
             </div>

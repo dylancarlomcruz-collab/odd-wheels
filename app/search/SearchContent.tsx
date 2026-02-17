@@ -5,6 +5,7 @@ import { useSearchProducts } from "@/hooks/useSearchProducts";
 import ProductCard from "@/components/ProductCard";
 import * as React from "react";
 import { supabase } from "@/lib/supabase/browser";
+import { formatConditionLabel } from "@/lib/conditions";
 import { useCart } from "@/hooks/useCart";
 import { toast } from "@/components/ui/toast";
 import { buildSearchOr } from "@/lib/search";
@@ -130,9 +131,15 @@ export default function SearchContent() {
   const conditionOptions = React.useMemo(() => {
     const set = new Set<string>();
     products.forEach((p) => {
-      p.options?.forEach((o) => set.add(o.condition));
+      p.options?.forEach((o) => set.add(String(o.condition ?? "")));
     });
-    return Array.from(set).sort();
+    return Array.from(set)
+      .filter(Boolean)
+      .sort()
+      .map((value) => ({
+        value,
+        label: formatConditionLabel(value),
+      }));
   }, [products]);
 
   const scaleOptions = React.useMemo(() => {
@@ -317,7 +324,7 @@ export default function SearchContent() {
       const baseToast = {
         title: product.title,
         image_url: product.image_url,
-        variant: option.condition,
+        variant: formatConditionLabel(option.condition, { upper: true }),
         price: effectivePrice,
         action: { label: "View cart", href: "/cart" },
       };
@@ -413,8 +420,8 @@ export default function SearchContent() {
           >
             <option value="all">All conditions</option>
             {conditionOptions.map((condition) => (
-              <option key={condition} value={condition}>
-                {condition}
+              <option key={condition.value} value={condition.value}>
+                {condition.label}
               </option>
             ))}
           </Select>

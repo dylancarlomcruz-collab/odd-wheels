@@ -13,6 +13,7 @@ export type NormalizedLookupFields = {
 
 const BRAND_ALIASES: Array<{ canonical: string; aliases: string[] }> = [
   { canonical: "Mini GT", aliases: ["mini gt", "minigt"] },
+  { canonical: "Mini GT", aliases: ["tsm", "tsm models", "tsm-models", "tsmmodels"] },
   { canonical: "Kaido House", aliases: ["kaido house", "kaido"] },
   { canonical: "Inno64", aliases: ["inno64", "inno 64", "inno"] },
   { canonical: "Tarmac", aliases: ["tarmac", "tarmac works", "tarmacworks"] },
@@ -26,12 +27,72 @@ const BRAND_ALIASES: Array<{ canonical: string; aliases: string[] }> = [
 ];
 
 const COLOR_WORDS = [
-  "black","white","silver","grey","gray","red","blue","green","yellow","orange","purple","pink","gold","brown","beige","tan",
-  "chrome","matte","carbon","metallic","pearl",
+  "black",
+  "white",
+  "silver",
+  "grey",
+  "gray",
+  "red",
+  "blue",
+  "green",
+  "yellow",
+  "orange",
+  "purple",
+  "pink",
+  "gold",
+  "brown",
+  "beige",
+  "tan",
+  "teal",
+  "aqua",
+  "turquoise",
+  "bronze",
+  "copper",
+  "navy",
+  "ivory",
+  "cream",
+];
+
+const COLOR_MODIFIERS = [
+  "light",
+  "dark",
+  "matte",
+  "metallic",
+  "pearl",
+  "chrome",
+  "carbon",
+  "satin",
+  "gloss",
+  "glossy",
+  "candy",
+  "smoke",
+  "smoked",
+  "clear",
+];
+
+const COLOR_IGNORE_WORDS = ["diecast", "car", "model", "models"];
+
+const COLOR_PHRASES = [
+  "gun metal",
+  "gunmetal",
+  "midnight blue",
+  "racing green",
+  "british racing green",
+  "sky blue",
+  "baby blue",
+  "ice blue",
+  "dark blue",
+  "light blue",
+  "pearl white",
+  "pearl black",
+  "matte black",
+  "matte white",
+  "satin black",
+  "satin white",
 ];
 
 export function inferFieldsFromTitle(titleRaw: string): InferredFields {
-  const title = stripMarketplaceMentions(titleRaw ?? "").trim();
+  let title = stripMarketplaceMentions(titleRaw ?? "").trim();
   if (!title) return {};
 
   const lower = title.toLowerCase();
@@ -53,7 +114,10 @@ export function inferFieldsFromTitle(titleRaw: string): InferredFields {
   const bracket = title.match(/\[(.+?)\]/) || title.match(/\(([^)]+)\)/);
   if (bracket?.[1]) {
     const txt = bracket[1].trim();
-    if (txt && txt.length <= 40) color_style = txt;
+    if (txt && txt.length <= 40) {
+      const cleanedBracket = cleanupLookupTitle(txt);
+      if (cleanedBracket) color_style = cleanedBracket;
+    }
   }
 
   if (!color_style) {
@@ -86,12 +150,37 @@ export function inferFieldsFromTitle(titleRaw: string): InferredFields {
   // Remove common filler terms
   cleaned = cleaned
     .replace(/\b(lbwk|liberty walk|works|collection|limited|edition|model|diecast|chase|version|ver\.?|v\d+)\b/gi, " ")
+    .replace(/\btsm\s*-?\s*models?\b/gi, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
 
+  cleaned = cleaned.replace(LBWK_PATTERN, " LBWK ");
+  cleaned = cleanupLookupTitle(cleaned);
+  const extractedModel = extractModelFromText(cleaned);
+  if (extractedModel.model) {
+    cleaned = extractedModel.cleaned;
+  }
+
+  const extracted = extractColorsAndStrip(cleaned);
+  cleaned = extracted.cleaned || cleaned;
+  if (extracted.colors.length) {
+    if (color_style) {
+      const existing = color_style.toLowerCase();
+      const extra = extracted.colors.filter(
+        (c) => !existing.includes(c.toLowerCase())
+      );
+      if (extra.length) {
+        color_style = `${color_style} / ${extra.join(" / ")}`;
+      }
+    } else {
+      color_style = extracted.colors.join(" / ");
+    }
+  }
+
   // If title still long, take first ~8 words as a "model" candidate
   const words = cleaned.split(/\s+/).filter(Boolean);
-  const model = words.length ? words.slice(0, 8).join(" ") : undefined;
+  const model =
+    extractedModel.model ?? (words.length ? words.slice(0, 8).join(" ") : undefined);
 
   return {
     brand,
@@ -262,6 +351,11 @@ export function normalizeLookupTitle(
   return `${normalizedBrand} ${withoutBrand}`.replace(/\s{2,}/g, " ").trim();
 }
 
+export function normalizeLookupField(value: string | null | undefined) {
+  const cleaned = cleanupLookupTitle(String(value ?? ""));
+  return cleaned.replace(LBWK_PATTERN, "LBWK").replace(/\s{2,}/g, " ").trim();
+}
+
 function escapeRegExp(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -274,8 +368,129 @@ function capitalize(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+function titleCaseWords(value: string) {
+  return String(value ?? "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => capitalize(word.toLowerCase()))
+    .join(" ");
+}
+
+const MODEL_EXTRACT_RULES: Array<{
+  key: string;
+  pattern: RegExp;
+  model: string;
+  aliases?: string[];
+}> = [
+  {
+    key: "nissan_gtr_r35",
+    pattern: /\b(?:nissan\s*)?g[t\-]?\s*r\s*35\b|\br35\b/i,
+    model: "Nissan GTR R35",
+    aliases: ["Nissan GT-R R35", "Nissan GTR (R35)", "GTR R35", "GT-R R35"],
+  },
+];
+
+const LBWK_PATTERN = /\b(lbwk|lb\s*works|liberty\s*walk)\b/gi;
+
+function extractColorsAndStrip(input: string) {
+  let text = String(input ?? "");
+  const colors: string[] = [];
+
+  const addColor = (value: string) => {
+    const pretty = titleCaseWords(value.replace(/\s+/g, " ").trim());
+    if (!pretty) return;
+    if (!colors.find((c) => c.toLowerCase() === pretty.toLowerCase())) {
+      colors.push(pretty);
+    }
+  };
+
+  const phrasePattern = new RegExp(
+    `\\b(${COLOR_PHRASES.map((p) => escapeRegExp(p)).join("|")})\\b`,
+    "ig"
+  );
+  text = text.replace(phrasePattern, (match) => {
+    addColor(match);
+    return " ";
+  });
+
+  const baseGroup = COLOR_WORDS.map((c) => escapeRegExp(c)).join("|");
+  const modGroup = COLOR_MODIFIERS.map((c) => escapeRegExp(c)).join("|");
+  const ignoreGroup = COLOR_IGNORE_WORDS.map((c) => escapeRegExp(c)).join("|");
+  const comboPattern = new RegExp(
+    `\\b(${modGroup})\\s+(${baseGroup})\\b`,
+    "ig"
+  );
+  text = text.replace(comboPattern, (match) => {
+    addColor(match);
+    return " ";
+  });
+
+  const multiPattern = new RegExp(
+    `\\b(${baseGroup})(?:\\s*[\\/\\-]\\s*(${baseGroup}))+\\b`,
+    "ig"
+  );
+  text = text.replace(multiPattern, (match) => {
+    match
+      .split(/[\\/\\-]/)
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .forEach(addColor);
+    return " ";
+  });
+
+  if (ignoreGroup) {
+    const ignorePattern = new RegExp(`\\b(${ignoreGroup})\\b`, "ig");
+    text = text.replace(ignorePattern, " ");
+  }
+  const basePattern = new RegExp(`\\b(${baseGroup})\\b`, "ig");
+  text = text.replace(basePattern, (match) => {
+    addColor(match);
+    return " ";
+  });
+
+  const cleaned = text.replace(/\s{2,}/g, " ").trim();
+  return { cleaned, colors };
+}
+
+function extractModelFromText(input: string) {
+  let text = String(input ?? "");
+  let model: string | undefined;
+  for (const rule of MODEL_EXTRACT_RULES) {
+    if (rule.pattern.test(text)) {
+      model = rule.model;
+      text = text.replace(rule.pattern, " ");
+      if (rule.aliases?.length) {
+        rule.aliases.forEach((alias) => {
+          const aliasPattern = new RegExp(`\\b${escapeRegExp(alias)}\\b`, "ig");
+          text = text.replace(aliasPattern, " ");
+        });
+      }
+      break;
+    }
+  }
+  text = text.replace(/\s{2,}/g, " ").trim();
+  return { model, cleaned: text };
+}
+
 function cleanupLookupTitle(value: string) {
   let out = String(value ?? "");
+  out = out.replace(/\bRHD\b/gi, " ");
+  out = out.replace(/\bLHD\b/gi, " ");
+  out = out.replace(/\bRight\s*Hand\s*Drive\b/gi, " ");
+  out = out.replace(/\bLeft\s*Hand\s*Drive\b/gi, " ");
+  out = out.replace(/\bRight[-\s]*Hand[-\s]*Drive\b/gi, " ");
+  out = out.replace(/\bLeft[-\s]*Hand[-\s]*Drive\b/gi, " ");
+  out = out.replace(/\bHLJ\.?com\b/gi, " ");
+  out = out.replace(/\bebay\.?com\b/gi, " ");
+  out = out.replace(/\bHLJ\b/gi, " ");
+  out = out.replace(/\bEBAY\b/gi, " ");
+  out = out.replace(/\|\s*(?:HLJ\.?com|ebay\.?com)\b/gi, " ");
+  out = out.replace(/\bTSM\s*-?\s*Models?\b/gi, " ");
+  out = out.replace(/\bDiecast\s+Cars?\b/gi, " ");
+  out = out.replace(/\bDiecast\s+Models?\b/gi, " ");
+  out = out.replace(/\bDiecast\s+Car\s+Models?\b/gi, " ");
+  out = out.replace(/\bDiecast\s+Car\b/gi, " ");
+  out = out.replace(/\bDiecast\b/gi, " ");
   out = out.replace(/\b1\s*[:/]\s*64\b/gi, " ");
   out = out.replace(/\(\s*\)/g, " ").replace(/\[\s*\]/g, " ");
   out = out.replace(/\s{2,}/g, " ");

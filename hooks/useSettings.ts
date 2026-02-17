@@ -13,6 +13,9 @@ export type Settings = {
   free_shipping_threshold: number | null;
   free_shipping_couriers: string[] | null;
   free_shipping_ship_classes: string[] | null;
+  allowed_couriers: string[] | null;
+  allowed_lbc_packages: string[] | null;
+  allowed_jnt_pouches: string[] | null;
   pickup_schedule_text: string | null;
   pickup_unavailable: boolean;
   pickup_schedule: Record<string, string[]> | null;

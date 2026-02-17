@@ -23,6 +23,9 @@ export type CartLine = {
     discount_percent?: number | null;
     qty: number;
     ship_class: string | null;
+    allowed_couriers?: string[] | null;
+    allowed_lbc_packages?: string[] | null;
+    allowed_jnt_pouches?: string[] | null;
     product: {
       id: string;
       title: string;
@@ -157,7 +160,7 @@ export function useCart() {
       const { data, error } = await supabase
         .from("product_variants")
         .select(
-          "id,condition,issue_notes,public_notes,price,sale_price,discount_percent,qty,ship_class, product:products(id,title,brand,model,image_urls)"
+          "id,condition,issue_notes,public_notes,price,sale_price,discount_percent,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches, product:products(id,title,brand,model,image_urls)"
         )
         .in("id", variantIds);
 
@@ -206,7 +209,7 @@ export function useCart() {
     const { data, error } = await supabase
       .from("cart_items")
       .select(
-        "id,user_id,variant_id,qty,protector_selected, variant:product_variants(id,condition,issue_notes,public_notes,price,sale_price,discount_percent,qty,ship_class, product:products(id,title,brand,model,image_urls))"
+        "id,user_id,variant_id,qty,protector_selected, variant:product_variants(id,condition,issue_notes,public_notes,price,sale_price,discount_percent,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches, product:products(id,title,brand,model,image_urls))"
       )
       .eq("user_id", user.id)
       .order("created_at", { ascending: false });

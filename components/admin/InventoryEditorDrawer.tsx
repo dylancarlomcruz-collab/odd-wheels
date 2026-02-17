@@ -58,13 +58,40 @@ const SHIP_OPTIONS = [
   "HOT_WHEELS_PREMIUM",
   "LOOSE_NO_BOX",
   "LALAMOVE",
-  "DIORAMA",
+  "FIGURES_DIORAMA",
+];
+const COURIER_OPTIONS = [
+  { value: "LBC", label: "LBC" },
+  { value: "JNT", label: "J&T" },
+  { value: "LALAMOVE", label: "Lalamove" },
+  { value: "PICKUP", label: "Pickup" },
+];
+const LBC_PACKAGE_OPTIONS = [
+  { value: "N_SAKTO", label: "N-Sakto" },
+  { value: "MINIBOX", label: "MiniBox" },
+  { value: "SMALL_BOX", label: "Small Box" },
+];
+const JNT_POUCH_OPTIONS = [
+  { value: "SMALL", label: "Small pouch" },
+  { value: "MEDIUM", label: "Medium pouch" },
 ];
 
 function safeNumber(v: any): number | null {
   if (v === "" || v === null || typeof v === "undefined") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+function normalizeRestrictionList(values?: Array<string | null | undefined> | null) {
+  const cleaned = (values ?? [])
+    .map((value) => String(value ?? "").trim().toUpperCase())
+    .filter(Boolean);
+  return cleaned.length ? Array.from(new Set(cleaned)) : null;
+}
+
+function normalizeShipClass(value?: string | null) {
+  const cleaned = String(value ?? "").trim().toUpperCase();
+  return cleaned ? cleaned : null;
 }
 
 export function InventoryEditorDrawer({
@@ -116,6 +143,13 @@ export function InventoryEditorDrawer({
         ...v,
         issue_photo_urls: Array.isArray(v.issue_photo_urls) ? v.issue_photo_urls : [],
         public_notes: v.public_notes ?? v.issue_notes ?? null,
+        allowed_couriers: Array.isArray(v.allowed_couriers) ? v.allowed_couriers : [],
+        allowed_lbc_packages: Array.isArray(v.allowed_lbc_packages)
+          ? v.allowed_lbc_packages
+          : [],
+        allowed_jnt_pouches: Array.isArray(v.allowed_jnt_pouches)
+          ? v.allowed_jnt_pouches
+          : [],
         _isNew: false,
         _delete: false,
       }))
@@ -359,6 +393,22 @@ export function InventoryEditorDrawer({
     );
   }
 
+  function toggleVariantRestriction(
+    variant: VariantDraft,
+    field:
+      | "allowed_couriers"
+      | "allowed_lbc_packages"
+      | "allowed_jnt_pouches",
+    value: string,
+    checked: boolean
+  ) {
+    const current = Array.isArray(variant[field]) ? variant[field] : [];
+    const next = checked
+      ? Array.from(new Set([...current, value]))
+      : current.filter((item) => item !== value);
+    updateVariant(variant.id, { [field]: next } as Partial<VariantDraft>);
+  }
+
   async function deleteVariant(v: VariantDraft) {
     if (
       !confirm(
@@ -491,6 +541,15 @@ export function InventoryEditorDrawer({
         issue_photo_urls: Array.isArray(base?.issue_photo_urls)
           ? [...(base?.issue_photo_urls ?? [])]
           : [],
+        allowed_couriers: Array.isArray(base?.allowed_couriers)
+          ? [...(base?.allowed_couriers ?? [])]
+          : [],
+        allowed_lbc_packages: Array.isArray(base?.allowed_lbc_packages)
+          ? [...(base?.allowed_lbc_packages ?? [])]
+          : [],
+        allowed_jnt_pouches: Array.isArray(base?.allowed_jnt_pouches)
+          ? [...(base?.allowed_jnt_pouches ?? [])]
+          : [],
         created_at: null,
         _isNew: true,
         _delete: false,
@@ -549,59 +608,75 @@ export function InventoryEditorDrawer({
 
     try {
       const imagesToSave = options?.imagesOverride ?? images;
-      await supabase
-        .from("products")
-        .update({
-          title,
-          brand: brand || null,
-          model: model || null,
-          variation: variation || null,
-          image_urls: imagesToSave,
-          is_active: isActive,
-          created_at: new Date().toISOString(),
-        })
-        .eq("id", productId);
+        const { error: productError } = await supabase
+          .from("products")
+          .update({
+            title,
+            brand: brand || null,
+            model: model || null,
+            variation: variation || null,
+            image_urls: imagesToSave,
+            is_active: isActive,
+            created_at: new Date().toISOString(),
+          })
+          .eq("id", productId);
+
+        if (productError) throw productError;
 
       const existing = variants.filter((v) => !v._isNew && !v._delete);
       const toDelete = variants.filter((v) => v._delete && !v._isNew);
       const toInsert = variants.filter((v) => v._isNew && !v._delete);
 
-      if (existing.length) {
-        await Promise.all(
-          existing.map((v) =>
-            supabase
-              .from("product_variants")
-              .update({
-                condition: v.condition,
-                barcode: v.barcode || null,
-                cost: safeNumber(v.cost),
-                price: safeNumber(v.price) ?? 0,
-                qty: Math.max(0, Math.trunc(safeNumber(v.qty) ?? 0)),
-                ship_class: v.ship_class || null,
-                public_notes:
-                  v.condition === "near_mint"
-                    ? v.public_notes || "Near Mint Condition"
-                    : v.public_notes || null,
-                issue_notes: null,
-                issue_photo_urls:
-                  v.condition === "with_issues"
-                    ? (v.issue_photo_urls?.length ? v.issue_photo_urls : null)
-                    : null,
-              })
-              .eq("id", v.id)
-          )
-        );
-      }
+        if (existing.length) {
+          await Promise.all(
+            existing.map(async (v) => {
+              const { data, error } = await supabase
+                .from("product_variants")
+                .update({
+                  condition: v.condition,
+                  barcode: v.barcode || null,
+                  cost: safeNumber(v.cost),
+                  price: safeNumber(v.price) ?? 0,
+                  qty: Math.max(0, Math.trunc(safeNumber(v.qty) ?? 0)),
+                  ship_class: normalizeShipClass(v.ship_class),
+                  allowed_couriers: normalizeRestrictionList(v.allowed_couriers),
+                  allowed_lbc_packages: normalizeRestrictionList(v.allowed_lbc_packages),
+                  allowed_jnt_pouches: normalizeRestrictionList(v.allowed_jnt_pouches),
+                  public_notes:
+                    v.condition === "near_mint"
+                      ? v.public_notes || "Near Mint Condition"
+                      : v.public_notes || null,
+                  issue_notes: null,
+                  issue_photo_urls:
+                    v.condition === "with_issues"
+                      ? (v.issue_photo_urls?.length ? v.issue_photo_urls : null)
+                      : null,
+                })
+                .eq("id", v.id)
+                .select("id");
 
-      if (toDelete.length) {
-        await supabase
-          .from("product_variants")
-          .delete()
-          .in(
-            "id",
-            toDelete.map((v) => v.id)
+              if (error) throw error;
+              if (!data || data.length === 0) {
+                throw new Error(
+                  `Variant update blocked for ${v.id}. Check staff permissions or ship class constraints.`
+                );
+              }
+              return data;
+            })
           );
-      }
+        }
+
+        if (toDelete.length) {
+          const { error: deleteError } = await supabase
+            .from("product_variants")
+            .delete()
+            .in(
+              "id",
+              toDelete.map((v) => v.id)
+            );
+
+          if (deleteError) throw deleteError;
+        }
 
       if (toInsert.length) {
         const prepared: Array<any> = [];
@@ -613,14 +688,17 @@ export function InventoryEditorDrawer({
             barcode = await generateUniqueBarcode();
             generated.push({ barcode, condition: v.condition });
           }
-          prepared.push({
-            product_id: productId,
-            condition: v.condition,
-            barcode,
-            cost: safeNumber(v.cost),
-            price: safeNumber(v.price) ?? 0,
-            qty: Math.max(0, Math.trunc(safeNumber(v.qty) ?? 0)),
-            ship_class: v.ship_class || null,
+            prepared.push({
+              product_id: productId,
+              condition: v.condition,
+              barcode,
+              cost: safeNumber(v.cost),
+              price: safeNumber(v.price) ?? 0,
+              qty: Math.max(0, Math.trunc(safeNumber(v.qty) ?? 0)),
+              ship_class: normalizeShipClass(v.ship_class),
+              allowed_couriers: normalizeRestrictionList(v.allowed_couriers),
+              allowed_lbc_packages: normalizeRestrictionList(v.allowed_lbc_packages),
+              allowed_jnt_pouches: normalizeRestrictionList(v.allowed_jnt_pouches),
             public_notes:
               v.condition === "near_mint"
                 ? v.public_notes || "Near Mint Condition"
@@ -633,7 +711,11 @@ export function InventoryEditorDrawer({
           });
         }
 
-        await supabase.from("product_variants").insert(prepared);
+          const { error: insertError } = await supabase
+            .from("product_variants")
+            .insert(prepared);
+
+          if (insertError) throw insertError;
 
         for (const entry of generated) {
           await recordGeneratedBarcode(entry.barcode, entry.condition);
@@ -1035,7 +1117,7 @@ export function InventoryEditorDrawer({
                           </div>
                         </div>
                         <Select
-                          label="Ship class"
+                          label="Class"
                           value={v.ship_class ?? ""}
                           onChange={(e) =>
                             updateVariant(v.id, { ship_class: e.target.value || null })
@@ -1048,6 +1130,89 @@ export function InventoryEditorDrawer({
                             </option>
                           ))}
                         </Select>
+                        <div className="md:col-span-3 rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3">
+                          <div className="text-sm font-medium">
+                            Shipping Restrictions (optional)
+                          </div>
+                          <div className="text-xs text-white/60">
+                            Limit this variant to specific couriers or container types.
+                            Leave empty to allow all.
+                          </div>
+                          <div className="grid gap-3 md:grid-cols-3">
+                            <div className="space-y-2">
+                              <div className="text-xs font-semibold text-white/70">
+                                Couriers
+                              </div>
+                              <div className="space-y-1">
+                                {COURIER_OPTIONS.map((opt) => (
+                                  <Checkbox
+                                    key={`${v.id}-courier-${opt.value}`}
+                                    checked={Boolean(
+                                      v.allowed_couriers?.includes(opt.value)
+                                    )}
+                                    onChange={(checked) =>
+                                      toggleVariantRestriction(
+                                        v,
+                                        "allowed_couriers",
+                                        opt.value,
+                                        checked
+                                      )
+                                    }
+                                    label={opt.label}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <div className="text-xs font-semibold text-white/70">
+                                LBC packages
+                              </div>
+                              <div className="space-y-1">
+                                {LBC_PACKAGE_OPTIONS.map((opt) => (
+                                  <Checkbox
+                                    key={`${v.id}-lbc-${opt.value}`}
+                                    checked={Boolean(
+                                      v.allowed_lbc_packages?.includes(opt.value)
+                                    )}
+                                    onChange={(checked) =>
+                                      toggleVariantRestriction(
+                                        v,
+                                        "allowed_lbc_packages",
+                                        opt.value,
+                                        checked
+                                      )
+                                    }
+                                    label={opt.label}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <div className="text-xs font-semibold text-white/70">
+                                J&T pouches
+                              </div>
+                              <div className="space-y-1">
+                                {JNT_POUCH_OPTIONS.map((opt) => (
+                                  <Checkbox
+                                    key={`${v.id}-jnt-${opt.value}`}
+                                    checked={Boolean(
+                                      v.allowed_jnt_pouches?.includes(opt.value)
+                                    )}
+                                    onChange={(checked) =>
+                                      toggleVariantRestriction(
+                                        v,
+                                        "allowed_jnt_pouches",
+                                        opt.value,
+                                        checked
+                                      )
+                                    }
+                                    label={opt.label}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                         <Textarea
                           label="Notes (visible to customers)"
                           value={v.public_notes ?? v.issue_notes ?? ""}

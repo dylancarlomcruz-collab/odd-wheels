@@ -121,7 +121,10 @@ function matchesCategory(product: any, category: string) {
       return (
         matchesKeyword(text, "diorama") ||
         (product?.options ?? []).some(
-          (opt: any) => String(opt?.ship_class ?? "").toLowerCase() === "diorama"
+          (opt: any) => {
+            const shipClass = String(opt?.ship_class ?? "").toUpperCase();
+            return shipClass === "FIGURES_DIORAMA" || shipClass === "DIORAMA";
+          }
         )
       );
     case "truescales":
@@ -670,7 +673,7 @@ export default function ShopPageClient() {
       { key: "tomicas", label: "Tomicas" },
       { key: "hot-wheels", label: "Hot Wheels" },
       { key: "trucks", label: "Trucks" },
-      { key: "dioramas", label: "Dioramas" },
+      { key: "dioramas", label: "Figures & Dioramas" },
       { key: "truescales", label: "Truescales" },
       { key: "blistered", label: "Blistered" },
     ],
@@ -1112,7 +1115,7 @@ export default function ShopPageClient() {
       const baseToast = {
         title: product.title,
         image_url: product.image_url,
-        variant: option.condition,
+        variant: formatConditionLabel(option.condition, { upper: true }),
         price: effectivePrice,
         action: { label: "View cart", href: "/cart" },
       };

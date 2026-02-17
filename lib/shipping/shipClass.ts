@@ -18,7 +18,9 @@ export function shipClassFromBrand(rawBrand: string | null | undefined): ShipCla
     return "HOT_WHEELS_MAINLINE";
   }
   if (lower.includes("pop race") || lower.includes("poprace")) return "POPRACE";
-  if (lower.includes("diorama")) return "DIORAMA";
+  if (lower.includes("diorama") || lower.includes("figure")) {
+    return "FIGURES_DIORAMA";
+  }
 
   return "ACRYLIC_TRUE_SCALE";
 }
@@ -26,5 +28,5 @@ export function shipClassFromBrand(rawBrand: string | null | undefined): ShipCla
 export function isLalamoveOnlyShipClass(
   value: string | null | undefined
 ): boolean {
-  return value === "LALAMOVE" || value === "DIORAMA";
+  return value === "LALAMOVE" || value === "FIGURES_DIORAMA";
 }

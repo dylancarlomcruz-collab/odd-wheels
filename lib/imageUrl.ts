@@ -70,8 +70,11 @@ export function getOptimizedImageUrl(
   if (options.width) params.set("width", String(options.width));
   if (options.height) params.set("height", String(options.height));
   if (options.quality) params.set("quality", String(options.quality));
-  if (options.format) params.set("format", options.format);
-  if (options.resize) params.set("resize", options.resize);
+  const shouldContain =
+    !options.resize &&
+    ((options.width && !options.height) || (options.height && !options.width));
+  const resizeMode = options.resize ?? (shouldContain ? "contain" : undefined);
+  if (resizeMode) params.set("resize", resizeMode);
 
   return parsed.toString();
 }
@@ -99,8 +102,8 @@ export function applyImageFallback(
   fallbackUrl: string,
 ) {
   if (!fallbackUrl) return;
-  if (img.dataset.fallbackApplied === "true") return;
-  img.dataset.fallbackApplied = "true";
+  if (img.dataset.fallbackApplied === fallbackUrl) return;
+  img.dataset.fallbackApplied = fallbackUrl;
   const currentSrc = img.currentSrc || img.src;
   if (currentSrc && currentSrc.includes(SUPABASE_RENDER_PATH)) {
     const objectUrl =

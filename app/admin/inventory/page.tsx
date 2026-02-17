@@ -18,6 +18,7 @@ import {
   normalizeKaidoMiniGtTitle,
   normalizeBrandAlias,
   normalizeLookupTitle,
+  normalizeLookupField,
   normalizeTitleBrandAliases,
 } from "@/lib/titleInference";
 import { formatPHP } from "@/lib/money";
@@ -83,7 +84,7 @@ type ShipClass =
   | "HOT_WHEELS_PREMIUM"
   | "LOOSE_NO_BOX"
   | "LALAMOVE"
-  | "DIORAMA";
+  | "FIGURES_DIORAMA";
 type VariantDraft = {
   id: string;
   condition: VariantCondition;
@@ -184,7 +185,7 @@ const BULK_SHIP_CLASS_FILTER_OPTIONS: Array<{ value: ShipClass; label: string }>
   { value: "HOT_WHEELS_PREMIUM", label: "Hot Wheels Premium" },
   { value: "LOOSE_NO_BOX", label: "Loose / No Box" },
   { value: "LALAMOVE", label: "Lalamove" },
-  { value: "DIORAMA", label: "Diorama" },
+  { value: "FIGURES_DIORAMA", label: "Figures & Diorama" },
 ];
 
 const WARM_HASH_DEFAULT_IMAGES = 8;
@@ -558,7 +559,7 @@ function VariantDraftPanel({
           <option value="HOT_WHEELS_PREMIUM">Hot Wheels Premium</option>
           <option value="LOOSE_NO_BOX">Loose (No Box)</option>
           <option value="LALAMOVE">Lalamove</option>
-          <option value="DIORAMA">Diorama (Lalamove)</option>
+          <option value="FIGURES_DIORAMA">Figures & Diorama (Lalamove)</option>
         </Select>
 
         <Input
@@ -758,7 +759,6 @@ export default function AdminInventoryPage() {
   } | null>(null);
   const [bulkPreviewUrl, setBulkPreviewUrl] = React.useState<string | null>(null);
   const [bulkPreviewError, setBulkPreviewError] = React.useState(false);
-  const [bulkHideThumbed, setBulkHideThumbed] = React.useState(true);
   const [bulkShipClassFilter, setBulkShipClassFilter] = React.useState<
     ShipClass[]
   >([]);
@@ -768,6 +768,7 @@ export default function AdminInventoryPage() {
   const [bulkSearchHistory, setBulkSearchHistory] = React.useState<Record<string, string[]>>({});
   const [bulkSearchIndex, setBulkSearchIndex] = React.useState<Record<string, number | null>>({});
   const bulkSearchTimersRef = React.useRef<Record<string, number>>({});
+  const bulkSearchInputRefs = React.useRef<Record<string, HTMLInputElement | null>>({});
   const productEditorRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
@@ -1367,9 +1368,10 @@ export default function AdminInventoryPage() {
             resolveNormalizedBrand(prev, kaidoNormalized.brand)
           );
         }
-        if (kaidoNormalized.model && !model) setModel(kaidoNormalized.model);
-        if (kaidoNormalized.variation && !variation)
-          setVariation(kaidoNormalized.variation);
+        const cleanedModel = normalizeLookupField(kaidoNormalized.model);
+        const cleanedVariation = normalizeLookupField(kaidoNormalized.variation);
+        if (cleanedModel && !model) setModel(cleanedModel);
+        if (cleanedVariation && !variation) setVariation(cleanedVariation);
       } else {
         if (d.title || title) {
           setTitle((prev) => resolveNormalizedTitle(prev, normalizedTitle));
@@ -1380,16 +1382,23 @@ export default function AdminInventoryPage() {
         } else if (d.brand) {
           setBrand((prev) => resolveNormalizedBrand(prev, d.brand));
         }
-        if (d.model && !model) setModel(d.model);
-        if (d.color_style && !variation) setVariation(d.color_style);
+        const cleanedModel = normalizeLookupField(d.model);
+        const cleanedVariation = normalizeLookupField(d.color_style);
+        if (cleanedModel && !model) setModel(cleanedModel);
+        if (cleanedVariation && !variation) setVariation(cleanedVariation);
 
         const inferred = inferFieldsFromTitle(normalizedTitle);
         if (inferred.brand && !titleBrand) {
           setBrand((prev) => resolveNormalizedBrand(prev, inferred.brand));
         }
-        if (!d.model && !model && inferred.model) setModel(inferred.model);
-        if (!d.color_style && !variation && inferred.color_style)
-          setVariation(inferred.color_style);
+        if (!d.model && !model && inferred.model) {
+          const inferredModel = normalizeLookupField(inferred.model);
+          if (inferredModel) setModel(inferredModel);
+        }
+        if (!d.color_style && !variation && inferred.color_style) {
+          const inferredVariation = normalizeLookupField(inferred.color_style);
+          if (inferredVariation) setVariation(inferredVariation);
+        }
       }
 
       // Fill images (select first 3 by default)
@@ -1469,9 +1478,11 @@ export default function AdminInventoryPage() {
     } else if (result.brand) {
       setBrand((prev) => resolveNormalizedBrand(prev, result.brand));
     }
-    if (result.model) setModel((prev) => (prev ? prev : result.model!));
-    if (result.variation)
-      setVariation((prev) => (prev ? prev : result.variation!));
+    const cleanedModel = normalizeLookupField(result.model);
+    const cleanedVariation = normalizeLookupField(result.variation);
+    if (cleanedModel) setModel((prev) => (prev ? prev : cleanedModel));
+    if (cleanedVariation)
+      setVariation((prev) => (prev ? prev : cleanedVariation));
 
     if (options?.applyImages === false) return;
 
@@ -1532,12 +1543,16 @@ export default function AdminInventoryPage() {
         ? d.images.filter(Boolean).slice(0, 9)
         : [];
       const inferred = inferFieldsFromTitle(normalizedTitle || rawTitle);
+      const cleanedModel = normalizeLookupField(d.model ?? inferred.model);
+      const cleanedVariation = normalizeLookupField(
+        d.variation ?? inferred.color_style
+      );
       const normalizedResult: ProductUrlLookupData = {
         ...d,
         title: normalizedTitle || d.title,
         brand: normalizedBrand ?? d.brand ?? inferred.brand ?? null,
-        model: d.model ?? inferred.model ?? null,
-        variation: d.variation ?? inferred.color_style ?? null,
+        model: cleanedModel || null,
+        variation: cleanedVariation || null,
         images: imgs,
         source_url: d.source_url ?? url,
       };
@@ -2222,7 +2237,7 @@ export default function AdminInventoryPage() {
         const { data: barcodeData, error: barcodeError } = await supabase
           .from("product_variants")
           .select(
-            "barcode,ship_class,product:products(id,title,brand,model,variation,image_urls,is_active)"
+            "barcode,ship_class,condition,product:products(id,title,brand,model,variation,image_urls,is_active)"
           )
           .eq("barcode", barcode)
           .limit(20);
@@ -2240,7 +2255,12 @@ export default function AdminInventoryPage() {
             if (!product) return null;
             return {
               ...product,
-              product_variants: [{ ship_class: row?.ship_class ?? null }],
+              product_variants: [
+                {
+                  ship_class: row?.ship_class ?? null,
+                  condition: row?.condition ?? null,
+                },
+              ],
             };
           })
           .filter(Boolean) as Product[];
@@ -2259,17 +2279,13 @@ export default function AdminInventoryPage() {
             unique.set(p.id, { ...existing, product_variants: nextVariants });
           });
           const uniqueList = Array.from(unique.values());
-          const match = reviewMatches.find((m) => m.id === matchId);
-          if (match && uniqueList.length === 1) {
-            const target = uniqueList[0];
-            const hasThumb =
-              Array.isArray(target.image_urls) && target.image_urls.length > 0;
-            if (!bulkHideThumbed || !hasThumb) {
+            const match = reviewMatches.find((m) => m.id === matchId);
+            if (match && uniqueList.length === 1) {
+              const target = uniqueList[0];
               await assignBulkUpload(match, target);
               setBulkSearchLoading((prev) => ({ ...prev, [matchId]: false }));
               return;
             }
-          }
           setBulkSearchResults((prev) => ({
             ...prev,
             [matchId]: uniqueList,
@@ -2299,7 +2315,7 @@ export default function AdminInventoryPage() {
       const { data, error } = await supabase
         .from("products")
         .select(
-          "id,title,brand,model,variation,image_urls,is_active,product_variants(ship_class)"
+          "id,title,brand,model,variation,image_urls,is_active,product_variants(ship_class,condition)"
         )
         .or(orParts.join(","))
         .limit(60);
@@ -2344,8 +2360,42 @@ export default function AdminInventoryPage() {
     }, 300);
   }
 
+  function focusBulkSearchInput(targetId: string | null | undefined) {
+    if (!targetId) return;
+    requestAnimationFrame(() => {
+      const el = bulkSearchInputRefs.current[targetId];
+      if (!el) return;
+      el.focus();
+      try {
+        el.select();
+      } catch {
+        // ignore
+      }
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }
+
+  function focusNextBulkSearchInput(currentId: string) {
+    const idx = reviewMatches.findIndex((m) => m.id === currentId);
+    if (idx === -1) return;
+    const nextId = reviewMatches[idx + 1]?.id ?? reviewMatches[idx - 1]?.id;
+    focusBulkSearchInput(nextId);
+  }
+
+  function focusPreviousBulkSearchInput(currentId: string) {
+    const idx = reviewMatches.findIndex((m) => m.id === currentId);
+    if (idx === -1) return;
+    const prevId = reviewMatches[idx - 1]?.id;
+    focusBulkSearchInput(prevId);
+  }
+
   async function assignBulkUpload(match: ReviewMatch, product: Product) {
     if (!match?.upload_url) return;
+    const nextFocusId = (() => {
+      const idx = reviewMatches.findIndex((m) => m.id === match.id);
+      if (idx === -1) return null;
+      return reviewMatches[idx - 1]?.id ?? reviewMatches[idx + 1]?.id ?? null;
+    })();
     try {
       const current = Array.isArray(product.image_urls) ? product.image_urls : [];
       const filtered = current.filter((url) => url && url !== match.upload_url);
@@ -2378,6 +2428,9 @@ export default function AdminInventoryPage() {
       setBulkSearchTerms((prev) => ({ ...prev, [match.id]: "" }));
       setBulkSearchResults((prev) => ({ ...prev, [match.id]: [] }));
       toast({ intent: "success", message: "Thumbnail applied." });
+      if (nextFocusId) {
+        requestAnimationFrame(() => focusBulkSearchInput(nextFocusId));
+      }
     } catch (e: any) {
       toast({
         intent: "error",
@@ -3573,345 +3626,6 @@ export default function AdminInventoryPage() {
             />
           </div>
 
-          {/* Bulk photo inbox */}
-          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="font-semibold">Bulk photo inbox</div>
-                <div className="text-xs text-white/60">
-                  Upload multiple photos and assign each to a product. The
-                  uploaded photo becomes the first thumbnail.
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Checkbox
-                  checked={bulkHideThumbed}
-                  onChange={setBulkHideThumbed}
-                  label="Hide thumbnailed"
-                />
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={loadReviewQueue}
-                  disabled={reviewLoading}
-                >
-                  {reviewLoading ? "Refreshing..." : "Refresh"}
-                </Button>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-white/70">
-              <span className="text-xs text-white/60">Ship class filter:</span>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setBulkShipClassFilter([])}
-                disabled={bulkShipClassFilter.length === 0}
-              >
-                All
-              </Button>
-              {BULK_SHIP_CLASS_FILTER_OPTIONS.map((opt) => {
-                const active = bulkShipClassFilter.includes(opt.value);
-                return (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() =>
-                      setBulkShipClassFilter((prev) =>
-                        prev.includes(opt.value)
-                          ? prev.filter((v) => v !== opt.value)
-                          : [...prev, opt.value]
-                      )
-                    }
-                    className={`h-8 rounded-full border px-3 text-xs transition ${
-                      active
-                        ? "border-accent-500 bg-accent-500/20 text-white"
-                        : "border-white/10 bg-bg-900/40 text-white/70 hover:bg-bg-900/70"
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-[1.2fr_0.8fr]">
-              <div className="space-y-2">
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={(e) => {
-                    const list = Array.from(e.target.files ?? []);
-                    if (!list.length) return;
-                    void uploadBulkPhotos(list);
-                    e.currentTarget.value = "";
-                  }}
-                />
-                <div className="text-xs text-white/50">
-                  Select multiple images. They will be stored in the inbox until
-                  you assign them.
-                </div>
-              </div>
-              <div className="text-xs text-white/60">
-                {bulkUploadLoading ? "Uploading..." : bulkUploadMsg}
-              </div>
-            </div>
-            {bulkUploadProgress ? (
-              <div className="text-xs text-white/60">
-                Uploading {bulkUploadProgress.current} of{" "}
-                {bulkUploadProgress.total} (
-                {Math.round(
-                  (bulkUploadProgress.current / bulkUploadProgress.total) * 100
-                )}
-                %)
-              </div>
-            ) : null}
-
-            {reviewError ? (
-              <div className="text-xs text-red-200">{reviewError}</div>
-            ) : null}
-
-            {!reviewLoading && reviewMatches.length === 0 ? (
-              <div className="text-xs text-white/60">
-                No photos in inbox.
-              </div>
-            ) : null}
-
-            {reviewMatches.length ? (
-              <div className="grid gap-3">
-                {reviewMatches.map((match) => {
-                  const uploadUrl = match.upload_url;
-                  const createdAt = match.created_at
-                    ? new Date(match.created_at).toLocaleString("en-PH")
-                    : "";
-                  const term = bulkSearchTerms[match.id] ?? "";
-                  const resultsRaw = bulkSearchResults[match.id] ?? [];
-                  const shipFiltered =
-                    bulkShipClassFilter.length === 0
-                      ? resultsRaw
-                      : resultsRaw.filter((p) => {
-                          const variants =
-                            ((p as any).product_variants as Array<{
-                              ship_class: string | null;
-                            }> | null) ?? [];
-                          if (!variants.length) return false;
-                          return variants.some(
-                            (v) =>
-                              v.ship_class &&
-                              bulkShipClassFilter.includes(
-                                v.ship_class as ShipClass
-                              )
-                          );
-                        });
-                  const results = bulkHideThumbed
-                    ? shipFiltered.filter(
-                        (p) =>
-                          !Array.isArray(p.image_urls) ||
-                          p.image_urls.length === 0
-                      )
-                    : shipFiltered;
-                  const filteredByThumbs =
-                    bulkHideThumbed &&
-                    shipFiltered.length > 0 &&
-                    results.length === 0;
-                  const filteredByShip =
-                    bulkShipClassFilter.length > 0 &&
-                    resultsRaw.length > 0 &&
-                    shipFiltered.length === 0;
-                  const searching = bulkSearchLoading[match.id] ?? false;
-                  return (
-                    <div
-                      key={match.id}
-                      className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3"
-                    >
-                      <div className="flex flex-wrap items-start gap-3">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (!uploadUrl) return;
-                            setBulkPreviewError(false);
-                            setBulkPreviewUrl(uploadUrl);
-                          }}
-                          className="h-20 w-20 sm:h-24 sm:w-24 rounded-xl border border-white/10 bg-bg-950/60 overflow-hidden flex-shrink-0"
-                          aria-label="View upload"
-                        >
-                          {uploadUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={uploadUrl}
-                              alt="Upload"
-                              className="h-full w-full object-cover"
-                            />
-                          ) : null}
-                        </button>
-                        <div className="min-w-0 flex-1 space-y-1">
-                          <div className="text-sm font-medium truncate">
-                            {match.review_reason ?? "Uploaded photo"}
-                          </div>
-                          {createdAt ? (
-                            <div className="text-xs text-white/50">
-                              {createdAt}
-                            </div>
-                          ) : null}
-                        </div>
-                        <div className="ml-auto">
-                          <Button
-                            variant="danger"
-                            size="sm"
-                            onClick={() => deleteBulkUpload(match)}
-                            disabled={reviewActionId === match.id}
-                          >
-                            Delete
-                          </Button>
-                        </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        <div className="flex gap-2">
-                          <Input
-                            className="flex-1"
-                            placeholder="Search product title/brand/model..."
-                            value={term}
-                            onChange={(e) =>
-                              scheduleBulkSearch(match.id, e.target.value)
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                runBulkSearch(match.id);
-                                return;
-                              }
-                              if (e.key === "ArrowUp") {
-                                const history = bulkSearchHistory[match.id] ?? [];
-                                if (!history.length) return;
-                                e.preventDefault();
-                                const currentIdx = bulkSearchIndex[match.id];
-                                const nextIdx =
-                                  currentIdx === null || typeof currentIdx === "undefined"
-                                    ? history.length - 1
-                                    : Math.max(0, currentIdx - 1);
-                                const nextTerm = history[nextIdx] ?? "";
-                                setBulkSearchIndex((prev) => ({
-                                  ...prev,
-                                  [match.id]: nextIdx,
-                                }));
-                                setBulkSearchTerms((prev) => ({
-                                  ...prev,
-                                  [match.id]: nextTerm,
-                                }));
-                                runBulkSearch(match.id, nextTerm, { recordHistory: false });
-                              }
-                            }}
-                          />
-                          <Button
-                            variant="secondary"
-                            onClick={() => runBulkSearch(match.id)}
-                            disabled={searching}
-                          >
-                            {searching ? "Searching..." : "Search"}
-                          </Button>
-                        </div>
-
-                        {results.length ? (
-                          <div className="grid gap-2">
-                            {results.map((p) => {
-                              const img =
-                                Array.isArray(p.image_urls) && p.image_urls.length
-                                  ? p.image_urls[0]
-                                  : null;
-                              return (
-                                <button
-                                  key={p.id}
-                                  type="button"
-                                  onClick={() => assignBulkUpload(match, p)}
-                                  className="text-left rounded-xl border border-white/10 bg-paper/5 hover:bg-paper/10 px-3 py-2 flex gap-3"
-                                >
-                                  <div className="h-12 w-12 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
-                                    {img ? (
-                                      // eslint-disable-next-line @next/next/no-img-element
-                                      <img
-                                        src={img}
-                                        alt={p.title}
-                                        className="h-full w-full object-cover"
-                                      />
-                                    ) : null}
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="font-medium truncate">
-                                      {p.title}
-                                    </div>
-                                    <div className="text-xs text-white/60">
-                                      {p.brand ?? "â€”"} {p.model ? `â€¢ ${p.model}` : ""}{" "}
-                                      {p.variation ? `â€¢ ${p.variation}` : ""}
-                                    </div>
-                                  </div>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : term ? (
-                          <div className="text-xs text-white/60">
-                            {filteredByShip
-                              ? "No matches in selected ship classes."
-                              : filteredByThumbs
-                                ? "All matches already have thumbnails."
-                                : "No products found."}
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
-
-          {bulkPreviewUrl ? (
-            <div
-              className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
-              onClick={() => setBulkPreviewUrl(null)}
-            >
-              <div
-                className="max-h-full w-full max-w-4xl rounded-2xl border border-white/10 bg-bg-900/95 p-4 shadow-2xl"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex items-center justify-between gap-3 pb-3">
-                  <div className="text-sm font-semibold">Photo preview</div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => bulkPreviewUrl && window.open(bulkPreviewUrl, "_blank")}
-                    >
-                      Open
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setBulkPreviewUrl(null)}
-                    >
-                      Close
-                    </Button>
-                  </div>
-                </div>
-                <div className="relative w-full min-h-[240px] rounded-xl border border-white/10 bg-black/40 flex items-center justify-center">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={bulkPreviewUrl}
-                    alt="Upload preview"
-                    className="w-full max-h-[75vh] object-contain"
-                    onError={() => setBulkPreviewError(true)}
-                  />
-                  {bulkPreviewError ? (
-                    <div className="absolute text-sm text-white/70">
-                      Unable to load preview.
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          ) : null}
-
           {/* Product URL lookup */}
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
             <div className="font-semibold">Item URL Lookup</div>
@@ -4460,7 +4174,7 @@ export default function AdminInventoryPage() {
                         </div>
                       </div>
                       <Select
-                        label="Ship Class"
+                        label="Class"
                         value={v.ship_class ?? ""}
                         onChange={(e) =>
                           updateVariant(v, {
@@ -4482,7 +4196,7 @@ export default function AdminInventoryPage() {
                         <option value="HOT_WHEELS_PREMIUM">HOT_WHEELS_PREMIUM</option>
                         <option value="LOOSE_NO_BOX">LOOSE_NO_BOX</option>
                         <option value="LALAMOVE">LALAMOVE</option>
-                        <option value="DIORAMA">DIORAMA</option>
+                        <option value="FIGURES_DIORAMA">DIORAMA</option>
                       </Select>
 
                       <div className="flex items-end">
@@ -4655,7 +4369,7 @@ export default function AdminInventoryPage() {
                 <option value="HOT_WHEELS_PREMIUM">Hot Wheels Premium</option>
                 <option value="LOOSE_NO_BOX">Loose (No Box)</option>
                 <option value="LALAMOVE">Lalamove</option>
-                <option value="DIORAMA">Diorama (Lalamove)</option>
+                <option value="FIGURES_DIORAMA">Figures & Diorama (Lalamove)</option>
               </Select>
 
               <Input
@@ -4862,7 +4576,7 @@ export default function AdminInventoryPage() {
                 <option value="HOT_WHEELS_PREMIUM">Hot Wheels Premium</option>
                 <option value="LOOSE_NO_BOX">Loose (No Box)</option>
                 <option value="LALAMOVE">Lalamove</option>
-                <option value="DIORAMA">Diorama (Lalamove)</option>
+                <option value="FIGURES_DIORAMA">Figures & Diorama (Lalamove)</option>
               </Select>
               <Input
                 label="Shared cost (PHP)"
@@ -5048,6 +4762,370 @@ export default function AdminInventoryPage() {
               ) : null}
             </div>
           </div>
+
+          {/* Bulk photo inbox */}
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold">Bulk photo inbox</div>
+                <div className="text-xs text-white/60">
+                  Upload multiple photos and assign each to a product. The
+                  uploaded photo becomes the first thumbnail.
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={loadReviewQueue}
+                  disabled={reviewLoading}
+                >
+                  {reviewLoading ? "Refreshing..." : "Refresh"}
+                </Button>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-white/70">
+              <span className="text-xs text-white/60">Class filter:</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setBulkShipClassFilter([])}
+                disabled={bulkShipClassFilter.length === 0}
+              >
+                All
+              </Button>
+              {BULK_SHIP_CLASS_FILTER_OPTIONS.map((opt) => {
+                const active = bulkShipClassFilter.includes(opt.value);
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() =>
+                      setBulkShipClassFilter((prev) =>
+                        prev.includes(opt.value)
+                          ? prev.filter((v) => v !== opt.value)
+                          : [...prev, opt.value]
+                      )
+                    }
+                    className={`h-8 rounded-full border px-3 text-xs transition ${
+                      active
+                        ? "border-accent-500 bg-accent-500/20 text-white"
+                        : "border-white/10 bg-bg-900/40 text-white/70 hover:bg-bg-900/70"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-[1.2fr_0.8fr]">
+              <div className="space-y-2">
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => {
+                    const list = Array.from(e.target.files ?? []);
+                    if (!list.length) return;
+                    void uploadBulkPhotos(list);
+                    e.currentTarget.value = "";
+                  }}
+                />
+                <div className="text-xs text-white/50">
+                  Select multiple images. They will be stored in the inbox until
+                  you assign them.
+                </div>
+              </div>
+              <div className="text-xs text-white/60">
+                {bulkUploadLoading ? "Uploading..." : bulkUploadMsg}
+              </div>
+            </div>
+            {bulkUploadProgress ? (
+              <div className="text-xs text-white/60">
+                Uploading {bulkUploadProgress.current} of{" "}
+                {bulkUploadProgress.total} (
+                {Math.round(
+                  (bulkUploadProgress.current / bulkUploadProgress.total) * 100
+                )}
+                %)
+              </div>
+            ) : null}
+
+            {reviewError ? (
+              <div className="text-xs text-red-200">{reviewError}</div>
+            ) : null}
+
+            {!reviewLoading && reviewMatches.length === 0 ? (
+              <div className="text-xs text-white/60">
+                No photos in inbox.
+              </div>
+            ) : null}
+
+            {reviewMatches.length ? (
+              <div className="grid gap-3">
+                {reviewMatches.map((match) => {
+                  const uploadUrl = match.upload_url;
+                  const createdAt = match.created_at
+                    ? new Date(match.created_at).toLocaleString("en-PH")
+                    : "";
+                  const term = bulkSearchTerms[match.id] ?? "";
+                  const resultsRaw = bulkSearchResults[match.id] ?? [];
+                  const shipFiltered =
+                    bulkShipClassFilter.length === 0
+                      ? resultsRaw
+                      : resultsRaw.filter((p) => {
+                          const variants =
+                            ((p as any).product_variants as Array<{
+                              ship_class: string | null;
+                            }> | null) ?? [];
+                          if (!variants.length) return false;
+                          return variants.some(
+                            (v) =>
+                              v.ship_class &&
+                              bulkShipClassFilter.includes(
+                                v.ship_class as ShipClass
+                              )
+                          );
+                        });
+                  const results = shipFiltered;
+                  const filteredByShip =
+                    bulkShipClassFilter.length > 0 &&
+                    resultsRaw.length > 0 &&
+                    shipFiltered.length === 0;
+                  const searching = bulkSearchLoading[match.id] ?? false;
+                  return (
+                    <div
+                      key={match.id}
+                      className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3"
+                    >
+                      <div className="flex flex-wrap items-start gap-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!uploadUrl) return;
+                            setBulkPreviewError(false);
+                            setBulkPreviewUrl(uploadUrl);
+                          }}
+                          className="h-20 w-20 sm:h-24 sm:w-24 rounded-xl border border-white/10 bg-bg-950/60 overflow-hidden flex-shrink-0"
+                          aria-label="View upload"
+                        >
+                          {uploadUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={uploadUrl}
+                              alt="Upload"
+                              className="h-full w-full object-cover"
+                            />
+                          ) : null}
+                        </button>
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="text-sm font-medium truncate">
+                            {match.review_reason ?? "Uploaded photo"}
+                          </div>
+                          {createdAt ? (
+                            <div className="text-xs text-white/50">
+                              {createdAt}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="ml-auto">
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            onClick={() => deleteBulkUpload(match)}
+                            disabled={reviewActionId === match.id}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex gap-2">
+                          <Input
+                            className="flex-1"
+                            placeholder="Search product title/brand/model..."
+                            value={term}
+                            onChange={(e) =>
+                              scheduleBulkSearch(match.id, e.target.value)
+                            }
+                            ref={(node) => {
+                              bulkSearchInputRefs.current[match.id] = node;
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                runBulkSearch(match.id);
+                                return;
+                              }
+                              if (e.key === "ArrowUp") {
+                                if (!e.altKey && !e.ctrlKey && !e.metaKey) {
+                                  e.preventDefault();
+                                  focusPreviousBulkSearchInput(match.id);
+                                  return;
+                                }
+                                const history = bulkSearchHistory[match.id] ?? [];
+                                if (!history.length) return;
+                                e.preventDefault();
+                                const currentIdx = bulkSearchIndex[match.id];
+                                const nextIdx =
+                                  currentIdx === null || typeof currentIdx === "undefined"
+                                    ? history.length - 1
+                                    : Math.max(0, currentIdx - 1);
+                                const nextTerm = history[nextIdx] ?? "";
+                                setBulkSearchIndex((prev) => ({
+                                  ...prev,
+                                  [match.id]: nextIdx,
+                                }));
+                                setBulkSearchTerms((prev) => ({
+                                  ...prev,
+                                  [match.id]: nextTerm,
+                                }));
+                                runBulkSearch(match.id, nextTerm, { recordHistory: false });
+                                return;
+                              }
+                              if (e.key === "ArrowDown") {
+                                if (!e.altKey && !e.ctrlKey && !e.metaKey) {
+                                  e.preventDefault();
+                                  focusNextBulkSearchInput(match.id);
+                                  return;
+                                }
+                              }
+                            }}
+                          />
+                          <Button
+                            variant="secondary"
+                            onClick={() => runBulkSearch(match.id)}
+                            disabled={searching}
+                          >
+                            {searching ? "Searching..." : "Search"}
+                          </Button>
+                        </div>
+
+                        {results.length ? (
+                          <div className="grid gap-2">
+                            {results.map((p) => {
+                              const img =
+                                Array.isArray(p.image_urls) && p.image_urls.length
+                                  ? p.image_urls[0]
+                                  : null;
+                              const conditions = Array.from(
+                                new Set(
+                                  (((p as any).product_variants ??
+                                    []) as Array<{ condition?: string | null }>).map(
+                                    (v) => v?.condition
+                                  )
+                                )
+                              )
+                                .filter(Boolean)
+                                .map((c) =>
+                                  formatConditionLabel(String(c), { upper: true })
+                                );
+                              return (
+                                <button
+                                  key={p.id}
+                                  type="button"
+                                  onClick={() => assignBulkUpload(match, p)}
+                                  className="text-left rounded-xl border border-white/10 bg-paper/5 hover:bg-paper/10 px-3 py-2 flex gap-3"
+                                >
+                                  <div className="h-12 w-12 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
+                                    {img ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img
+                                        src={img}
+                                        alt={p.title}
+                                        className="h-full w-full object-cover"
+                                      />
+                                    ) : null}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-medium truncate">
+                                      {p.title}
+                                    </div>
+                                    <div className="text-xs text-white/60">
+                                      {p.brand ?? "â€”"} {p.model ? `â€¢ ${p.model}` : ""}{" "}
+                                      {p.variation ? `â€¢ ${p.variation}` : ""}
+                                    </div>
+                                    {conditions.length ? (
+                                      <div className="mt-1 flex flex-wrap gap-1">
+                                        {conditions.map((c) => (
+                                          <span
+                                            key={c}
+                                            className="rounded-full border border-white/10 bg-bg-900/50 px-2 py-0.5 text-[10px] text-white/70"
+                                          >
+                                            {c}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : term ? (
+                          <div className="text-xs text-white/60">
+                            {filteredByShip
+                              ? "No matches in selected classes."
+                              : "No products found."}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+
+          {bulkPreviewUrl ? (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+              onClick={() => setBulkPreviewUrl(null)}
+            >
+              <div
+                className="max-h-full w-full max-w-4xl rounded-2xl border border-white/10 bg-bg-900/95 p-4 shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between gap-3 pb-3">
+                  <div className="text-sm font-semibold">Photo preview</div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() =>
+                        bulkPreviewUrl && window.open(bulkPreviewUrl, "_blank")
+                      }
+                    >
+                      Open
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setBulkPreviewUrl(null)}
+                    >
+                      Close
+                    </Button>
+                  </div>
+                </div>
+                <div className="relative w-full min-h-[240px] rounded-xl border border-white/10 bg-black/40 flex items-center justify-center">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={bulkPreviewUrl}
+                    alt="Upload preview"
+                    className="w-full max-h-[75vh] object-contain"
+                    onError={() => setBulkPreviewError(true)}
+                  />
+                  {bulkPreviewError ? (
+                    <div className="absolute text-sm text-white/70">
+                      Unable to load preview.
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ) : null}
         </CardBody>
       </Card>
 

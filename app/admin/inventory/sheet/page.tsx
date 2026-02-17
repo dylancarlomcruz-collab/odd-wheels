@@ -6,6 +6,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { formatPHP } from "@/lib/money";
+import { getOptimizedImageUrl } from "@/lib/imageUrl";
 import {
   inferFieldsFromTitle,
   normalizeBrandAlias,
@@ -32,6 +33,12 @@ type SheetRow = {
 const PAGE_SIZE = 200;
 const EXPORT_PAGE_SIZE = 1000;
 const CARD_EXPORT_SIZE = 1080;
+const CARD_FOLDER_LIMIT = 80;
+const EIGHT_UP_WIDTH = 1080;
+const EIGHT_UP_HEIGHT = 1080;
+const EXPORT_THUMB_WIDTH = 480;
+const EXPORT_THUMB_HEIGHT = 360;
+const EXPORT_THUMB_QUALITY = 80;
 let cachedNoisePattern: CanvasPattern | null = null;
 let cachedNoiseContext: CanvasRenderingContext2D | null = null;
 
@@ -41,6 +48,208 @@ function formatBrand(row: SheetRow) {
   if (normalized) return normalized;
   const inferred = inferFieldsFromTitle(row.product?.title ?? "");
   return inferred.brand ?? "Unknown";
+}
+
+const BOXED_TRUESCALE_BRANDS = new Set(
+  [
+    "Mini GT",
+    "Kaido House",
+    "Pop Race",
+    "Tarmac",
+    "Tarmac Works",
+    "TLVN",
+    "TLV-N",
+    "Tomica Limited Vintage",
+    "Tomica Limited Vintage Neo",
+    "Masdi",
+    "XCarToys",
+    "X Car Toys",
+  ].map((brand) => brand.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim())
+);
+const BOXED_TRUESCALE_ACRYLIC_OVERRIDES = new Set(
+  ["Masdi", "XCarToys", "X Car Toys"].map((brand) =>
+    brand.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+  )
+);
+const TRUESCALE_NO_MARKET_SPLIT_BRANDS = new Set(
+  ["Kaido House", "Pop Race"].map((brand) =>
+    brand.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+  )
+);
+const MINI_GT_BRANDS = new Set(
+  ["Mini GT", "MiniGT"].map((brand) =>
+    brand.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+  )
+);
+const TOMICA_BRANDS = new Set(
+  ["Tomica", "Takara Tomy", "Takara Tomy Tomica"].map((brand) =>
+    brand.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+  )
+);
+const HOT_WHEELS_BRANDS = new Set(
+  ["Hot Wheels", "Hot Wheels Premium"].map((brand) =>
+    brand.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+  )
+);
+const DOWNLOAD_CATEGORY_ORDER = [
+  "Truescales JDM",
+  "Truescales EUR/US",
+  "Mini GT JDM",
+  "Mini GT EUR/US",
+  "Boxed Truescales",
+  "Blistered Truescales",
+  "Figures and Dioramas",
+  "Tomica",
+  "Hot Wheels",
+  "Trucks",
+  "Others",
+];
+
+function normalizeCategoryBrand(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+const JDM_MAKES = new Set(
+  [
+    "Toyota",
+    "Nissan",
+    "Honda",
+    "Mazda",
+    "Subaru",
+    "Mitsubishi",
+    "Lexus",
+    "Infiniti",
+    "Suzuki",
+    "Isuzu",
+  ].map((make) => make.toLowerCase())
+);
+
+const JDM_MODEL_HINTS: RegExp[] = [
+  /\bsupra\b/i,
+  /\bskyline\b/i,
+  /\bg\s*t\s*-?\s*r\b/i,
+  /\bcivic\b/i,
+  /\bcrx\b/i,
+  /\bdel\s*sol\b/i,
+  /\bintegra\b/i,
+  /\bnsx\b/i,
+  /\bs2000\b/i,
+  /\bs660\b/i,
+  /\btype\s*r\b/i,
+  /\bsilvia\b/i,
+  /\b180\s*sx\b/i,
+  /\b200\s*sx\b/i,
+  /\b240\s*sx\b/i,
+  /\bae86\b/i,
+  /\btrueno\b/i,
+  /\blevin\b/i,
+  /\bgt\s*-?\s*86\b/i,
+  /\bgr\s*-?\s*86\b/i,
+  /\brx\s*-?\s*7\b/i,
+  /\brx\s*-?\s*8\b/i,
+  /\bmazdaspeed\b/i,
+  /\bmx\s*-?\s*5\b/i,
+  /\bmiata\b/i,
+  /\bmr\s*-?\s*2\b/i,
+  /\bchaser\b/i,
+  /\bcresta\b/i,
+  /\bmark\s*ii\b/i,
+  /\baristo\b/i,
+  /\bsoarer\b/i,
+  /\bcelsior\b/i,
+  /\bcrown\b/i,
+  /\bcentury\b/i,
+  /\bhiace\b/i,
+  /\balphard\b/i,
+  /\bvellfire\b/i,
+  /\bfairlady\b/i,
+  /\bz\s*(?:32|33|34)\b/i,
+  /\b(?:z32|z33|z34)\b/i,
+  /\bimpreza\b/i,
+  /\bwrx\b/i,
+  /\bsti\b/i,
+  /\bevo\b/i,
+  /\bevolution\b/i,
+  /\b(?:r32|r33|r34|r35)\b/i,
+  /\b(?:s13|s14|s15)\b/i,
+  /\b(?:bnr32|bnr33|bnr34)\b/i,
+  /\b(?:jzx90|jzx100|jzx110)\b/i,
+  /\b(?:fc3s|fd3s|sa22)\b/i,
+];
+
+function hasJdmModelHint(value: string) {
+  if (!value) return false;
+  return JDM_MODEL_HINTS.some((pattern) => pattern.test(value));
+}
+
+function isJdmMarket(row: SheetRow) {
+  const inferred = inferVehicleMakeModel(row);
+  const makeKey = String(inferred.make ?? "").toLowerCase();
+  if (makeKey && JDM_MAKES.has(makeKey)) return true;
+  const title = normalizeTitleBrandAliases(row.product?.title ?? "");
+  const extra = `${row.product?.model ?? ""} ${row.product?.variation ?? ""}`;
+  const combined = `${title} ${extra}`;
+  if (/\bjdm\b/i.test(combined)) return true;
+  return hasJdmModelHint(combined);
+}
+
+function formatDownloadCategory(row: SheetRow) {
+  const shipClass = String(row.ship_class ?? "").toUpperCase().trim();
+  const brandKey = normalizeCategoryBrand(formatBrand(row));
+  let baseCategory = "Others";
+  if (shipClass && shipClass !== "UNASSIGNED") {
+    if (shipClass === "ACRYLIC_TRUE_SCALE") baseCategory = "Truescales";
+    else if (shipClass === "MINI_GT") baseCategory = "Mini GT";
+    else if (shipClass === "BLISTER") baseCategory = "Blistered Truescales";
+    else if (shipClass === "FIGURES_DIORAMA") baseCategory = "Figures and Dioramas";
+    else if (shipClass === "TRUCKS") baseCategory = "Trucks";
+    if (shipClass === "HOT_WHEELS_MAINLINE" || shipClass === "HOT_WHEELS_PREMIUM") {
+      baseCategory = "Hot Wheels";
+    }
+  }
+  if (
+    (baseCategory === "Truescales" ||
+      baseCategory === "Boxed Truescales" ||
+      baseCategory === "Others") &&
+    MINI_GT_BRANDS.has(brandKey)
+  ) {
+    baseCategory = "Mini GT";
+  }
+  if (baseCategory === "Others") {
+    if (BOXED_TRUESCALE_BRANDS.has(brandKey)) baseCategory = "Boxed Truescales";
+    else if (TOMICA_BRANDS.has(brandKey)) baseCategory = "Tomica";
+    else if (HOT_WHEELS_BRANDS.has(brandKey)) baseCategory = "Hot Wheels";
+  }
+
+  if (
+    baseCategory === "Truescales" ||
+    baseCategory === "Boxed Truescales" ||
+    baseCategory === "Mini GT"
+  ) {
+    if (
+      baseCategory === "Truescales" &&
+      BOXED_TRUESCALE_ACRYLIC_OVERRIDES.has(brandKey)
+    ) {
+      baseCategory = "Boxed Truescales";
+    }
+    if (baseCategory === "Mini GT") {
+      return `${baseCategory} ${isJdmMarket(row) ? "JDM" : "EUR/US"}`;
+    }
+    if (baseCategory === "Truescales") {
+      if (TRUESCALE_NO_MARKET_SPLIT_BRANDS.has(brandKey)) {
+        return baseCategory;
+      }
+      return `${baseCategory} ${isJdmMarket(row) ? "JDM" : "EUR/US"}`;
+    }
+    return baseCategory;
+  }
+
+  return baseCategory;
+}
+
+function formatDownloadTitle(category: string) {
+  if (!category) return "Collection";
+  return `${category} Collection`;
 }
 
 const FALLBACK_DIECAST_BRANDS = [
@@ -742,8 +951,9 @@ function formatCondition(value: string | null) {
 
 const COMPACT_CONDITION_LABELS: Record<string, string> = {
   sealed: "SEALED",
+  sealed_unsealed: "SEALED/UNSEALED",
   resealed: "RESEAL",
-  near_mint: "NM",
+  near_mint: "NEAR MINT",
   unsealed: "UNSEAL",
   with_issues: "ISSUES",
   sealed_blister: "BLISTER",
@@ -756,12 +966,93 @@ function formatCompactCondition(value: string | null) {
   return COMPACT_CONDITION_LABELS[key] ?? formatCondition(value);
 }
 
+function normalizeSearchText(value: string) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function formatShipClassSearch(row: SheetRow) {
+  const raw = String(row.ship_class ?? "").trim();
+  if (!raw) return "";
+  return `${raw} ${raw.replace(/_/g, " ")}`.trim();
+}
+
+function getMarketSearchTags(row: SheetRow) {
+  if (isJdmMarket(row)) {
+    return ["jdm", "jp", "japan"];
+  }
+  return ["eur", "eu", "europe", "us", "usa", "eur/us", "eurus"];
+}
+
+function buildRowSearchText(row: SheetRow) {
+  const parts = [
+    formatName(row),
+    formatBrand(row),
+    formatVehicleDisplayModel(row),
+    formatVehicleMake(row),
+    formatVehicleModel(row),
+    row.product?.title ?? "",
+    row.product?.brand ?? "",
+    row.product?.model ?? "",
+    row.product?.variation ?? "",
+    formatCondition(row.condition),
+    formatCompactCondition(row.condition),
+    formatDownloadCategory(row),
+    formatShipClassSearch(row),
+    ...getMarketSearchTags(row),
+  ];
+  return normalizeSearchText(parts.join(" "));
+}
+
+function rowMatchesSearch(row: SheetRow, tokens: string[]) {
+  if (!tokens.length) return true;
+  const haystack = buildRowSearchText(row);
+  return tokens.every((token) => haystack.includes(token));
+}
+
 function escapeCsv(value: string | number) {
   const raw = String(value ?? "");
   if (/[",\n]/.test(raw)) {
     return `"${raw.replace(/"/g, '""')}"`;
   }
   return raw;
+}
+
+function escapeHtml(value: string) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function getThumbUrl(
+  rawUrl: string,
+  {
+    width = 200,
+    height = 200,
+    quality = 65,
+    format = "webp",
+    resize = "contain",
+  }: {
+    width?: number;
+    height?: number;
+    quality?: number;
+    format?: "webp" | "jpeg" | "png";
+    resize?: "cover" | "contain";
+  } = {}
+) {
+  if (!rawUrl) return rawUrl;
+  return getOptimizedImageUrl(rawUrl, {
+    width,
+    height,
+    quality,
+    format,
+    resize,
+  });
 }
 
 function drawRoundedRect(
@@ -891,6 +1182,30 @@ function drawContainImage(
   ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
 }
 
+function drawCoverImage(
+  ctx: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+) {
+  const imgWidth =
+    (image as HTMLImageElement).naturalWidth ||
+    (image as ImageBitmap).width ||
+    width;
+  const imgHeight =
+    (image as HTMLImageElement).naturalHeight ||
+    (image as ImageBitmap).height ||
+    height;
+  const scale = Math.max(width / imgWidth, height / imgHeight);
+  const drawWidth = imgWidth * scale;
+  const drawHeight = imgHeight * scale;
+  const drawX = x + (width - drawWidth) / 2;
+  const drawY = y + (height - drawHeight) / 2;
+  ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+}
+
 function canvasToBlob(canvas: HTMLCanvasElement, type = "image/png", quality = 0.92) {
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(
@@ -925,6 +1240,14 @@ async function loadImageBitmap(url: string) {
   } catch {
     return null;
   }
+}
+
+async function loadImageWithFallback(primary: string, fallback?: string | null) {
+  if (!primary && fallback) return await loadImageBitmap(fallback);
+  if (!primary) return null;
+  const first = await loadImageBitmap(primary);
+  if (first || !fallback) return first;
+  return await loadImageBitmap(fallback);
 }
 
 function getNoisePattern(ctx: CanvasRenderingContext2D) {
@@ -1033,14 +1356,19 @@ function renderCardCanvas(
   ctx.stroke();
   ctx.restore();
 
-  const imagePadding = 26;
+  const imagePadding = 0;
   const imgX = panelX + imagePadding;
   const imgY = panelY + imagePadding;
   const imgW = panelWidth - imagePadding * 2;
   const imgH = panelHeight - imagePadding * 2;
 
   if (image) {
-    drawContainImage(ctx, image, imgX, imgY, imgW, imgH);
+    ctx.save();
+    ctx.beginPath();
+    drawRoundedRect(ctx, imgX, imgY, imgW, imgH, 32);
+    ctx.clip();
+    drawCoverImage(ctx, image, imgX, imgY, imgW, imgH);
+    ctx.restore();
   } else {
     ctx.save();
     ctx.fillStyle = "rgba(0,0,0,0.05)";
@@ -1102,32 +1430,275 @@ function renderCardCanvas(
   ctx.restore();
 }
 
+function renderEightUpCanvas(
+  ctx: CanvasRenderingContext2D,
+  rows: SheetRow[],
+  images: Array<CanvasImageSource | null>,
+  category: string
+) {
+  const width = EIGHT_UP_WIDTH;
+  const height = EIGHT_UP_HEIGHT;
+  ctx.clearRect(0, 0, width, height);
+
+  const bg = ctx.createLinearGradient(0, 0, 0, height);
+  bg.addColorStop(0, "#0f1016");
+  bg.addColorStop(1, "#171826");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
+
+  const noise = getNoisePattern(ctx);
+  if (noise) {
+    ctx.save();
+    ctx.globalAlpha = 0.06;
+    ctx.fillStyle = noise;
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+  }
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,138,0,0.55)";
+  ctx.lineWidth = 2;
+  drawRoundedRect(ctx, 1, 1, width - 2, height - 2, 28);
+  ctx.stroke();
+  ctx.restore();
+
+  const padding = 18;
+  const headerHeight = 44;
+  const footerHeight = 32;
+  const gridX = padding;
+  const gridY = padding + headerHeight;
+  const gridW = width - padding * 2;
+  const gridH = height - padding * 2 - headerHeight - footerHeight;
+  const cols = 4;
+  const rowsCount = 3;
+  const gap = 16;
+  const cardW = (gridW - gap * (cols - 1)) / cols;
+  const cardH = (gridH - gap * (rowsCount - 1)) / rowsCount;
+
+  const headerTitle = formatDownloadTitle(category);
+  if (headerTitle) {
+    ctx.save();
+    ctx.fillStyle = "#ff8a00";
+    ctx.font = '800 26px "Arial Black", Impact, sans-serif';
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.shadowColor = "rgba(255,138,0,0.35)";
+    ctx.shadowBlur = 8;
+    ctx.fillText(
+      headerTitle.toUpperCase(),
+      width / 2,
+      padding + headerHeight / 2
+    );
+    ctx.restore();
+  }
+
+  const footerY = height - padding - footerHeight / 2;
+  ctx.save();
+  ctx.font = '700 14px "Segoe UI", Arial, sans-serif';
+  ctx.textBaseline = "middle";
+  const prefix = "EXPLORE THE FULL ";
+  const suffix = " COLLECTION AT ODD-WHEELS.COM";
+  const highlight = category ? category.toUpperCase() : "COLLECTION";
+  const prefixWidth = ctx.measureText(prefix).width;
+  const highlightWidth = ctx.measureText(highlight).width;
+  const suffixWidth = ctx.measureText(suffix).width;
+  const totalWidth = prefixWidth + highlightWidth + suffixWidth;
+  let startX = width / 2 - totalWidth / 2;
+  ctx.fillStyle = "rgba(255,255,255,0.75)";
+  ctx.fillText(prefix, startX, footerY);
+  startX += prefixWidth;
+  ctx.fillStyle = "#ff8a00";
+  ctx.fillText(highlight, startX, footerY);
+  startX += highlightWidth;
+  ctx.fillStyle = "rgba(255,255,255,0.75)";
+  ctx.fillText(suffix, startX, footerY);
+  ctx.restore();
+
+  for (let i = 0; i < cols * rowsCount; i += 1) {
+    const col = i % cols;
+    const rowIdx = Math.floor(i / cols);
+    const x = gridX + col * (cardW + gap);
+    const y = gridY + rowIdx * (cardH + gap);
+    const row = rows[i];
+    const image = images[i] ?? null;
+
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.45)";
+    ctx.shadowBlur = 16;
+    ctx.shadowOffsetY = 8;
+    const cardBg = ctx.createLinearGradient(x, y, x, y + cardH);
+    cardBg.addColorStop(0, "#1b1c23");
+    cardBg.addColorStop(1, "#14151b");
+    ctx.fillStyle = cardBg;
+    drawRoundedRect(ctx, x, y, cardW, cardH, 18);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 1;
+    drawRoundedRect(ctx, x, y, cardW, cardH, 18);
+    ctx.stroke();
+    ctx.restore();
+
+    if (!row) continue;
+
+    const pad = 12;
+    const innerX = x + pad;
+    let cursorY = y + pad;
+    const innerW = cardW - pad * 2;
+
+    const brand = formatBrand(row).toUpperCase();
+    ctx.save();
+    ctx.fillStyle = "rgba(255,210,140,0.9)";
+    ctx.font = '700 11px "Segoe UI", Arial, sans-serif';
+    ctx.textBaseline = "top";
+    drawTrackedCenteredText(
+      ctx,
+      truncateText(ctx, brand, innerW),
+      innerX + innerW / 2,
+      cursorY,
+      3
+    );
+    ctx.restore();
+    cursorY += 20;
+
+    const imageHeight = (innerW * 3) / 4;
+    const imageY = cursorY;
+    ctx.save();
+    ctx.fillStyle = "#ffffff";
+    drawRoundedRect(ctx, innerX, imageY, innerW, imageHeight, 12);
+    ctx.fill();
+    ctx.restore();
+
+    if (image) {
+      ctx.save();
+      ctx.beginPath();
+      drawRoundedRect(ctx, innerX, imageY, innerW, imageHeight, 12);
+      ctx.clip();
+      drawContainImage(ctx, image, innerX, imageY, innerW, imageHeight);
+      ctx.restore();
+    } else {
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.font = '600 11px "Segoe UI", Arial, sans-serif';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("No image", innerX + innerW / 2, imageY + imageHeight / 2);
+      ctx.restore();
+    }
+
+    cursorY = imageY + imageHeight + 8;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.font = '600 13px "Segoe UI", Arial, sans-serif';
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    const titleLines = wrapText(ctx, formatName(row), innerW, 2);
+    const lineHeight = 16;
+    titleLines.forEach((line, idx) => {
+      ctx.fillText(line, innerX, cursorY + idx * lineHeight);
+    });
+    ctx.restore();
+
+    const metaY = y + cardH - pad - 18;
+    const condition = formatCompactCondition(row.condition);
+    ctx.save();
+    ctx.font = '700 10px "Segoe UI", Arial, sans-serif';
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    const pillPadding = 8;
+    const pillHeight = 18;
+    const pillWidth = Math.max(ctx.measureText(condition).width + pillPadding * 2, 44);
+    drawRoundedRect(ctx, innerX, metaY, pillWidth, pillHeight, pillHeight / 2);
+    ctx.fillStyle = "rgba(255,180,90,0.12)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,180,90,0.45)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.fillText(condition, innerX + pillPadding, metaY + pillHeight / 2);
+    ctx.restore();
+
+    const price =
+      row.price === null || row.price === undefined
+        ? "-"
+        : formatPHP(Number(row.price));
+    ctx.save();
+    ctx.font = '700 14px "Segoe UI", Arial, sans-serif';
+    const priceWidth = ctx.measureText(price).width;
+    const circleRadius = 9;
+    const circleX = innerX + innerW - priceWidth - 6 - circleRadius * 2;
+    const circleY = metaY + pillHeight / 2;
+    ctx.fillStyle = "rgba(255,184,92,0.14)";
+    ctx.strokeStyle = "rgba(255,184,92,0.45)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(circleX + circleRadius, circleY, circleRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#ffb85c";
+    ctx.font = '700 9px "Segoe UI", Arial, sans-serif';
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("🛒", circleX + circleRadius, circleY + 0.5);
+    ctx.font = '700 14px "Segoe UI", Arial, sans-serif';
+    ctx.textAlign = "left";
+    ctx.fillText(price, circleX + circleRadius * 2 + 6, circleY + 0.5);
+    ctx.restore();
+  }
+}
+
 export default function InventorySheetPage() {
   const [rows, setRows] = React.useState<SheetRow[]>([]);
   const [page, setPage] = React.useState(0);
   const [hasMore, setHasMore] = React.useState(true);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = React.useState("");
   const [exporting, setExporting] = React.useState(false);
   const [exportingZip, setExportingZip] = React.useState(false);
   const [exportingSheet, setExportingSheet] = React.useState(false);
   const [exportingCards, setExportingCards] = React.useState(false);
+  const [exportingTenUp, setExportingTenUp] = React.useState(false);
+  const [exportingEightUpZip, setExportingEightUpZip] = React.useState(false);
+  const [previewingCard, setPreviewingCard] = React.useState(false);
   const [exportMsg, setExportMsg] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState(false);
   const [cardGroupMode, setCardGroupMode] = React.useState<
-    "brand" | "ship_class" | "ship_class_brand" | "brand_ship_class" | "none"
-  >("ship_class_brand");
+    | "brand"
+    | "ship_class"
+    | "ship_class_brand"
+    | "brand_ship_class"
+    | "download_category"
+    | "none"
+  >("download_category");
   const [syncingModel, setSyncingModel] = React.useState(false);
   const [brandSyncTick, setBrandSyncTick] = React.useState(0);
 
+  const normalizedSearch = React.useMemo(
+    () => normalizeSearchText(searchTerm),
+    [searchTerm]
+  );
+  const searchTokens = React.useMemo(
+    () => (normalizedSearch ? normalizedSearch.split(/\s+/).filter(Boolean) : []),
+    [normalizedSearch]
+  );
+
+  const filteredRows = React.useMemo(() => {
+    if (!searchTokens.length) return rows;
+    return rows.filter((row) => rowMatchesSearch(row, searchTokens));
+  }, [rows, searchTokens, brandSyncTick]);
+
   const totalQty = React.useMemo(
-    () => rows.reduce((sum, row) => sum + Number(row.qty ?? 0), 0),
-    [rows]
+    () => filteredRows.reduce((sum, row) => sum + Number(row.qty ?? 0), 0),
+    [filteredRows]
   );
 
   const groupedRows = React.useMemo(
-    () => groupRows(rows),
-    [rows, brandSyncTick]
+    () => groupRows(filteredRows),
+    [filteredRows, brandSyncTick]
   );
 
   async function loadPage(nextPage: number, replace = false) {
@@ -1189,10 +1760,11 @@ export default function InventorySheetPage() {
       const from = pageIndex * EXPORT_PAGE_SIZE;
       const to = from + EXPORT_PAGE_SIZE - 1;
       const { data, error: qErr } = await supabase
-      .from("product_variants")
-      .select(
-        "id,condition,ship_class,qty,price, product:products(id,title,brand,model,variation,image_urls)"
-      )
+        .from("product_variants")
+        .select(
+          "id,condition,ship_class,qty,price, product:products(id,title,brand,model,variation,image_urls)"
+        )
+        .gt("qty", 0)
         .order("created_at", { ascending: false })
         .range(from, to);
 
@@ -1496,23 +2068,102 @@ export default function InventorySheetPage() {
       | "ship_class"
       | "ship_class_brand"
       | "brand_ship_class"
+      | "download_category"
+      | "none"
+  ) {
+    const parts = getCardFolderParts(row, mode);
+    return resolveZipFolder(zip, parts);
+  }
+
+  function getCardFolderParts(
+    row: SheetRow,
+    mode:
+      | "brand"
+      | "ship_class"
+      | "ship_class_brand"
+      | "brand_ship_class"
+      | "download_category"
       | "none"
   ) {
     const brand = fileSafe(formatBrand(row)) || "Unknown";
     const shipClass = formatShipClassFolder(row);
+    const category = formatDownloadCategory(row) || "Others";
 
-    if (mode === "none") return zip;
-    if (mode === "brand") return zip.folder(brand) ?? zip;
-    if (mode === "ship_class") return zip.folder(shipClass) ?? zip;
-    if (mode === "ship_class_brand") {
-      const shipFolder = zip.folder(shipClass) ?? zip;
-      return shipFolder.folder(brand) ?? shipFolder;
+    if (mode === "none") return [];
+    if (mode === "brand") return [brand];
+    if (mode === "ship_class") return [shipClass];
+    if (mode === "ship_class_brand") return [shipClass, brand];
+    if (mode === "brand_ship_class") return [brand, shipClass];
+    if (mode === "download_category") {
+      const safeCategory = fileSafe(category, 60) || "Others";
+      return [safeCategory];
     }
-    if (mode === "brand_ship_class") {
-      const brandFolder = zip.folder(brand) ?? zip;
-      return brandFolder.folder(shipClass) ?? brandFolder;
+    return [];
+  }
+
+  function resolveZipFolder(zip: any, parts: string[]) {
+    let folder = zip;
+    for (const part of parts) {
+      folder = folder.folder(part) ?? folder;
     }
-    return zip;
+    return folder;
+  }
+
+  function normalizeCardConditionKey(value: string | null) {
+    return String(value ?? "").toLowerCase().trim();
+  }
+
+  function mergeSealedUnsealedRows(source: SheetRow[]) {
+    const output: SheetRow[] = [];
+    const merged = new Map<
+      string,
+      {
+        index: number;
+        hasSealed: boolean;
+        hasUnsealed: boolean;
+        preferred: "sealed" | "unsealed";
+      }
+    >();
+
+    for (const row of source) {
+      const conditionKey = normalizeCardConditionKey(row.condition);
+      if (conditionKey !== "sealed" && conditionKey !== "unsealed") {
+        output.push(row);
+        continue;
+      }
+
+      const productId = row.product?.id ?? row.id;
+      const mapKey = `${productId}::sealed_unsealed`;
+      const entry = merged.get(mapKey);
+
+      if (!entry) {
+        output.push(row);
+        merged.set(mapKey, {
+          index: output.length - 1,
+          hasSealed: conditionKey === "sealed",
+          hasUnsealed: conditionKey === "unsealed",
+          preferred: conditionKey === "sealed" ? "sealed" : "unsealed",
+        });
+        continue;
+      }
+
+      if (conditionKey === "sealed") entry.hasSealed = true;
+      if (conditionKey === "unsealed") entry.hasUnsealed = true;
+
+      if (conditionKey === "sealed" && entry.preferred !== "sealed") {
+        output[entry.index] = row;
+        entry.preferred = "sealed";
+      }
+
+      if (entry.hasSealed && entry.hasUnsealed) {
+        output[entry.index] = {
+          ...output[entry.index],
+          condition: "sealed_unsealed",
+        };
+      }
+    }
+
+    return output;
   }
 
   async function downloadCardsZip() {
@@ -1524,6 +2175,8 @@ export default function InventorySheetPage() {
     try {
       const allRows = await fetchAllRows();
       const grouped = groupRows(allRows);
+      const orderedRows = grouped.flatMap((group) => group.rows);
+      const cardRows = mergeSealedUnsealedRows(orderedRows);
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
 
@@ -1536,37 +2189,50 @@ export default function InventorySheetPage() {
       let generated = 0;
       let missingImage = 0;
       let processed = 0;
-      const total = allRows.length;
+      const total = cardRows.length;
+      const folderCounts = new Map<string, number>();
       setExportMsg(`Rendering 0 of ${total} cards...`);
 
-      for (const group of grouped) {
-        for (const row of group.rows) {
-          const targetFolder = getCardFolder(zip, row, cardGroupMode);
-          const imageUrl = row.product?.image_urls?.[0] ?? "";
-          const image = imageUrl ? await loadImageBitmap(imageUrl) : null;
-          if (!imageUrl || !image) missingImage += 1;
-
-          renderCardCanvas(ctx, row, image);
-          const blob = await canvasToBlob(canvas, "image/png");
-          const safeName = fileSafe(formatExportFileName(row), 140) || "item";
-          const condition = fileSafe(formatCompactCondition(row.condition));
-          const name = `${safeName}_${condition}_${row.id.slice(0, 8)}.png`;
-          targetFolder.file(name, blob);
-
-          if (image && "close" in image) {
-            try {
-              (image as ImageBitmap).close();
-            } catch {
-              // ignore
-            }
+      for (const row of cardRows) {
+        const baseParts = getCardFolderParts(row, cardGroupMode);
+        let targetFolder = zip;
+        if (baseParts.length) {
+          const baseKey = baseParts.join("/");
+          const count = folderCounts.get(baseKey) ?? 0;
+          const bucket = Math.floor(count / CARD_FOLDER_LIMIT) + 1;
+          folderCounts.set(baseKey, count + 1);
+          const splitParts = [...baseParts];
+          if (bucket > 1) {
+            const lastIdx = splitParts.length - 1;
+            splitParts[lastIdx] = `${splitParts[lastIdx]} (${bucket})`;
           }
+          targetFolder = resolveZipFolder(zip, splitParts);
+        }
 
-          generated += 1;
-          processed += 1;
-          if (processed % 15 === 0) {
-            setExportMsg(`Rendering ${processed} of ${total} cards...`);
-            await new Promise((resolve) => setTimeout(resolve, 0));
+        const imageUrl = row.product?.image_urls?.[0] ?? "";
+        const image = imageUrl ? await loadImageBitmap(imageUrl) : null;
+        if (!imageUrl || !image) missingImage += 1;
+
+        renderCardCanvas(ctx, row, image);
+        const blob = await canvasToBlob(canvas, "image/png");
+        const safeName = fileSafe(formatExportFileName(row), 140) || "item";
+        const condition = fileSafe(formatCompactCondition(row.condition));
+        const name = `${safeName}_${condition}_${row.id.slice(0, 8)}.png`;
+        targetFolder.file(name, blob);
+
+        if (image && "close" in image) {
+          try {
+            (image as ImageBitmap).close();
+          } catch {
+            // ignore
           }
+        }
+
+        generated += 1;
+        processed += 1;
+        if (processed % 15 === 0) {
+          setExportMsg(`Rendering ${processed} of ${total} cards...`);
+          await new Promise((resolve) => setTimeout(resolve, 0));
         }
       }
 
@@ -1580,10 +2246,16 @@ export default function InventorySheetPage() {
       link.remove();
       URL.revokeObjectURL(url);
 
-      const summary = [
-        `${generated} cards`,
-        `grouped by ${cardGroupMode.replace(/_/g, " ")}`,
-      ];
+      const groupLabel =
+        {
+          download_category: "12-up category",
+          brand: "brand",
+          ship_class: "class",
+          ship_class_brand: "class to brand",
+          brand_ship_class: "brand to class",
+          none: "no folders",
+        }[cardGroupMode] ?? cardGroupMode.replace(/_/g, " ");
+      const summary = [`${generated} cards`, `grouped by ${groupLabel}`];
       if (missingImage) summary.push(`${missingImage} missing images`);
       setExportMsg(summary.join(" | "));
     } catch (err: any) {
@@ -1602,10 +2274,115 @@ export default function InventorySheetPage() {
     });
   }
 
+  async function previewCardSample() {
+    if (previewingCard) return;
+    setPreviewingCard(true);
+    setExportMsg(null);
+    setError(null);
+
+    try {
+      const sampleRow = rows[0] ?? (await fetchAllRows())[0];
+      if (!sampleRow) throw new Error("No products available to preview.");
+
+      const imageUrl = sampleRow.product?.image_urls?.[0] ?? "";
+      const image = imageUrl ? await loadImageBitmap(imageUrl) : null;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = CARD_EXPORT_SIZE;
+      canvas.height = CARD_EXPORT_SIZE;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas not available.");
+
+      renderCardCanvas(ctx, sampleRow, image);
+      const blob = await canvasToBlob(canvas, "image/png");
+      const dataUrl = await blobToDataUrl(blob);
+
+      if (image && "close" in image) {
+        try {
+          (image as ImageBitmap).close();
+        } catch {
+          // ignore
+        }
+      }
+
+      const title = escapeHtml(formatName(sampleRow));
+      const brand = escapeHtml(formatBrand(sampleRow).toUpperCase());
+      const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Card Preview</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: radial-gradient(circle at top right, rgba(255,176,90,0.18), transparent 55%),
+          radial-gradient(circle at bottom left, rgba(255,210,140,0.12), transparent 55%),
+          #0f1016;
+        color: #fff;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      }
+      .frame {
+        width: min(92vw, 520px);
+        display: grid;
+        gap: 12px;
+        text-align: center;
+      }
+      .meta {
+        font-size: 12px;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: rgba(255,198,106,0.9);
+      }
+      img {
+        width: 100%;
+        height: auto;
+        border-radius: 24px;
+        box-shadow: 0 22px 50px rgba(0,0,0,0.45);
+      }
+      .title {
+        font-size: 14px;
+        color: rgba(255,255,255,0.8);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+      <div class="meta">${brand}</div>
+      <img src="${dataUrl}" alt="${title}" />
+      <div class="title">${title}</div>
+    </div>
+  </body>
+</html>`;
+
+      const url = URL.createObjectURL(
+        new Blob([html], { type: "text/html;charset=utf-8;" })
+      );
+      const opened = window.open(url, "_blank");
+      if (!opened) {
+        throw new Error("Preview blocked. Allow popups to preview.");
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+
+      setExportMsg("Card preview opened.");
+    } catch (err: any) {
+      setError(err?.message ?? "Preview failed.");
+    } finally {
+      setPreviewingCard(false);
+    }
+  }
+
   async function fetchPhotoMap(rows: SheetRow[], limit = 5) {
     const urls = rows
       .map((row) => row.product?.image_urls?.[0])
-      .filter(Boolean) as string[];
+      .filter(Boolean)
+      .map((url) =>
+        getThumbUrl(url, { width: 140, height: 140, quality: 60 })
+      ) as string[];
     const unique = Array.from(new Set(urls));
     const map = new Map<string, string>();
     let index = 0;
@@ -1835,6 +2612,443 @@ export default function InventorySheetPage() {
     }
   }
 
+  function buildTenUpPages(source: SheetRow[]) {
+    const isTrueScaleGroup = (value: string) =>
+      value === "Truescales" || value.startsWith("Truescales ");
+    const sorted = [...source].sort((a, b) => {
+      const catA = formatDownloadCategory(a);
+      const catB = formatDownloadCategory(b);
+      const orderA = DOWNLOAD_CATEGORY_ORDER.indexOf(catA);
+      const orderB = DOWNLOAD_CATEGORY_ORDER.indexOf(catB);
+      if (orderA !== orderB) {
+        return (orderA === -1 ? 999 : orderA) - (orderB === -1 ? 999 : orderB);
+      }
+      if (isTrueScaleGroup(catA) && isTrueScaleGroup(catB)) {
+        const modelA = vehicleSortKey(formatVehicleDisplayModel(a));
+        const modelB = vehicleSortKey(formatVehicleDisplayModel(b));
+        const modelCmp = modelA.localeCompare(modelB);
+        if (modelCmp !== 0) return modelCmp;
+        const nameA = formatName(a).toLowerCase();
+        const nameB = formatName(b).toLowerCase();
+        return nameA.localeCompare(nameB);
+      }
+      const brandA = normalizeCategoryBrand(formatBrand(a));
+      const brandB = normalizeCategoryBrand(formatBrand(b));
+      const brandCmp = brandA.localeCompare(brandB);
+      if (brandCmp !== 0) return brandCmp;
+      const modelA = vehicleSortKey(formatVehicleDisplayModel(a));
+      const modelB = vehicleSortKey(formatVehicleDisplayModel(b));
+      const modelCmp = modelA.localeCompare(modelB);
+      if (modelCmp !== 0) return modelCmp;
+      const nameA = formatName(a).toLowerCase();
+      const nameB = formatName(b).toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+
+    const pages: Array<{ group: string; rows: SheetRow[] }> = [];
+    let currentGroup = "";
+    let bucket: SheetRow[] = [];
+
+    const flush = () => {
+      if (!bucket.length) return;
+      for (let i = 0; i < bucket.length; i += 12) {
+        pages.push({
+          group: currentGroup || "Unassigned",
+          rows: bucket.slice(i, i + 12),
+        });
+      }
+      bucket = [];
+    };
+
+    for (const row of sorted) {
+      const group = formatDownloadCategory(row) || "Others";
+      if (!currentGroup) {
+        currentGroup = group;
+      }
+      if (group !== currentGroup) {
+        flush();
+        currentGroup = group;
+      }
+      bucket.push(row);
+    }
+
+    flush();
+    return pages;
+  }
+
+  async function downloadTenUpHtml() {
+    if (exportingTenUp) return;
+    setExportingTenUp(true);
+    setExportMsg(null);
+    setError(null);
+
+    try {
+      const allRows = await fetchAllRows();
+      const pages = buildTenUpPages(allRows);
+
+      const pagesHtml = pages
+        .map((page, pageIndex) => {
+          const cardsHtml = Array.from({ length: 12 }).map((_, idx) => {
+            const row = page.rows[idx];
+            if (!row) {
+              return `<div class="card empty"></div>`;
+            }
+            const photoUrl = row.product?.image_urls?.[0] ?? "";
+            const thumbUrl = photoUrl
+              ? getThumbUrl(photoUrl, {
+                  width: EXPORT_THUMB_WIDTH,
+                  height: EXPORT_THUMB_HEIGHT,
+                  quality: EXPORT_THUMB_QUALITY,
+                  format: "webp",
+                })
+              : "";
+            const fallbackUrl = escapeHtml(photoUrl);
+            const fallbackAttr = fallbackUrl
+              ? ` onerror="this.onerror=null;this.src=&quot;${fallbackUrl}&quot;;"`
+              : "";
+            const imageCell = thumbUrl
+              ? `<img src="${escapeHtml(
+                  thumbUrl
+                )}" alt="" loading="lazy" decoding="async" width="${EXPORT_THUMB_WIDTH}" height="${EXPORT_THUMB_HEIGHT}"${fallbackAttr}/>`
+              : `<div class="img-placeholder">No image</div>`;
+            const cardBrand = escapeHtml(formatBrand(row).toUpperCase());
+            const titleText = escapeHtml(formatName(row));
+            const condition = escapeHtml(formatCompactCondition(row.condition));
+            const price =
+              row.price === null || row.price === undefined
+                ? "-"
+                : formatPHP(Number(row.price));
+            return `
+              <div class="card">
+                <div class="card-brand">${cardBrand}</div>
+                <div class="card-image">${imageCell}</div>
+                <div class="card-title">${titleText}</div>
+                <div class="card-meta">
+                  <span class="card-condition">${condition}</span>
+                  <span class="card-price">
+                    <span class="card-cart">🛒</span>
+                    ${price}
+                  </span>
+                </div>
+              </div>
+            `;
+          });
+          const footerCategory = escapeHtml(page.group.toUpperCase());
+
+          return `
+            <section class="page" data-page="${pageIndex + 1}">
+              <div class="page-frame">
+                <div class="page-header">
+                  <div class="page-title">${escapeHtml(
+                    formatDownloadTitle(page.group)
+                  )}</div>
+                </div>
+                <div class="page-grid">
+                  ${cardsHtml.join("")}
+                </div>
+                <div class="page-footer">
+                  EXPLORE THE FULL
+                  <span class="page-footer__accent">${footerCategory}</span>
+                  COLLECTION AT ODD-WHEELS.COM
+                </div>
+              </div>
+            </section>
+          `;
+        })
+        .join("");
+
+      const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inventory 12-up Pages</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0b0f;
+        --panel: #15161c;
+        --panel-2: #0f1117;
+        --stroke: rgba(255,255,255,0.1);
+        --accent: #ff8a00;
+        --accent-soft: rgba(255,138,0,0.25);
+        --text: #f8fafc;
+        --muted: rgba(255,255,255,0.7);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        color: var(--text);
+        -webkit-print-color-adjust: exact;
+      }
+      @page {
+        size: 1080px 1080px;
+        margin: 0;
+      }
+      .page {
+        width: 1080px;
+        height: 1080px;
+        margin: 0 auto 32px;
+        padding: 0;
+        position: relative;
+        background: transparent;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+        page-break-after: always;
+      }
+      .page-frame {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        border: 1px solid rgba(255,138,0,0.55);
+        border-radius: 28px;
+        padding: 18px;
+        background: linear-gradient(180deg, rgba(20,20,26,0.92), rgba(12,12,16,0.96));
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .page-header {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 44px;
+      }
+      .page-title {
+        font-size: 26px;
+        font-weight: 800;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--accent);
+        text-shadow: 0 6px 18px rgba(255,138,0,0.35);
+      }
+      .page-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-auto-rows: 1fr;
+        gap: 16px;
+        flex: 1;
+      }
+      .page-footer {
+        font-size: 14px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        text-align: center;
+        color: rgba(255,255,255,0.72);
+        margin-bottom: 4px;
+      }
+      .page-footer__accent {
+        color: var(--accent);
+        font-weight: 700;
+        margin: 0 6px;
+      }
+      .card {
+        background: linear-gradient(180deg, #1b1c23 0%, #14151b 100%);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 18px;
+        padding: 12px 12px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        box-shadow: 0 10px 22px rgba(0,0,0,0.45);
+      }
+      .card.empty {
+        background: transparent;
+        border: 1px dashed rgba(255,255,255,0.08);
+        box-shadow: none;
+      }
+      .card-brand {
+        font-size: 11px;
+        letter-spacing: 0.28em;
+        text-transform: uppercase;
+        text-align: center;
+        color: rgba(255,210,140,0.9);
+        font-weight: 700;
+      }
+      .card-image {
+        background: #ffffff;
+        border-radius: 12px;
+        aspect-ratio: 4 / 3;
+        flex: none;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+        box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+      }
+      .card-image img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+        image-rendering: auto;
+        transform: translateZ(0);
+      }
+      .img-placeholder {
+        color: rgba(0,0,0,0.5);
+        font-size: 11px;
+        text-align: center;
+      }
+      .card-title {
+        font-size: 13px;
+        line-height: 1.3;
+        color: var(--text);
+        min-height: 36px;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .card-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .card-condition {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        padding: 4px 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,180,90,0.45);
+        background: rgba(255,180,90,0.12);
+        color: rgba(255,255,255,0.85);
+      }
+      .card-price {
+        font-size: 14px;
+        font-weight: 700;
+        color: #ffb85c;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .card-cart {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: rgba(255,184,92,0.14);
+        border: 1px solid rgba(255,184,92,0.45);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+      }
+    </style>
+  </head>
+  <body>
+    ${pagesHtml}
+  </body>
+</html>`;
+
+      const blob = new Blob([html], { type: "text/html;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "inventory-12up.html";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+
+      setExportMsg(`12-up pages downloaded (${pages.length} pages).`);
+    } catch (err: any) {
+      setError(err?.message ?? "Export failed.");
+    } finally {
+      setExportingTenUp(false);
+    }
+  }
+
+  async function downloadEightUpZip() {
+    if (exportingEightUpZip) return;
+    setExportingEightUpZip(true);
+    setExportMsg(null);
+    setError(null);
+
+    try {
+      const allRows = await fetchAllRows();
+      const pages = buildTenUpPages(allRows);
+      const JSZip = (await import("jszip")).default;
+      const zip = new JSZip();
+
+      const canvas = document.createElement("canvas");
+      canvas.width = EIGHT_UP_WIDTH;
+      canvas.height = EIGHT_UP_HEIGHT;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas not available.");
+
+      let processed = 0;
+      setExportMsg(`Rendering 0 of ${pages.length} pages...`);
+
+      const pageCounts = new Map<string, number>();
+
+      for (let index = 0; index < pages.length; index += 1) {
+        const page = pages[index];
+        const images = await Promise.all(
+          page.rows.map(async (row) => {
+            const imageUrl = row.product?.image_urls?.[0] ?? "";
+            const thumbUrl = imageUrl
+              ? getThumbUrl(imageUrl, {
+                  width: EXPORT_THUMB_WIDTH,
+                  height: EXPORT_THUMB_HEIGHT,
+                  quality: EXPORT_THUMB_QUALITY,
+                  format: "webp",
+                })
+              : "";
+            return await loadImageWithFallback(thumbUrl, imageUrl);
+          })
+        );
+        while (images.length < 12) images.push(null);
+
+        renderEightUpCanvas(ctx, page.rows, images, page.group);
+        const blob = await canvasToBlob(canvas, "image/png");
+        const safeGroup = fileSafe(page.group || "Unassigned", 60) || "Unassigned";
+        const groupFolder = zip.folder(safeGroup) ?? zip;
+        const nextCount = (pageCounts.get(safeGroup) ?? 0) + 1;
+        pageCounts.set(safeGroup, nextCount);
+        const name = `page_${String(nextCount).padStart(3, "0")}.png`;
+        groupFolder.file(name, blob);
+
+        for (const image of images) {
+          if (image && "close" in image) {
+            try {
+              (image as ImageBitmap).close();
+            } catch {
+              // ignore
+            }
+          }
+        }
+
+        processed += 1;
+        if (processed % 5 === 0) {
+          setExportMsg(`Rendering ${processed} of ${pages.length} pages...`);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      }
+
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(zipBlob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "inventory-12up-pages.zip";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+
+      setExportMsg(`12-up ZIP downloaded (${pages.length} pages).`);
+    } catch (err: any) {
+      setError(err?.message ?? "Export failed.");
+    } finally {
+      setExportingEightUpZip(false);
+    }
+  }
+
   React.useEffect(() => {
     loadPage(0, true);
   }, []);
@@ -1885,8 +3099,30 @@ export default function InventorySheetPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Badge>{rows.length} rows</Badge>
+          <div className="flex items-center gap-2">
+            <input
+              className="h-9 w-56 rounded-md border border-white/10 bg-bg-900/60 px-3 text-xs text-white/80 placeholder:text-white/40"
+              placeholder="Search (name, model, JDM, EUR, US)"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            {searchTerm ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSearchTerm("")}
+              >
+                Clear
+              </Button>
+            ) : null}
+          </div>
+          <Badge>{filteredRows.length} rows</Badge>
           <Badge>{totalQty} qty</Badge>
+          {searchTerm ? (
+            <span className="text-xs text-white/50">
+              of {rows.length} loaded
+            </span>
+          ) : null}
           <Button
             variant="ghost"
             size="sm"
@@ -1913,6 +3149,22 @@ export default function InventorySheetPage() {
           <Button
             variant="secondary"
             size="sm"
+            onClick={downloadTenUpHtml}
+            disabled={exportingTenUp}
+          >
+            {exportingTenUp ? "Preparing..." : "Download 12-up (Inner Box)"}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={downloadEightUpZip}
+            disabled={exportingEightUpZip}
+          >
+            {exportingEightUpZip ? "Preparing..." : "Download 12-up ZIP"}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={syncProductMakeModel}
             disabled={syncingModel}
           >
@@ -1929,14 +3181,16 @@ export default function InventorySheetPage() {
                     | "ship_class"
                     | "ship_class_brand"
                     | "brand_ship_class"
+                    | "download_category"
                     | "none"
                 )
               }
             >
+              <option value="download_category">Group by 12-up category</option>
               <option value="brand">Group by brand</option>
-              <option value="ship_class">Group by ship class</option>
-              <option value="ship_class_brand">Ship class → brand</option>
-              <option value="brand_ship_class">Brand → ship class</option>
+              <option value="ship_class">Group by class</option>
+              <option value="ship_class_brand">Class to brand</option>
+              <option value="brand_ship_class">Brand to class</option>
               <option value="none">No folders</option>
             </select>
             <Button
@@ -1946,6 +3200,14 @@ export default function InventorySheetPage() {
               disabled={exportingCards}
             >
               {exportingCards ? "Preparing..." : "Download Cards ZIP"}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={previewCardSample}
+              disabled={previewingCard}
+            >
+              {previewingCard ? "Preparing..." : "Preview Card"}
             </Button>
           </div>
           <Button
@@ -1997,9 +3259,15 @@ export default function InventorySheetPage() {
                           {row.product?.image_urls?.[0] ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
-                              src={row.product.image_urls[0]}
+                              src={getThumbUrl(row.product.image_urls[0], {
+                                width: 96,
+                                height: 96,
+                                quality: 60,
+                              })}
                               alt=""
                               className="h-full w-full object-cover bg-neutral-50"
+                              loading="lazy"
+                              decoding="async"
                             />
                           ) : (
                             <div className="h-full w-full grid place-items-center text-[10px] text-white/40">
@@ -2025,13 +3293,13 @@ export default function InventorySheetPage() {
                   ))}
                 </React.Fragment>
               ))}
-              {!rows.length && !loading ? (
+              {!filteredRows.length && !loading ? (
                 <tr>
                   <td
                     colSpan={6}
                     className="px-4 py-6 text-center text-white/50"
                   >
-                    No items yet.
+                    {searchTerm ? "No matching items." : "No items yet."}
                   </td>
                 </tr>
               ) : null}

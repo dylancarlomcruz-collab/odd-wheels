@@ -52,6 +52,12 @@ alter table public.settings
   add column if not exists protector_stock int not null default 0;
 
 alter table public.settings
+  add column if not exists allowed_couriers text[],
+  add column if not exists allowed_lbc_packages text[],
+  add column if not exists allowed_jnt_pouches text[];
+
+
+alter table public.settings
   add column if not exists protector_stock_mainline int not null default 0,
   add column if not exists protector_stock_premium int not null default 0;
 
@@ -936,6 +942,12 @@ alter table public.product_variants
   add column if not exists sale_price numeric,
   add column if not exists discount_percent numeric;
 
+-- Per-variant shipping restrictions
+alter table public.product_variants
+  add column if not exists allowed_couriers text[],
+  add column if not exists allowed_lbc_packages text[],
+  add column if not exists allowed_jnt_pouches text[];
+
 alter table public.product_variants
   drop constraint if exists product_variants_condition_check;
 
@@ -944,8 +956,36 @@ alter table public.product_variants
 
 update public.product_variants
   set condition = 'unsealed',
-      ship_class = 'DIORAMA'
+      ship_class = 'FIGURES_DIORAMA'
 where condition = 'diorama';
+
+update public.product_variants
+  set ship_class = 'FIGURES_DIORAMA'
+where ship_class = 'DIORAMA';
+
+update public.settings
+  set free_shipping_ship_classes = array_replace(
+    free_shipping_ship_classes,
+    'DIORAMA',
+    'FIGURES_DIORAMA'
+  )
+where free_shipping_ship_classes @> array['DIORAMA'];
+
+update public.vouchers
+  set include_ship_classes = array_replace(
+    include_ship_classes,
+    'DIORAMA',
+    'FIGURES_DIORAMA'
+  )
+where include_ship_classes @> array['DIORAMA'];
+
+update public.vouchers
+  set exclude_ship_classes = array_replace(
+    exclude_ship_classes,
+    'DIORAMA',
+    'FIGURES_DIORAMA'
+  )
+where exclude_ship_classes @> array['DIORAMA'];
 
 alter table public.product_variants
   add constraint product_variants_condition_check
@@ -964,7 +1004,7 @@ alter table public.product_variants
 
 alter table public.product_variants
   add constraint product_variants_ship_class_check
-  check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','TRUCKS','BLISTER','TOMICA','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE','DIORAMA'));
+  check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','TRUCKS','BLISTER','TOMICA','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE','FIGURES_DIORAMA'));
 
 create table if not exists public.barcode_logs (
   id uuid primary key default gen_random_uuid(),
