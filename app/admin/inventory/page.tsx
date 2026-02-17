@@ -44,6 +44,7 @@ type Product = {
   image_urls: string[] | null;
   is_active: boolean;
   created_at: string;
+  product_variants?: Array<{ ship_class: string | null }> | null;
 };
 
 type Variant = {
@@ -171,6 +172,21 @@ const BULK_CONDITIONS: VariantCondition[] = [
   "unsealed_blister",
 ];
 
+const BULK_SHIP_CLASS_FILTER_OPTIONS: Array<{ value: ShipClass; label: string }> = [
+  { value: "MINI_GT", label: "Mini GT" },
+  { value: "KAIDO", label: "Kaido" },
+  { value: "POPRACE", label: "Pop Race" },
+  { value: "ACRYLIC_TRUE_SCALE", label: "Acrylic True Scale" },
+  { value: "TRUCKS", label: "Trucks" },
+  { value: "BLISTER", label: "Blister" },
+  { value: "TOMICA", label: "Tomica" },
+  { value: "HOT_WHEELS_MAINLINE", label: "Hot Wheels Mainline" },
+  { value: "HOT_WHEELS_PREMIUM", label: "Hot Wheels Premium" },
+  { value: "LOOSE_NO_BOX", label: "Loose / No Box" },
+  { value: "LALAMOVE", label: "Lalamove" },
+  { value: "DIORAMA", label: "Diorama" },
+];
+
 const WARM_HASH_DEFAULT_IMAGES = 8;
 const WARM_HASH_DEFAULT_PRODUCTS = 20;
 const WARM_HASH_MAX_IMAGES = 50;
@@ -220,6 +236,130 @@ function normalizeCandidates(raw: any): UploadCandidate[] {
     }
   }
   return [];
+}
+
+const SEARCH_TOKEN_ALIASES: Record<string, string[]> = {
+  lbwk: ["liberty", "walk", "libertywalk"],
+  "libertywalk": ["lbwk", "liberty", "walk"],
+  "rocketbunny": ["rocket", "bunny"],
+  "rocket": ["rocketbunny"],
+  "bunny": ["rocketbunny"],
+  s13: ["silvia"],
+  s14: ["silvia"],
+  s15: ["silvia"],
+  r32: ["skyline"],
+  r33: ["skyline"],
+  r34: ["skyline"],
+  r35: ["gtr", "gt", "r"],
+  ae86: ["trueno", "sprinter"],
+  fd3s: ["rx7", "rx-7"],
+  fc3s: ["rx7", "rx-7"],
+  eg6: ["civic"],
+  ek9: ["civic", "type", "r"],
+  dc2: ["integra"],
+  dc5: ["integra"],
+  "gt-r": ["gtr"],
+  gtr: ["gt", "r"],
+  rx7: ["rx-7"],
+  supra: ["toyota"],
+  silvia: ["nissan"],
+  skyline: ["nissan"],
+  civic: ["honda"],
+  nsx: ["honda"],
+};
+
+function normalizeSearchText(value: string) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeSearch(value: string) {
+  const normalized = normalizeSearchText(value);
+  if (!normalized) return [];
+  return normalized.split(" ").filter(Boolean);
+}
+
+function expandSearchTokens(tokens: string[]) {
+  const expanded = new Set<string>();
+  tokens.forEach((t) => {
+    if (!t) return;
+    expanded.add(t);
+    const aliases = SEARCH_TOKEN_ALIASES[t];
+    if (aliases) {
+      aliases.forEach((alias) => {
+        tokenizeSearch(alias).forEach((a) => expanded.add(a));
+      });
+    }
+  });
+  for (let i = 0; i < tokens.length - 1; i += 1) {
+    const combo = `${tokens[i]}${tokens[i + 1]}`;
+    if (combo.length >= 3 && combo.length <= 12) {
+      expanded.add(combo);
+    }
+  }
+  return Array.from(expanded);
+}
+
+function scoreSearchResult(
+  product: Product,
+  tokens: string[],
+  normalizedQuery: string
+) {
+  const title = normalizeSearchText(product.title ?? "");
+  const brand = normalizeSearchText(product.brand ?? "");
+  const model = normalizeSearchText(product.model ?? "");
+  const variation = normalizeSearchText(product.variation ?? "");
+  const all = [title, brand, model, variation].filter(Boolean).join(" ").trim();
+  const allCompact = all.replace(/\s+/g, "");
+  const queryCompact = normalizedQuery.replace(/\s+/g, "");
+
+  const titleWords = new Set(title.split(" ").filter(Boolean));
+  const modelWords = new Set(model.split(" ").filter(Boolean));
+  const variationWords = new Set(variation.split(" ").filter(Boolean));
+  const brandWords = new Set(brand.split(" ").filter(Boolean));
+
+  let score = 0;
+  if (normalizedQuery && all.includes(normalizedQuery)) score += 14;
+  if (queryCompact && allCompact.includes(queryCompact)) score += 8;
+
+  let matched = 0;
+  tokens.forEach((token) => {
+    if (!token) return;
+    const inModel = modelWords.has(token) || model.includes(token);
+    const inVariation = variationWords.has(token) || variation.includes(token);
+    const inTitle = titleWords.has(token) || title.includes(token);
+    const inBrand = brandWords.has(token) || brand.includes(token);
+
+    if (inModel || inVariation) {
+      score += 5;
+      matched += 1;
+      if (/[a-z]*\d+[a-z]*/.test(token)) score += 2;
+    } else if (inTitle) {
+      score += 3;
+      matched += 1;
+    } else if (inBrand) {
+      score += 1;
+      matched += 1;
+    } else if (all.includes(token)) {
+      score += 1;
+      matched += 1;
+    } else {
+      score -= 2;
+    }
+  });
+
+  if (matched === tokens.length && tokens.length > 0) score += 6;
+  if (tokens.length >= 2) {
+    for (let i = 0; i < tokens.length - 1; i += 1) {
+      const phrase = `${tokens[i]} ${tokens[i + 1]}`;
+      if (all.includes(phrase)) score += 3;
+    }
+  }
+
+  return score;
 }
 
 function n(v: any, fallback = 0) {
@@ -616,15 +756,28 @@ export default function AdminInventoryPage() {
     current: number;
     total: number;
   } | null>(null);
+  const [bulkPreviewUrl, setBulkPreviewUrl] = React.useState<string | null>(null);
+  const [bulkPreviewError, setBulkPreviewError] = React.useState(false);
+  const [bulkHideThumbed, setBulkHideThumbed] = React.useState(true);
+  const [bulkShipClassFilter, setBulkShipClassFilter] = React.useState<
+    ShipClass[]
+  >([]);
   const [bulkSearchTerms, setBulkSearchTerms] = React.useState<Record<string, string>>({});
   const [bulkSearchResults, setBulkSearchResults] = React.useState<Record<string, Product[]>>({});
   const [bulkSearchLoading, setBulkSearchLoading] = React.useState<Record<string, boolean>>({});
+  const [bulkSearchHistory, setBulkSearchHistory] = React.useState<Record<string, string[]>>({});
+  const [bulkSearchIndex, setBulkSearchIndex] = React.useState<Record<string, number | null>>({});
+  const bulkSearchTimersRef = React.useRef<Record<string, number>>({});
   const productEditorRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
     return () => {
       warmUpAutoRef.current = false;
       warmFeatureAutoRef.current = false;
+      const timers = bulkSearchTimersRef.current;
+      Object.keys(timers).forEach((key) => {
+        window.clearTimeout(timers[key]);
+      });
     };
   }, []);
 
@@ -1614,7 +1767,7 @@ export default function AdminInventoryPage() {
 
       const { error: updateError } = await supabase
         .from("products")
-        .update({ image_urls: updated })
+        .update({ image_urls: updated, created_at: new Date().toISOString() })
         .eq("id", candidate.product_id);
 
       if (updateError) throw updateError;
@@ -1685,6 +1838,58 @@ export default function AdminInventoryPage() {
       toast({
         intent: "error",
         message: e?.message ?? "Failed to update match.",
+      });
+    } finally {
+      setReviewActionId(null);
+    }
+  }
+
+  async function deleteBulkUpload(match: ReviewMatch) {
+    if (!match?.id) return;
+    setReviewActionId(match.id);
+    try {
+      const { error } = await supabase
+        .from("product_upload_matches")
+        .delete()
+        .eq("id", match.id);
+      if (error) throw error;
+
+      setReviewMatches((prev) => prev.filter((m) => m.id !== match.id));
+      setBulkSearchTerms((prev) => {
+        const next = { ...prev };
+        delete next[match.id];
+        return next;
+      });
+      setBulkSearchResults((prev) => {
+        const next = { ...prev };
+        delete next[match.id];
+        return next;
+      });
+      setBulkSearchHistory((prev) => {
+        const next = { ...prev };
+        delete next[match.id];
+        return next;
+      });
+      setBulkSearchIndex((prev) => {
+        const next = { ...prev };
+        delete next[match.id];
+        return next;
+      });
+      setBulkSearchLoading((prev) => {
+        const next = { ...prev };
+        delete next[match.id];
+        return next;
+      });
+      const timers = bulkSearchTimersRef.current;
+      if (timers[match.id]) {
+        window.clearTimeout(timers[match.id]);
+        delete timers[match.id];
+      }
+      toast({ intent: "success", message: "Upload deleted." });
+    } catch (e: any) {
+      toast({
+        intent: "error",
+        message: e?.message ?? "Failed to delete upload.",
       });
     } finally {
       setReviewActionId(null);
@@ -1990,26 +2195,128 @@ export default function AdminInventoryPage() {
     }
   }
 
-  async function runBulkSearch(matchId: string) {
-    const term = (bulkSearchTerms[matchId] ?? "").trim();
+  async function runBulkSearch(
+    matchId: string,
+    termOverride?: string,
+    options?: { recordHistory?: boolean }
+  ) {
+    const term = (termOverride ?? bulkSearchTerms[matchId] ?? "").trim();
     if (!term) {
       setBulkSearchResults((prev) => ({ ...prev, [matchId]: [] }));
       return;
     }
+    const recordHistory = options?.recordHistory ?? true;
+    if (recordHistory && term.length >= 2) {
+      setBulkSearchHistory((prev) => {
+        const list = prev[matchId] ?? [];
+        if (list[list.length - 1] === term) return prev;
+        const next = [...list, term].slice(-20);
+        return { ...prev, [matchId]: next };
+      });
+      setBulkSearchIndex((prev) => ({ ...prev, [matchId]: null }));
+    }
     setBulkSearchLoading((prev) => ({ ...prev, [matchId]: true }));
     try {
-      const ilike = `%${term}%`;
+      const barcode = normalizeBarcode(term);
+      if (barcode.length >= 6) {
+        const { data: barcodeData, error: barcodeError } = await supabase
+          .from("product_variants")
+          .select(
+            "barcode,ship_class,product:products(id,title,brand,model,variation,image_urls,is_active)"
+          )
+          .eq("barcode", barcode)
+          .limit(20);
+        if (barcodeError) throw barcodeError;
+        const shipFilterActive = bulkShipClassFilter.length > 0;
+        const allowedShips = new Set(bulkShipClassFilter);
+        const filteredBarcodeRows = (barcodeData ?? []).filter((row: any) => {
+          if (!shipFilterActive) return true;
+          const ship = row?.ship_class as ShipClass | null | undefined;
+          return ship ? allowedShips.has(ship) : false;
+        });
+        const fromBarcode = filteredBarcodeRows
+          .map((row: any) => {
+            const product = row?.product as Product | null;
+            if (!product) return null;
+            return {
+              ...product,
+              product_variants: [{ ship_class: row?.ship_class ?? null }],
+            };
+          })
+          .filter(Boolean) as Product[];
+        if (fromBarcode.length) {
+          const unique = new Map<string, Product>();
+          fromBarcode.forEach((p) => {
+            const existing: any = unique.get(p.id);
+            if (!existing) {
+              unique.set(p.id, p);
+              return;
+            }
+            const nextVariants = [
+              ...((existing as any).product_variants ?? []),
+              ...((p as any).product_variants ?? []),
+            ];
+            unique.set(p.id, { ...existing, product_variants: nextVariants });
+          });
+          const uniqueList = Array.from(unique.values());
+          const match = reviewMatches.find((m) => m.id === matchId);
+          if (match && uniqueList.length === 1) {
+            const target = uniqueList[0];
+            const hasThumb =
+              Array.isArray(target.image_urls) && target.image_urls.length > 0;
+            if (!bulkHideThumbed || !hasThumb) {
+              await assignBulkUpload(match, target);
+              setBulkSearchLoading((prev) => ({ ...prev, [matchId]: false }));
+              return;
+            }
+          }
+          setBulkSearchResults((prev) => ({
+            ...prev,
+            [matchId]: uniqueList,
+          }));
+          setBulkSearchLoading((prev) => ({ ...prev, [matchId]: false }));
+          return;
+        }
+      }
+
+      const normalizedBase = normalizeLookupTitle(term, null) || term;
+      const normalizedQuery = normalizeSearchText(normalizedBase);
+      const tokens = expandSearchTokens(tokenizeSearch(normalizedBase));
+      const searchTerms = tokens.length ? tokens : tokenizeSearch(term);
+      const orParts: string[] = [];
+      searchTerms.forEach((t) => {
+        const cleaned = t.replace(/[(),]/g, " ").trim();
+        if (!cleaned) return;
+        const ilike = `%${cleaned}%`;
+        orParts.push(
+          `title.ilike.${ilike}`,
+          `brand.ilike.${ilike}`,
+          `model.ilike.${ilike}`,
+          `variation.ilike.${ilike}`
+        );
+      });
+
       const { data, error } = await supabase
         .from("products")
-        .select("id,title,brand,model,variation,image_urls,is_active")
-        .or(
-          `title.ilike.${ilike},brand.ilike.${ilike},model.ilike.${ilike},variation.ilike.${ilike}`
+        .select(
+          "id,title,brand,model,variation,image_urls,is_active,product_variants(ship_class)"
         )
-        .limit(20);
+        .or(orParts.join(","))
+        .limit(60);
       if (error) throw error;
+
+      const unique = new Map<string, Product>();
+      ((data as Product[]) ?? []).forEach((p) => unique.set(p.id, p));
+      const ranked = Array.from(unique.values())
+        .map((p) => ({
+          product: p,
+          score: scoreSearchResult(p, tokens, normalizedQuery),
+        }))
+        .sort((a, b) => b.score - a.score)
+        .map((row) => row.product);
       setBulkSearchResults((prev) => ({
         ...prev,
-        [matchId]: (data as Product[]) ?? [],
+        [matchId]: ranked,
       }));
     } catch (e: any) {
       setBulkSearchResults((prev) => ({ ...prev, [matchId]: [] }));
@@ -2022,6 +2329,21 @@ export default function AdminInventoryPage() {
     }
   }
 
+  function scheduleBulkSearch(matchId: string, nextValue: string) {
+    setBulkSearchTerms((prev) => ({ ...prev, [matchId]: nextValue }));
+    setBulkSearchIndex((prev) => ({ ...prev, [matchId]: null }));
+    const trimmed = nextValue.trim();
+    if (!trimmed) {
+      setBulkSearchResults((prev) => ({ ...prev, [matchId]: [] }));
+      return;
+    }
+    const timers = bulkSearchTimersRef.current;
+    if (timers[matchId]) window.clearTimeout(timers[matchId]);
+    timers[matchId] = window.setTimeout(() => {
+      runBulkSearch(matchId, trimmed);
+    }, 300);
+  }
+
   async function assignBulkUpload(match: ReviewMatch, product: Product) {
     if (!match?.upload_url) return;
     try {
@@ -2031,7 +2353,7 @@ export default function AdminInventoryPage() {
 
       const { error: updateError } = await supabase
         .from("products")
-        .update({ image_urls: updated })
+        .update({ image_urls: updated, created_at: new Date().toISOString() })
         .eq("id", product.id);
       if (updateError) throw updateError;
 
@@ -2258,7 +2580,7 @@ export default function AdminInventoryPage() {
     setCropEditor({
       index,
       baseUrl: parsed.src,
-      crop: parsed.crop ?? { zoom: 1, x: 0, y: 0 },
+      crop: parsed.crop ?? { zoom: 1, x: 0, y: 0, rotate: 0 },
     });
   }
 
@@ -2415,6 +2737,7 @@ export default function AdminInventoryPage() {
             brand: brand || null,
             model: model || null,
             variation: variation || null,
+            created_at: new Date().toISOString(),
           })
           .eq("id", selectedProduct.id);
 
@@ -2544,6 +2867,7 @@ export default function AdminInventoryPage() {
             brand: brand || null,
             model: model || null,
             variation: variation || null,
+            created_at: new Date().toISOString(),
           })
           .eq("id", productId);
         if (uErr) throw uErr;
@@ -3259,14 +3583,55 @@ export default function AdminInventoryPage() {
                   uploaded photo becomes the first thumbnail.
                 </div>
               </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Checkbox
+                  checked={bulkHideThumbed}
+                  onChange={setBulkHideThumbed}
+                  label="Hide thumbnailed"
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={loadReviewQueue}
+                  disabled={reviewLoading}
+                >
+                  {reviewLoading ? "Refreshing..." : "Refresh"}
+                </Button>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-white/70">
+              <span className="text-xs text-white/60">Ship class filter:</span>
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={loadReviewQueue}
-                disabled={reviewLoading}
+                onClick={() => setBulkShipClassFilter([])}
+                disabled={bulkShipClassFilter.length === 0}
               >
-                {reviewLoading ? "Refreshing..." : "Refresh"}
+                All
               </Button>
+              {BULK_SHIP_CLASS_FILTER_OPTIONS.map((opt) => {
+                const active = bulkShipClassFilter.includes(opt.value);
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() =>
+                      setBulkShipClassFilter((prev) =>
+                        prev.includes(opt.value)
+                          ? prev.filter((v) => v !== opt.value)
+                          : [...prev, opt.value]
+                      )
+                    }
+                    className={`h-8 rounded-full border px-3 text-xs transition ${
+                      active
+                        ? "border-accent-500 bg-accent-500/20 text-white"
+                        : "border-white/10 bg-bg-900/40 text-white/70 hover:bg-bg-900/70"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
             </div>
 
             <div className="grid gap-3 md:grid-cols-[1.2fr_0.8fr]">
@@ -3320,7 +3685,39 @@ export default function AdminInventoryPage() {
                     ? new Date(match.created_at).toLocaleString("en-PH")
                     : "";
                   const term = bulkSearchTerms[match.id] ?? "";
-                  const results = bulkSearchResults[match.id] ?? [];
+                  const resultsRaw = bulkSearchResults[match.id] ?? [];
+                  const shipFiltered =
+                    bulkShipClassFilter.length === 0
+                      ? resultsRaw
+                      : resultsRaw.filter((p) => {
+                          const variants =
+                            ((p as any).product_variants as Array<{
+                              ship_class: string | null;
+                            }> | null) ?? [];
+                          if (!variants.length) return false;
+                          return variants.some(
+                            (v) =>
+                              v.ship_class &&
+                              bulkShipClassFilter.includes(
+                                v.ship_class as ShipClass
+                              )
+                          );
+                        });
+                  const results = bulkHideThumbed
+                    ? shipFiltered.filter(
+                        (p) =>
+                          !Array.isArray(p.image_urls) ||
+                          p.image_urls.length === 0
+                      )
+                    : shipFiltered;
+                  const filteredByThumbs =
+                    bulkHideThumbed &&
+                    shipFiltered.length > 0 &&
+                    results.length === 0;
+                  const filteredByShip =
+                    bulkShipClassFilter.length > 0 &&
+                    resultsRaw.length > 0 &&
+                    shipFiltered.length === 0;
                   const searching = bulkSearchLoading[match.id] ?? false;
                   return (
                     <div
@@ -3328,7 +3725,16 @@ export default function AdminInventoryPage() {
                       className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3"
                     >
                       <div className="flex flex-wrap items-start gap-3">
-                        <div className="h-16 w-16 rounded-lg border border-white/10 bg-bg-950/60 overflow-hidden flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!uploadUrl) return;
+                            setBulkPreviewError(false);
+                            setBulkPreviewUrl(uploadUrl);
+                          }}
+                          className="h-20 w-20 sm:h-24 sm:w-24 rounded-xl border border-white/10 bg-bg-950/60 overflow-hidden flex-shrink-0"
+                          aria-label="View upload"
+                        >
                           {uploadUrl ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
@@ -3337,7 +3743,7 @@ export default function AdminInventoryPage() {
                               className="h-full w-full object-cover"
                             />
                           ) : null}
-                        </div>
+                        </button>
                         <div className="min-w-0 flex-1 space-y-1">
                           <div className="text-sm font-medium truncate">
                             {match.review_reason ?? "Uploaded photo"}
@@ -3348,6 +3754,16 @@ export default function AdminInventoryPage() {
                             </div>
                           ) : null}
                         </div>
+                        <div className="ml-auto">
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            onClick={() => deleteBulkUpload(match)}
+                            disabled={reviewActionId === match.id}
+                          >
+                            Delete
+                          </Button>
+                        </div>
                       </div>
 
                       <div className="space-y-2">
@@ -3357,15 +3773,33 @@ export default function AdminInventoryPage() {
                             placeholder="Search product title/brand/model..."
                             value={term}
                             onChange={(e) =>
-                              setBulkSearchTerms((prev) => ({
-                                ...prev,
-                                [match.id]: e.target.value,
-                              }))
+                              scheduleBulkSearch(match.id, e.target.value)
                             }
                             onKeyDown={(e) => {
                               if (e.key === "Enter") {
                                 e.preventDefault();
                                 runBulkSearch(match.id);
+                                return;
+                              }
+                              if (e.key === "ArrowUp") {
+                                const history = bulkSearchHistory[match.id] ?? [];
+                                if (!history.length) return;
+                                e.preventDefault();
+                                const currentIdx = bulkSearchIndex[match.id];
+                                const nextIdx =
+                                  currentIdx === null || typeof currentIdx === "undefined"
+                                    ? history.length - 1
+                                    : Math.max(0, currentIdx - 1);
+                                const nextTerm = history[nextIdx] ?? "";
+                                setBulkSearchIndex((prev) => ({
+                                  ...prev,
+                                  [match.id]: nextIdx,
+                                }));
+                                setBulkSearchTerms((prev) => ({
+                                  ...prev,
+                                  [match.id]: nextTerm,
+                                }));
+                                runBulkSearch(match.id, nextTerm, { recordHistory: false });
                               }
                             }}
                           />
@@ -3417,7 +3851,11 @@ export default function AdminInventoryPage() {
                           </div>
                         ) : term ? (
                           <div className="text-xs text-white/60">
-                            No products found.
+                            {filteredByShip
+                              ? "No matches in selected ship classes."
+                              : filteredByThumbs
+                                ? "All matches already have thumbnails."
+                                : "No products found."}
                           </div>
                         ) : null}
                       </div>
@@ -3427,6 +3865,52 @@ export default function AdminInventoryPage() {
               </div>
             ) : null}
           </div>
+
+          {bulkPreviewUrl ? (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+              onClick={() => setBulkPreviewUrl(null)}
+            >
+              <div
+                className="max-h-full w-full max-w-4xl rounded-2xl border border-white/10 bg-bg-900/95 p-4 shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between gap-3 pb-3">
+                  <div className="text-sm font-semibold">Photo preview</div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => bulkPreviewUrl && window.open(bulkPreviewUrl, "_blank")}
+                    >
+                      Open
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setBulkPreviewUrl(null)}
+                    >
+                      Close
+                    </Button>
+                  </div>
+                </div>
+                <div className="relative w-full min-h-[240px] rounded-xl border border-white/10 bg-black/40 flex items-center justify-center">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={bulkPreviewUrl}
+                    alt="Upload preview"
+                    className="w-full max-h-[75vh] object-contain"
+                    onError={() => setBulkPreviewError(true)}
+                  />
+                  {bulkPreviewError ? (
+                    <div className="absolute text-sm text-white/70">
+                      Unable to load preview.
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           {/* Product URL lookup */}
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
@@ -4687,6 +5171,49 @@ export default function AdminInventoryPage() {
                     className="mt-2 w-full"
                   />
                 </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      setCropEditor((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              crop: normalizeCrop({
+                                ...prev.crop,
+                                rotate: (prev.crop.rotate ?? 0) - 90,
+                              }),
+                            }
+                          : prev
+                      )
+                    }
+                  >
+                    Rotate Left
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      setCropEditor((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              crop: normalizeCrop({
+                                ...prev.crop,
+                                rotate: (prev.crop.rotate ?? 0) + 90,
+                              }),
+                            }
+                          : prev
+                      )
+                    }
+                  >
+                    Rotate Right
+                  </Button>
+                  <div className="text-xs text-white/60">
+                    {(cropEditor.crop.rotate ?? 0) % 360}°
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -4695,7 +5222,9 @@ export default function AdminInventoryPage() {
                 variant="ghost"
                 onClick={() =>
                   setCropEditor((prev) =>
-                    prev ? { ...prev, crop: { zoom: 1, x: 0, y: 0 } } : prev
+                    prev
+                      ? { ...prev, crop: { zoom: 1, x: 0, y: 0, rotate: 0 } }
+                      : prev
                   )
                 }
               >

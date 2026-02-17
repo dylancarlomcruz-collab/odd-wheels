@@ -71,7 +71,8 @@ export function SiteHeader() {
   const router = useRouter();
   const sp = useSearchParams();
   const pathname = usePathname();
-  const { sortBy, setSortBy, priceDir, setPriceDir } = useShopSort();
+  const { sortBy, setSortBy, priceDir, setPriceDir, newestDir, setNewestDir } =
+    useShopSort();
   const searchParamQ = sp.get("q") ?? "";
   const [q, setQ] = React.useState(searchParamQ);
   const [menuOpen, setMenuOpen] = React.useState(false);
@@ -834,11 +835,29 @@ export function SiteHeader() {
               <div className="grid grid-cols-4 gap-1 sm:gap-2" data-tour="shop-sort">
                 {SHOP_SORT_OPTIONS.map((option) => {
                   const active = option.value === sortBy;
+                  const isNewest = option.value === "newest";
+                  const newestLabel =
+                    isNewest && active && newestDir === "asc"
+                      ? "Oldest"
+                      : option.label;
                   return (
                     <button
                       key={option.value}
                       type="button"
-                      onClick={() => setSortBy(option.value)}
+                      onClick={() => {
+                        if (isNewest) {
+                          if (sortBy !== "newest") {
+                            setSortBy("newest");
+                            setNewestDir("desc");
+                            return;
+                          }
+                          setNewestDir((prev) =>
+                            prev === "desc" ? "asc" : "desc"
+                          );
+                          return;
+                        }
+                        setSortBy(option.value);
+                      }}
                       aria-pressed={active}
                       className={[
                         "inline-flex h-7 w-full items-center justify-center rounded-lg border px-1.5 text-[9px] font-semibold uppercase leading-none tracking-wide transition sm:h-9 sm:px-3 sm:text-[11px]",
@@ -847,7 +866,16 @@ export function SiteHeader() {
                           : "border-white/10 bg-bg-950/20 text-white/70 hover:bg-bg-950/40",
                       ].join(" ")}
                     >
-                      {option.label}
+                      <span className="inline-flex items-center justify-center gap-1">
+                        <span>{newestLabel}</span>
+                        {isNewest && active ? (
+                          newestDir === "asc" ? (
+                            <ArrowUp className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                          ) : (
+                            <ArrowDown className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                          )
+                        ) : null}
+                      </span>
                     </button>
                   );
                 })}

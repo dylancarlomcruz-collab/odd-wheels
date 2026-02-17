@@ -4,12 +4,15 @@ import * as React from "react";
 
 export type ShopSortBy = "relevance" | "newest" | "popular" | "price";
 export type ShopPriceDir = "asc" | "desc";
+export type ShopNewestDir = "asc" | "desc";
 
 type ShopSortContextValue = {
   sortBy: ShopSortBy;
   setSortBy: React.Dispatch<React.SetStateAction<ShopSortBy>>;
   priceDir: ShopPriceDir;
   setPriceDir: React.Dispatch<React.SetStateAction<ShopPriceDir>>;
+  newestDir: ShopNewestDir;
+  setNewestDir: React.Dispatch<React.SetStateAction<ShopNewestDir>>;
 };
 
 const ShopSortContext = React.createContext<ShopSortContextValue | null>(null);
@@ -17,10 +20,11 @@ const ShopSortContext = React.createContext<ShopSortContextValue | null>(null);
 export function ShopSortProvider({ children }: { children: React.ReactNode }) {
   const [sortBy, setSortBy] = React.useState<ShopSortBy>("relevance");
   const [priceDir, setPriceDir] = React.useState<ShopPriceDir>("asc");
+  const [newestDir, setNewestDir] = React.useState<ShopNewestDir>("desc");
 
   const value = React.useMemo(
-    () => ({ sortBy, setSortBy, priceDir, setPriceDir }),
-    [sortBy, priceDir]
+    () => ({ sortBy, setSortBy, priceDir, setPriceDir, newestDir, setNewestDir }),
+    [sortBy, priceDir, newestDir]
   );
 
   return (

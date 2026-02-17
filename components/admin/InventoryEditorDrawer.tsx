@@ -231,7 +231,7 @@ export function InventoryEditorDrawer({
     setCropEditor({
       index,
       baseUrl: parsed.src,
-      crop: parsed.crop ?? { zoom: 1, x: 0, y: 0 },
+      crop: parsed.crop ?? { zoom: 1, x: 0, y: 0, rotate: 0 },
     });
   }
 
@@ -558,6 +558,7 @@ export function InventoryEditorDrawer({
           variation: variation || null,
           image_urls: imagesToSave,
           is_active: isActive,
+          created_at: new Date().toISOString(),
         })
         .eq("id", productId);
 
@@ -1304,6 +1305,49 @@ export function InventoryEditorDrawer({
                       className="mt-2 w-full accent-amber-400"
                     />
                   </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setCropEditor((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                crop: normalizeCrop({
+                                  ...prev.crop,
+                                  rotate: (prev.crop.rotate ?? 0) - 90,
+                                }),
+                              }
+                            : prev
+                        )
+                      }
+                    >
+                      Rotate Left
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setCropEditor((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                crop: normalizeCrop({
+                                  ...prev.crop,
+                                  rotate: (prev.crop.rotate ?? 0) + 90,
+                                }),
+                              }
+                            : prev
+                        )
+                      }
+                    >
+                      Rotate Right
+                    </Button>
+                    <div className="text-xs text-white/60">
+                      {(cropEditor.crop.rotate ?? 0) % 360}°
+                    </div>
+                  </div>
 
                   <div className="hidden md:block space-y-2 pt-2">
                     <div className="text-xs text-white/60">Card preview</div>
@@ -1335,7 +1379,9 @@ export function InventoryEditorDrawer({
                   variant="ghost"
                   onClick={() =>
                     setCropEditor((prev) =>
-                      prev ? { ...prev, crop: { zoom: 1, x: 0, y: 0 } } : prev
+                      prev
+                        ? { ...prev, crop: { zoom: 1, x: 0, y: 0, rotate: 0 } }
+                        : prev
                     )
                   }
                 >
@@ -1366,7 +1412,12 @@ export function InventoryEditorDrawer({
                     variant="ghost"
                     onClick={() =>
                       setCropEditor((prev) =>
-                        prev ? { ...prev, crop: { zoom: 1, x: 0, y: 0 } } : prev
+                        prev
+                          ? {
+                              ...prev,
+                              crop: { zoom: 1, x: 0, y: 0, rotate: 0 },
+                            }
+                          : prev
                       )
                     }
                   >

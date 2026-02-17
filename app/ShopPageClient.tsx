@@ -249,7 +249,7 @@ export default function ShopPageClient() {
   const [lastSearch, setLastSearch] = React.useState<string | null>(null);
   const [showBackToTop, setShowBackToTop] = React.useState(false);
   const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
-  const { sortBy, priceDir } = useShopSort();
+  const { sortBy, priceDir, newestDir } = useShopSort();
   const isSingleView = viewMode === "single";
   const isDoubleView = viewMode === "double";
   const isQuadView = viewMode === "quad";
@@ -907,7 +907,11 @@ export default function ShopPageClient() {
     }
 
     if (sortBy === "newest") {
-      list.sort((a, b) => getCreatedTime(b) - getCreatedTime(a));
+      list.sort((a, b) =>
+        newestDir === "asc"
+          ? getCreatedTime(a) - getCreatedTime(b)
+          : getCreatedTime(b) - getCreatedTime(a)
+      );
       return list;
     }
 
@@ -935,6 +939,7 @@ export default function ShopPageClient() {
     filtered,
     sortBy,
     priceDir,
+    newestDir,
     getCreatedTime,
     getRecencyBoost,
     getBasePopularityScore,
