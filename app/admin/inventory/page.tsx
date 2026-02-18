@@ -47,6 +47,12 @@ type Product = {
   created_at: string;
   product_variants?: Array<{ ship_class: string | null }> | null;
 };
+type ProductSummary = Pick<
+  Product,
+  "id" | "title" | "brand" | "model" | "variation" | "image_urls" | "is_active"
+> & {
+  product_variants?: Array<{ ship_class: string | null; condition?: string | null }> | null;
+};
 
 type Variant = {
   id: string;
@@ -305,7 +311,7 @@ function expandSearchTokens(tokens: string[]) {
 }
 
 function scoreSearchResult(
-  product: Product,
+  product: ProductSummary,
   tokens: string[],
   normalizedQuery: string
 ) {
@@ -763,7 +769,9 @@ export default function AdminInventoryPage() {
     ShipClass[]
   >([]);
   const [bulkSearchTerms, setBulkSearchTerms] = React.useState<Record<string, string>>({});
-  const [bulkSearchResults, setBulkSearchResults] = React.useState<Record<string, Product[]>>({});
+  const [bulkSearchResults, setBulkSearchResults] = React.useState<
+    Record<string, ProductSummary[]>
+  >({});
   const [bulkSearchLoading, setBulkSearchLoading] = React.useState<Record<string, boolean>>({});
   const [bulkSearchHistory, setBulkSearchHistory] = React.useState<Record<string, string[]>>({});
   const [bulkSearchIndex, setBulkSearchIndex] = React.useState<Record<string, number | null>>({});
@@ -2321,8 +2329,8 @@ export default function AdminInventoryPage() {
         .limit(60);
       if (error) throw error;
 
-      const unique = new Map<string, Product>();
-      ((data as Product[]) ?? []).forEach((p) => unique.set(p.id, p));
+      const unique = new Map<string, ProductSummary>();
+      ((data as ProductSummary[]) ?? []).forEach((p) => unique.set(p.id, p));
       const ranked = Array.from(unique.values())
         .map((p) => ({
           product: p,
@@ -2389,7 +2397,7 @@ export default function AdminInventoryPage() {
     focusBulkSearchInput(prevId);
   }
 
-  async function assignBulkUpload(match: ReviewMatch, product: Product) {
+  async function assignBulkUpload(match: ReviewMatch, product: ProductSummary) {
     if (!match?.upload_url) return;
     const nextFocusId = (() => {
       const idx = reviewMatches.findIndex((m) => m.id === match.id);

@@ -2454,7 +2454,7 @@ export default function InventorySheetPage() {
   async function fetchPhotoMap(rows: SheetRow[], limit = 5) {
     const urls = rows
       .map((row) => row.product?.image_urls?.[0])
-      .filter(Boolean)
+      .filter((url): url is string => Boolean(url))
       .map((url) =>
         getThumbUrl(url, { width: 140, height: 140, quality: 60 })
       ) as string[];
