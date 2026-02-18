@@ -12,6 +12,7 @@ import { ShopSortProvider } from "@/hooks/useShopSort";
 const inter = Inter({ subsets: ["latin"] });
 const siteName = "Odd Wheels PH";
 const siteDescription = "Collectibles shop for diecast, resin, and limited runs.";
+const socialPreviewImage = "/api/og/shop";
 
 function getMetadataBase() {
   const raw = process.env.NEXT_PUBLIC_SITE_URL?.trim();
@@ -61,7 +62,9 @@ export const metadata: Metadata = {
     locale: "en_PH",
     images: [
       {
-        url: "/odd-wheels-logo.png",
+        url: socialPreviewImage,
+        width: 1200,
+        height: 630,
         alt: siteName,
       },
     ],
@@ -70,7 +73,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: siteName,
     description: siteDescription,
-    images: ["/odd-wheels-logo.png"],
+    images: [socialPreviewImage],
   },
   icons: {
     icon: "/odd-wheels-logo.png",
