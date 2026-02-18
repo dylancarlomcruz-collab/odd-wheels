@@ -2315,7 +2315,7 @@ export default function AdminInventoryPage() {
       const { data, error } = await supabase
         .from("products")
         .select(
-          "id,title,brand,model,variation,image_urls,is_active,product_variants(ship_class,condition)"
+          "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(ship_class,condition)"
         )
         .or(orParts.join(","))
         .limit(60);

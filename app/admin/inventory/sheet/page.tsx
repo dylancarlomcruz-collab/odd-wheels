@@ -30,15 +30,25 @@ type SheetRow = {
   } | null;
 };
 
+type ExportRow = SheetRow & {
+  price_min: number | null;
+  price_max: number | null;
+  qty_total: number | null;
+  variant_count: number;
+};
+
 const PAGE_SIZE = 200;
 const EXPORT_PAGE_SIZE = 1000;
 const CARD_EXPORT_SIZE = 1080;
 const CARD_FOLDER_LIMIT = 80;
 const EIGHT_UP_WIDTH = 1080;
 const EIGHT_UP_HEIGHT = 1080;
-const EXPORT_THUMB_WIDTH = 480;
-const EXPORT_THUMB_HEIGHT = 360;
-const EXPORT_THUMB_QUALITY = 80;
+const GRID_COLS = 4;
+const GRID_ROWS = 2;
+const GRID_PAGE_SIZE = GRID_COLS * GRID_ROWS;
+const EXPORT_THUMB_WIDTH = 960;
+const EXPORT_THUMB_HEIGHT = 720;
+const EXPORT_THUMB_QUALITY = 95;
 let cachedNoisePattern: CanvasPattern | null = null;
 let cachedNoiseContext: CanvasRenderingContext2D | null = null;
 
@@ -499,6 +509,62 @@ function stripVehicleMake(value: string, make: string | null | undefined) {
 function formatName(row: SheetRow) {
   const title = row.product?.title ?? "";
   return cleanDiecastTitle(normalizeTitleBrandAliases(title).trim()) || "Untitled";
+}
+
+function buildExportRowsForDownload(rows: SheetRow[]): ExportRow[] {
+  const grouped = new Map<string, SheetRow[]>();
+  for (const row of rows) {
+    const key = row.product?.id ? `product:${row.product.id}` : `row:${row.id}`;
+    const bucket = grouped.get(key);
+    if (bucket) bucket.push(row);
+    else grouped.set(key, [row]);
+  }
+
+  const result: ExportRow[] = [];
+  for (const bucket of grouped.values()) {
+    const sample = bucket[0];
+    let minPrice: number | null = null;
+    let maxPrice: number | null = null;
+    let qtyTotal = 0;
+    let hasQty = false;
+
+    for (const row of bucket) {
+      if (typeof row.price === "number" && !Number.isNaN(row.price)) {
+        minPrice = minPrice === null ? row.price : Math.min(minPrice, row.price);
+        maxPrice = maxPrice === null ? row.price : Math.max(maxPrice, row.price);
+      }
+      if (typeof row.qty === "number" && !Number.isNaN(row.qty)) {
+        qtyTotal += row.qty;
+        hasQty = true;
+      }
+    }
+
+    result.push({
+      ...sample,
+      price_min: minPrice,
+      price_max: maxPrice,
+      qty_total: hasQty ? qtyTotal : null,
+      variant_count: bucket.length,
+    });
+  }
+
+  return result;
+}
+
+function formatExportPrice(row: ExportRow) {
+  const min = row.price_min;
+  const max = row.price_max;
+  if (min === null && max === null) return "-";
+  if (min !== null && max !== null && min !== max) {
+    return `${formatPHP(min)} - ${formatPHP(max)}`;
+  }
+  const price = min ?? max;
+  return price === null ? "-" : formatPHP(price);
+}
+
+function formatExportCondition(row: ExportRow) {
+  if (row.variant_count > 1) return "MULTI VARIANTS";
+  return formatCompactCondition(row.condition);
 }
 
 function normalizeSheetRows(data: any[]): SheetRow[] {
@@ -1432,13 +1498,15 @@ function renderCardCanvas(
 
 function renderEightUpCanvas(
   ctx: CanvasRenderingContext2D,
-  rows: SheetRow[],
+  rows: ExportRow[],
   images: Array<CanvasImageSource | null>,
   category: string
 ) {
   const width = EIGHT_UP_WIDTH;
   const height = EIGHT_UP_HEIGHT;
   ctx.clearRect(0, 0, width, height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
 
   const bg = ctx.createLinearGradient(0, 0, 0, height);
   bg.addColorStop(0, "#0f1016");
@@ -1469,8 +1537,8 @@ function renderEightUpCanvas(
   const gridY = padding + headerHeight;
   const gridW = width - padding * 2;
   const gridH = height - padding * 2 - headerHeight - footerHeight;
-  const cols = 4;
-  const rowsCount = 3;
+  const cols = GRID_COLS;
+  const rowsCount = GRID_ROWS;
   const gap = 16;
   const cardW = (gridW - gap * (cols - 1)) / cols;
   const cardH = (gridH - gap * (rowsCount - 1)) / rowsCount;
@@ -1514,7 +1582,7 @@ function renderEightUpCanvas(
   ctx.fillText(suffix, startX, footerY);
   ctx.restore();
 
-  for (let i = 0; i < cols * rowsCount; i += 1) {
+  for (let i = 0; i < GRID_PAGE_SIZE; i += 1) {
     const col = i % cols;
     const rowIdx = Math.floor(i / cols);
     const x = gridX + col * (cardW + gap);
@@ -1601,9 +1669,19 @@ function renderEightUpCanvas(
       ctx.fillText(line, innerX, cursorY + idx * lineHeight);
     });
     ctx.restore();
+    cursorY += titleLines.length * lineHeight + 4;
+
+    if (row.variant_count > 1) {
+      ctx.save();
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.font = '600 11px "Segoe UI", Arial, sans-serif';
+      ctx.textBaseline = "top";
+      ctx.fillText("Multiple variants available", innerX, cursorY);
+      ctx.restore();
+    }
 
     const metaY = y + cardH - pad - 18;
-    const condition = formatCompactCondition(row.condition);
+    const condition = formatExportCondition(row);
     ctx.save();
     ctx.font = '700 10px "Segoe UI", Arial, sans-serif';
     ctx.textBaseline = "middle";
@@ -1621,10 +1699,7 @@ function renderEightUpCanvas(
     ctx.fillText(condition, innerX + pillPadding, metaY + pillHeight / 2);
     ctx.restore();
 
-    const price =
-      row.price === null || row.price === undefined
-        ? "-"
-        : formatPHP(Number(row.price));
+    const price = formatExportPrice(row);
     ctx.save();
     ctx.font = '700 14px "Segoe UI", Arial, sans-serif';
     const priceWidth = ctx.measureText(price).width;
@@ -2248,7 +2323,7 @@ export default function InventorySheetPage() {
 
       const groupLabel =
         {
-          download_category: "12-up category",
+          download_category: "8-up category",
           brand: "brand",
           ship_class: "class",
           ship_class_brand: "class to brand",
@@ -2612,7 +2687,7 @@ export default function InventorySheetPage() {
     }
   }
 
-  function buildTenUpPages(source: SheetRow[]) {
+  function buildGridPages(source: ExportRow[]) {
     const isTrueScaleGroup = (value: string) =>
       value === "Truescales" || value.startsWith("Truescales ");
     const sorted = [...source].sort((a, b) => {
@@ -2645,16 +2720,16 @@ export default function InventorySheetPage() {
       return nameA.localeCompare(nameB);
     });
 
-    const pages: Array<{ group: string; rows: SheetRow[] }> = [];
+    const pages: Array<{ group: string; rows: ExportRow[] }> = [];
     let currentGroup = "";
-    let bucket: SheetRow[] = [];
+    let bucket: ExportRow[] = [];
 
     const flush = () => {
       if (!bucket.length) return;
-      for (let i = 0; i < bucket.length; i += 12) {
+      for (let i = 0; i < bucket.length; i += GRID_PAGE_SIZE) {
         pages.push({
           group: currentGroup || "Unassigned",
-          rows: bucket.slice(i, i + 12),
+          rows: bucket.slice(i, i + GRID_PAGE_SIZE),
         });
       }
       bucket = [];
@@ -2676,7 +2751,7 @@ export default function InventorySheetPage() {
     return pages;
   }
 
-  async function downloadTenUpHtml() {
+  async function downloadEightUpHtml() {
     if (exportingTenUp) return;
     setExportingTenUp(true);
     setExportMsg(null);
@@ -2684,11 +2759,12 @@ export default function InventorySheetPage() {
 
     try {
       const allRows = await fetchAllRows();
-      const pages = buildTenUpPages(allRows);
+      const exportRows = buildExportRowsForDownload(allRows);
+      const pages = buildGridPages(exportRows);
 
       const pagesHtml = pages
         .map((page, pageIndex) => {
-          const cardsHtml = Array.from({ length: 12 }).map((_, idx) => {
+          const cardsHtml = Array.from({ length: GRID_PAGE_SIZE }).map((_, idx) => {
             const row = page.rows[idx];
             if (!row) {
               return `<div class="card empty"></div>`;
@@ -2713,16 +2789,18 @@ export default function InventorySheetPage() {
               : `<div class="img-placeholder">No image</div>`;
             const cardBrand = escapeHtml(formatBrand(row).toUpperCase());
             const titleText = escapeHtml(formatName(row));
-            const condition = escapeHtml(formatCompactCondition(row.condition));
-            const price =
-              row.price === null || row.price === undefined
-                ? "-"
-                : formatPHP(Number(row.price));
+            const condition = escapeHtml(formatExportCondition(row));
+            const price = escapeHtml(formatExportPrice(row));
+            const variantsNote =
+              row.variant_count > 1
+                ? `<div class="card-variants">Multiple variants available</div>`
+                : "";
             return `
               <div class="card">
                 <div class="card-brand">${cardBrand}</div>
                 <div class="card-image">${imageCell}</div>
                 <div class="card-title">${titleText}</div>
+                ${variantsNote}
                 <div class="card-meta">
                   <span class="card-condition">${condition}</span>
                   <span class="card-price">
@@ -2762,7 +2840,7 @@ export default function InventorySheetPage() {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Inventory 12-up Pages</title>
+    <title>Inventory 8-up Pages</title>
     <style>
       :root {
         color-scheme: dark;
@@ -2830,8 +2908,8 @@ export default function InventorySheetPage() {
       }
       .page-grid {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        grid-auto-rows: 1fr;
+        grid-template-columns: repeat(${GRID_COLS}, minmax(0, 1fr));
+        grid-template-rows: repeat(${GRID_ROWS}, minmax(0, 1fr));
         gap: 16px;
         flex: 1;
       }
@@ -2904,6 +2982,11 @@ export default function InventorySheetPage() {
         -webkit-box-orient: vertical;
         overflow: hidden;
       }
+      .card-variants {
+        font-size: 11px;
+        color: rgba(255,255,255,0.7);
+        letter-spacing: 0.03em;
+      }
       .card-meta {
         display: flex;
         align-items: center;
@@ -2950,13 +3033,13 @@ export default function InventorySheetPage() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = "inventory-12up.html";
+      link.download = "inventory-8up.html";
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
 
-      setExportMsg(`12-up pages downloaded (${pages.length} pages).`);
+      setExportMsg(`8-up pages downloaded (${pages.length} pages).`);
     } catch (err: any) {
       setError(err?.message ?? "Export failed.");
     } finally {
@@ -2972,7 +3055,8 @@ export default function InventorySheetPage() {
 
     try {
       const allRows = await fetchAllRows();
-      const pages = buildTenUpPages(allRows);
+      const exportRows = buildExportRowsForDownload(allRows);
+      const pages = buildGridPages(exportRows);
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
 
@@ -3003,7 +3087,7 @@ export default function InventorySheetPage() {
             return await loadImageWithFallback(thumbUrl, imageUrl);
           })
         );
-        while (images.length < 12) images.push(null);
+        while (images.length < GRID_PAGE_SIZE) images.push(null);
 
         renderEightUpCanvas(ctx, page.rows, images, page.group);
         const blob = await canvasToBlob(canvas, "image/png");
@@ -3035,13 +3119,13 @@ export default function InventorySheetPage() {
       const url = URL.createObjectURL(zipBlob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = "inventory-12up-pages.zip";
+      link.download = "inventory-8up-pages.zip";
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
 
-      setExportMsg(`12-up ZIP downloaded (${pages.length} pages).`);
+      setExportMsg(`8-up ZIP downloaded (${pages.length} pages).`);
     } catch (err: any) {
       setError(err?.message ?? "Export failed.");
     } finally {
@@ -3149,10 +3233,10 @@ export default function InventorySheetPage() {
           <Button
             variant="secondary"
             size="sm"
-            onClick={downloadTenUpHtml}
+            onClick={downloadEightUpHtml}
             disabled={exportingTenUp}
           >
-            {exportingTenUp ? "Preparing..." : "Download 12-up (Inner Box)"}
+            {exportingTenUp ? "Preparing..." : "Download 8-up (Inner Box)"}
           </Button>
           <Button
             variant="secondary"
@@ -3160,7 +3244,7 @@ export default function InventorySheetPage() {
             onClick={downloadEightUpZip}
             disabled={exportingEightUpZip}
           >
-            {exportingEightUpZip ? "Preparing..." : "Download 12-up ZIP"}
+            {exportingEightUpZip ? "Preparing..." : "Download 8-up ZIP"}
           </Button>
           <Button
             variant="secondary"
@@ -3186,7 +3270,7 @@ export default function InventorySheetPage() {
                 )
               }
             >
-              <option value="download_category">Group by 12-up category</option>
+              <option value="download_category">Group by 8-up category</option>
               <option value="brand">Group by brand</option>
               <option value="ship_class">Group by class</option>
               <option value="ship_class_brand">Class to brand</option>
