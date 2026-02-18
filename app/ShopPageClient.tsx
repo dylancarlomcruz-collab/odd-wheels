@@ -15,6 +15,7 @@ import {
   buildSearchTermTokens,
   getLastSearchTerm,
   matchesSearchText,
+  normalizeSearchTerm,
 } from "@/lib/search";
 import { useProfile } from "@/hooks/useProfile";
 import { InventoryEditorDrawer } from "@/components/admin/InventoryEditorDrawer";
@@ -92,6 +93,7 @@ const TOMICA_BRANDS = new Set([
 const HOT_WHEELS_BRANDS = ["hotwheels", "hotwheel"];
 const TRUCK_KEYWORDS = ["truck", "trucks", "pickup", "hauler", "semi", "tractor", "rig", "lorry"];
 const TRUESCALE_KEYWORDS = ["truescale", "true scale", "tsm", "acrylic"];
+const LBWK_QUERY_TERMS = ["lbwk", "lb works", "liberty walk", "libertywalk", "lb-"];
 
 function matchesKeyword(text: string, keyword: string) {
   const padded = ` ${text} `;
@@ -103,6 +105,15 @@ function matchesAnyKeyword(text: string, keywords: string[]) {
     if (matchesKeyword(text, keyword)) return true;
   }
   return false;
+}
+
+function hasAnyPhrase(text: string, terms: string[]) {
+  const padded = ` ${text} `;
+  return terms.some((term) => {
+    const normalized = normalizeSearchTerm(term);
+    if (!normalized) return false;
+    return padded.includes(` ${normalized} `) || text.includes(normalized);
+  });
 }
 
 function matchesCategory(product: any, category: string) {
@@ -787,6 +798,25 @@ export default function ShopPageClient() {
     () => buildSearchTermTokens(searchQuery),
     [searchQuery]
   );
+  const normalizedSearchQuery = React.useMemo(
+    () => normalizeSearchTerm(searchQuery),
+    [searchQuery]
+  );
+  const strictSearchTokens = React.useMemo(
+    () =>
+      normalizedSearchQuery
+        .split(" ")
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2),
+    [normalizedSearchQuery]
+  );
+  const searchIntent = React.useMemo(
+    () => ({
+      hotWheels: hasAnyPhrase(normalizedSearchQuery, ["hot wheels", "hotwheels"]),
+      lbwk: hasAnyPhrase(normalizedSearchQuery, LBWK_QUERY_TERMS),
+    }),
+    [normalizedSearchQuery]
+  );
 
   const popularKeywordTokens = React.useMemo(() => {
     if (searchTermTokens.length) return searchTermTokens;
@@ -885,24 +915,100 @@ export default function ShopPageClient() {
       if (!searchTermTokens.length) return 0;
       const text = buildProductSearchText(p);
       const padded = ` ${text} `;
-      let best = 0;
+      const title = normalizeSearchTerm(p.title ?? "");
+      const brand = normalizeSearchTerm(p.brand ?? "");
+      const model = normalizeSearchTerm(p.model ?? "");
+      const variation = normalizeSearchTerm(p.variation ?? "");
+      const productBrandKey = normalizeBrandKey(p.brand);
+      const isHotWheelsProduct =
+        HOT_WHEELS_BRANDS.some((key) => productBrandKey.includes(key)) ||
+        hasAnyPhrase(text, ["hot wheels", "hotwheels"]);
+      const isLbwkProduct = hasAnyPhrase(text, LBWK_QUERY_TERMS);
+
+      let expandedBest = 0;
       for (const tokens of searchTermTokens) {
         let score = 0;
+        let matched = 0;
         for (const t of tokens) {
-          if (padded.includes(` ${t} `)) score += 3;
-          else if (padded.includes(t)) score += 1;
+          if (!t) continue;
+          if (padded.includes(` ${t} `)) {
+            score += 3;
+            matched += 1;
+          } else if (padded.includes(t)) {
+            score += 1;
+            matched += 1;
+          }
         }
-        best = Math.max(best, score);
+        if (matched > 0) {
+          const coverage = matched / Math.max(tokens.length, 1);
+          const weighted = score + coverage * 8 + Math.min(tokens.length, 4);
+          expandedBest = Math.max(expandedBest, weighted);
+        }
       }
-      return best;
+
+      let strictScore = 0;
+      let strictMatched = 0;
+      for (const token of strictSearchTokens) {
+        if (!token) continue;
+        const inBrand =
+          ` ${brand} `.includes(` ${token} `) || brand.includes(token);
+        const inModel =
+          ` ${model} `.includes(` ${token} `) || model.includes(token);
+        const inVariation =
+          ` ${variation} `.includes(` ${token} `) || variation.includes(token);
+        const inTitle =
+          ` ${title} `.includes(` ${token} `) || title.includes(token);
+        if (inBrand) {
+          strictScore += 8;
+          strictMatched += 1;
+        } else if (inTitle || inModel || inVariation) {
+          strictScore += 5;
+          strictMatched += 1;
+        } else if (padded.includes(` ${token} `) || padded.includes(token)) {
+          strictScore += 2;
+          strictMatched += 1;
+        } else {
+          strictScore -= 4;
+        }
+      }
+      if (strictSearchTokens.length && strictMatched === strictSearchTokens.length) {
+        strictScore += 10;
+      }
+      if (normalizedSearchQuery && padded.includes(` ${normalizedSearchQuery} `)) {
+        strictScore += 12;
+      } else if (normalizedSearchQuery && text.includes(normalizedSearchQuery)) {
+        strictScore += 6;
+      }
+
+      if (searchIntent.hotWheels) {
+        strictScore += isHotWheelsProduct ? 14 : -5;
+      }
+      if (searchIntent.lbwk) {
+        strictScore += isLbwkProduct ? 10 : -3;
+      }
+      if (searchIntent.hotWheels && searchIntent.lbwk) {
+        if (isHotWheelsProduct && isLbwkProduct) {
+          strictScore += 18;
+        } else if (isLbwkProduct && !isHotWheelsProduct) {
+          strictScore -= 4;
+        }
+      }
+
+      return expandedBest * 2 + strictScore * 3;
     };
 
     if (sortBy === "relevance") {
       list.sort((a, b) => {
+        const aSearchScore = getSearchScore(a);
+        const bSearchScore = getSearchScore(b);
         const aScore =
-          getSearchScore(a) * 4 + getRecencyBoost(a) * 2 + getBasePopularityScore(a) * 0.1;
+          aSearchScore * 8 +
+          getRecencyBoost(a) * (searchTermTokens.length ? 0.8 : 2) +
+          getBasePopularityScore(a) * (searchTermTokens.length ? 0.03 : 0.1);
         const bScore =
-          getSearchScore(b) * 4 + getRecencyBoost(b) * 2 + getBasePopularityScore(b) * 0.1;
+          bSearchScore * 8 +
+          getRecencyBoost(b) * (searchTermTokens.length ? 0.8 : 2) +
+          getBasePopularityScore(b) * (searchTermTokens.length ? 0.03 : 0.1);
         if (bScore !== aScore) return bScore - aScore;
         return getCreatedTime(b) - getCreatedTime(a);
       });
@@ -948,6 +1054,9 @@ export default function ShopPageClient() {
     getBasePopularityScore,
     getPopularSortScore,
     searchTermTokens,
+    strictSearchTokens,
+    normalizedSearchQuery,
+    searchIntent,
   ]);
 
   const newArrivals = React.useMemo(() => {

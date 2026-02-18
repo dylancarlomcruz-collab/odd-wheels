@@ -10,6 +10,23 @@ import { ThemeProvider } from "@/components/theme/ThemeProvider";
 import { ShopSortProvider } from "@/hooks/useShopSort";
 
 const inter = Inter({ subsets: ["latin"] });
+const siteName = "Odd Wheels PH";
+const siteDescription = "Collectibles shop for diecast, resin, and limited runs.";
+
+function getMetadataBase() {
+  const raw = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  const fallback = "https://odd-wheels.com";
+
+  if (!raw) return new URL(fallback);
+
+  try {
+    return new URL(raw.startsWith("http") ? raw : `https://${raw}`);
+  } catch {
+    return new URL(fallback);
+  }
+}
+
+const metadataBase = getMetadataBase();
 
 const themeScript = `
 (() => {
@@ -26,8 +43,35 @@ const themeScript = `
 `;
 
 export const metadata: Metadata = {
-  title: "Odd Wheels PH",
-  description: "Odd Wheels PH",
+  metadataBase,
+  title: {
+    default: siteName,
+    template: `%s | ${siteName}`,
+  },
+  description: siteDescription,
+  alternates: {
+    canonical: "/",
+  },
+  openGraph: {
+    type: "website",
+    url: "/",
+    siteName,
+    title: siteName,
+    description: siteDescription,
+    locale: "en_PH",
+    images: [
+      {
+        url: "/odd-wheels-logo.png",
+        alt: siteName,
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: siteName,
+    description: siteDescription,
+    images: ["/odd-wheels-logo.png"],
+  },
   icons: {
     icon: "/odd-wheels-logo.png",
     shortcut: "/odd-wheels-logo.png",

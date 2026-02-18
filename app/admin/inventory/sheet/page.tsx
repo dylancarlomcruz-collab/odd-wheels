@@ -43,12 +43,13 @@ const CARD_EXPORT_SIZE = 1080;
 const CARD_FOLDER_LIMIT = 80;
 const EIGHT_UP_WIDTH = 1080;
 const EIGHT_UP_HEIGHT = 1080;
-const GRID_COLS = 3;
-const GRID_ROWS = 3;
+const GRID_COLS = 2;
+const GRID_ROWS = 2;
 const GRID_PAGE_SIZE = GRID_COLS * GRID_ROWS;
 const EXPORT_THUMB_WIDTH = 960;
 const EXPORT_THUMB_HEIGHT = 720;
 const EXPORT_THUMB_QUALITY = 100;
+const ALL_CATEGORY = "ALL";
 let cachedNoisePattern: CanvasPattern | null = null;
 let cachedNoiseContext: CanvasRenderingContext2D | null = null;
 
@@ -101,11 +102,29 @@ const HOT_WHEELS_BRANDS = new Set(
     brand.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
   )
 );
+const INNO64_BRANDS = new Set(
+  ["Inno64", "Inno 64"].map((brand) =>
+    brand.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+  )
+);
+const KAIDO_HOUSE_BRANDS = new Set(
+  ["Kaido House", "Kaido"].map((brand) =>
+    brand.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+  )
+);
+const POP_RACE_BRANDS = new Set(
+  ["Pop Race", "Poprace"].map((brand) =>
+    brand.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+  )
+);
 const DOWNLOAD_CATEGORY_ORDER = [
   "Truescales JDM",
   "Truescales EUR/US",
   "Mini GT JDM",
   "Mini GT EUR/US",
+  "Inno64",
+  "Kaido House",
+  "Pop Race",
   "Boxed Truescales",
   "Blistered Truescales",
   "Figures and Dioramas",
@@ -189,7 +208,11 @@ const JDM_MODEL_HINTS: RegExp[] = [
 
 function hasJdmModelHint(value: string) {
   if (!value) return false;
-  return JDM_MODEL_HINTS.some((pattern) => pattern.test(value));
+  const normalized = String(value ?? "")
+    .replace(/[^a-z0-9]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return JDM_MODEL_HINTS.some((pattern) => pattern.test(normalized));
 }
 
 function isJdmMarket(row: SheetRow) {
@@ -198,7 +221,10 @@ function isJdmMarket(row: SheetRow) {
   if (makeKey && JDM_MAKES.has(makeKey)) return true;
   const title = normalizeTitleBrandAliases(row.product?.title ?? "");
   const extra = `${row.product?.model ?? ""} ${row.product?.variation ?? ""}`;
-  const combined = `${title} ${extra}`;
+  const combined = `${title} ${extra}`
+    .replace(/[^a-z0-9]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (/\bjdm\b/i.test(combined)) return true;
   return hasJdmModelHint(combined);
 }
@@ -206,6 +232,11 @@ function isJdmMarket(row: SheetRow) {
 function formatDownloadCategory(row: SheetRow) {
   const shipClass = String(row.ship_class ?? "").toUpperCase().trim();
   const brandKey = normalizeCategoryBrand(formatBrand(row));
+
+  if (INNO64_BRANDS.has(brandKey)) return "Inno64";
+  if (KAIDO_HOUSE_BRANDS.has(brandKey)) return "Kaido House";
+  if (POP_RACE_BRANDS.has(brandKey)) return "Pop Race";
+
   let baseCategory = "Others";
   if (shipClass && shipClass !== "UNASSIGNED") {
     if (shipClass === "ACRYLIC_TRUE_SCALE") baseCategory = "Truescales";
@@ -260,6 +291,13 @@ function formatDownloadCategory(row: SheetRow) {
 function formatDownloadTitle(category: string) {
   if (!category) return "Collection";
   return `${category} Collection`;
+}
+
+function applyCategoryFilter(rows: SheetRow[], category: string) {
+  if (!category || category === ALL_CATEGORY) return rows;
+  return rows.filter(
+    (row) => (formatDownloadCategory(row) || "Others") === category
+  );
 }
 
 const FALLBACK_DIECAST_BRANDS = [
@@ -1741,6 +1779,10 @@ export default function InventorySheetPage() {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [searchTerm, setSearchTerm] = React.useState("");
+  const [categoryFilter, setCategoryFilter] = React.useState(ALL_CATEGORY);
+  const [selectedRowIds, setSelectedRowIds] = React.useState<Set<string>>(
+    new Set()
+  );
   const [exporting, setExporting] = React.useState(false);
   const [exportingZip, setExportingZip] = React.useState(false);
   const [exportingSheet, setExportingSheet] = React.useState(false);
@@ -1770,10 +1812,65 @@ export default function InventorySheetPage() {
     [normalizedSearch]
   );
 
+  const availableCategories = React.useMemo(() => {
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const category = formatDownloadCategory(row);
+      if (category) seen.add(category);
+    }
+    for (const category of DOWNLOAD_CATEGORY_ORDER) {
+      if (category) seen.add(category);
+    }
+    const ordered = DOWNLOAD_CATEGORY_ORDER.filter((cat) => seen.has(cat));
+    const rest = Array.from(seen)
+      .filter((cat) => !DOWNLOAD_CATEGORY_ORDER.includes(cat))
+      .sort((a, b) => a.localeCompare(b));
+    return [...ordered, ...rest];
+  }, [rows, brandSyncTick]);
+
+  const categoryOptions = React.useMemo(() => {
+    const next = [...availableCategories];
+    if (
+      categoryFilter !== ALL_CATEGORY &&
+      categoryFilter &&
+      !next.includes(categoryFilter)
+    ) {
+      next.push(categoryFilter);
+    }
+    return next;
+  }, [availableCategories, categoryFilter]);
+
   const filteredRows = React.useMemo(() => {
-    if (!searchTokens.length) return rows;
-    return rows.filter((row) => rowMatchesSearch(row, searchTokens));
-  }, [rows, searchTokens, brandSyncTick]);
+    let next = rows;
+    if (searchTokens.length) {
+      next = next.filter((row) => rowMatchesSearch(row, searchTokens));
+    }
+    if (categoryFilter !== ALL_CATEGORY) {
+      next = next.filter(
+        (row) => (formatDownloadCategory(row) || "Others") === categoryFilter
+      );
+    }
+    return next;
+  }, [rows, searchTokens, categoryFilter, brandSyncTick]);
+
+  const selectedRows = React.useMemo(() => {
+    if (!selectedRowIds.size) return [] as SheetRow[];
+    return rows.filter((row) => selectedRowIds.has(row.id));
+  }, [rows, selectedRowIds]);
+
+  const allFilteredSelected = React.useMemo(
+    () =>
+      filteredRows.length > 0 &&
+      filteredRows.every((row) => selectedRowIds.has(row.id)),
+    [filteredRows, selectedRowIds]
+  );
+
+  const someFilteredSelected = React.useMemo(
+    () => filteredRows.some((row) => selectedRowIds.has(row.id)),
+    [filteredRows, selectedRowIds]
+  );
+
+  const headerSelectRef = React.useRef<HTMLInputElement | null>(null);
 
   const totalQty = React.useMemo(
     () => filteredRows.reduce((sum, row) => sum + Number(row.qty ?? 0), 0),
@@ -1784,6 +1881,36 @@ export default function InventorySheetPage() {
     () => groupRows(filteredRows),
     [filteredRows, brandSyncTick]
   );
+
+  const toggleRowSelection = React.useCallback(
+    (rowId: string, checked: boolean) => {
+      setSelectedRowIds((prev) => {
+        const next = new Set(prev);
+        if (checked) next.add(rowId);
+        else next.delete(rowId);
+        return next;
+      });
+    },
+    []
+  );
+
+  const toggleSelectFiltered = React.useCallback(
+    (checked: boolean) => {
+      setSelectedRowIds((prev) => {
+        const next = new Set(prev);
+        for (const row of filteredRows) {
+          if (checked) next.add(row.id);
+          else next.delete(row.id);
+        }
+        return next;
+      });
+    },
+    [filteredRows]
+  );
+
+  const clearSelection = React.useCallback(() => {
+    setSelectedRowIds(new Set());
+  }, []);
 
   async function loadPage(nextPage: number, replace = false) {
     if (loading) return;
@@ -1894,12 +2021,34 @@ export default function InventorySheetPage() {
     return all;
   }
 
+  async function resolveExportRows() {
+    if (selectedRows.length) {
+      return {
+        rows: selectedRows,
+        scope: "selected" as const,
+      };
+    }
+    const allRows = await fetchAllRows();
+    return {
+      rows: applyCategoryFilter(allRows, categoryFilter),
+      scope: "category" as const,
+    };
+  }
+
   async function downloadCsv() {
     if (exporting) return;
     setExporting(true);
     setExportMsg(null);
     try {
-      const allRows = await fetchAllRows();
+      const { rows: exportRows, scope } = await resolveExportRows();
+      if (!exportRows.length) {
+        setExportMsg(
+          scope === "selected"
+            ? "No selected rows available."
+            : "No rows for the selected category."
+        );
+        return;
+      }
       const headers = [
         "Name",
         "Make",
@@ -1910,7 +2059,7 @@ export default function InventorySheetPage() {
         "Photo URL",
       ];
       const lines = [headers.join(",")];
-      for (const row of allRows) {
+      for (const row of exportRows) {
         const photoUrl = row.product?.image_urls?.[0] ?? "";
         const inferred = inferVehicleMakeModel(row);
         const values = [
@@ -1985,7 +2134,15 @@ export default function InventorySheetPage() {
     setError(null);
 
     try {
-      const allRows = await fetchAllRows();
+      const { rows: exportRows, scope } = await resolveExportRows();
+      if (!exportRows.length) {
+        setExportMsg(
+          scope === "selected"
+            ? "No selected rows available."
+            : "No rows for the selected category."
+        );
+        return;
+      }
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
 
@@ -2004,7 +2161,7 @@ export default function InventorySheetPage() {
       let addedPhotos = 0;
       let skippedPhotos = 0;
 
-      for (const row of allRows) {
+      for (const row of exportRows) {
         const photoUrl = row.product?.image_urls?.[0] ?? "";
         let photoFile = "";
 
@@ -2257,8 +2414,16 @@ export default function InventorySheetPage() {
     setError(null);
 
     try {
-      const allRows = await fetchAllRows();
-      const grouped = groupRows(allRows);
+      const { rows: exportRows, scope } = await resolveExportRows();
+      if (!exportRows.length) {
+        setExportMsg(
+          scope === "selected"
+            ? "No selected rows available."
+            : "No rows for the selected category."
+        );
+        return;
+      }
+      const grouped = groupRows(exportRows);
       const orderedRows = grouped.flatMap((group) => group.rows);
       const cardRows = mergeSealedUnsealedRows(orderedRows);
       const JSZip = (await import("jszip")).default;
@@ -2332,7 +2497,7 @@ export default function InventorySheetPage() {
 
       const groupLabel =
         {
-          download_category: "9-up category",
+          download_category: "4-up category",
           brand: "brand",
           ship_class: "class",
           ship_class_brand: "class to brand",
@@ -2365,7 +2530,10 @@ export default function InventorySheetPage() {
     setError(null);
 
     try {
-      const sampleRow = rows[0] ?? (await fetchAllRows())[0];
+      const sampleRow =
+        selectedRows[0] ??
+        applyCategoryFilter(rows, categoryFilter)[0] ??
+        applyCategoryFilter(await fetchAllRows(), categoryFilter)[0];
       if (!sampleRow) throw new Error("No products available to preview.");
 
       const imageUrl = sampleRow.product?.image_urls?.[0] ?? "";
@@ -2501,9 +2669,17 @@ export default function InventorySheetPage() {
     setError(null);
 
     try {
-      const allRows = await fetchAllRows();
-      const grouped = groupRows(allRows);
-      const photoMap = await fetchPhotoMap(allRows);
+      const { rows: exportRows, scope } = await resolveExportRows();
+      if (!exportRows.length) {
+        setExportMsg(
+          scope === "selected"
+            ? "No selected rows available."
+            : "No rows for the selected category."
+        );
+        return;
+      }
+      const grouped = groupRows(exportRows);
+      const photoMap = await fetchPhotoMap(exportRows);
 
       const rowsHtml = grouped
         .map((group) => {
@@ -2653,8 +2829,8 @@ export default function InventorySheetPage() {
           <div class="subtitle">Snapshot export with photos</div>
         </div>
         <div class="meta">
-          <span>${allRows.length} rows</span>
-          <span>${allRows.reduce((sum, row) => sum + Number(row.qty ?? 0), 0)} qty</span>
+          <span>${exportRows.length} rows</span>
+          <span>${exportRows.reduce((sum, row) => sum + Number(row.qty ?? 0), 0)} qty</span>
         </div>
       </div>
       <div class="table-wrap">
@@ -2767,8 +2943,16 @@ export default function InventorySheetPage() {
     setError(null);
 
     try {
-      const allRows = await fetchAllRows();
-      const exportRows = buildExportRowsForDownload(allRows);
+      const { rows: filteredRows, scope } = await resolveExportRows();
+      if (!filteredRows.length) {
+        setExportMsg(
+          scope === "selected"
+            ? "No selected rows available."
+            : "No rows for the selected category."
+        );
+        return;
+      }
+      const exportRows = buildExportRowsForDownload(filteredRows);
       const pages = buildGridPages(exportRows);
 
       const pagesHtml = pages
@@ -2849,7 +3033,7 @@ export default function InventorySheetPage() {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Inventory 9-up Pages</title>
+    <title>Inventory 4-up Pages</title>
     <style>
       :root {
         color-scheme: dark;
@@ -3049,7 +3233,7 @@ export default function InventorySheetPage() {
       link.remove();
       URL.revokeObjectURL(url);
 
-      setExportMsg(`9-up pages downloaded (${pages.length} pages).`);
+      setExportMsg(`4-up pages downloaded (${pages.length} pages).`);
     } catch (err: any) {
       setError(err?.message ?? "Export failed.");
     } finally {
@@ -3064,8 +3248,16 @@ export default function InventorySheetPage() {
     setError(null);
 
     try {
-      const allRows = await fetchAllRows();
-      const exportRows = buildExportRowsForDownload(allRows);
+      const { rows: filteredRows, scope } = await resolveExportRows();
+      if (!filteredRows.length) {
+        setExportMsg(
+          scope === "selected"
+            ? "No selected rows available."
+            : "No rows for the selected category."
+        );
+        return;
+      }
+      const exportRows = buildExportRowsForDownload(filteredRows);
       const pages = buildGridPages(exportRows);
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
@@ -3135,7 +3327,7 @@ export default function InventorySheetPage() {
       link.remove();
       URL.revokeObjectURL(url);
 
-      setExportMsg(`9-up ZIP downloaded (${pages.length} pages).`);
+      setExportMsg(`4-up ZIP downloaded (${pages.length} pages).`);
     } catch (err: any) {
       setError(err?.message ?? "Export failed.");
     } finally {
@@ -3146,6 +3338,26 @@ export default function InventorySheetPage() {
   React.useEffect(() => {
     loadPage(0, true);
   }, []);
+
+  React.useEffect(() => {
+    const input = headerSelectRef.current;
+    if (!input) return;
+    input.indeterminate = someFilteredSelected && !allFilteredSelected;
+  }, [someFilteredSelected, allFilteredSelected]);
+
+  React.useEffect(() => {
+    setSelectedRowIds((prev) => {
+      if (!prev.size) return prev;
+      const available = new Set(rows.map((row) => row.id));
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (available.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [rows]);
 
   React.useEffect(() => {
     let active = true;
@@ -3185,14 +3397,14 @@ export default function InventorySheetPage() {
           : undefined
       }
     >
-      <CardHeader className="flex flex-wrap items-center justify-between gap-2">
+      <CardHeader className="space-y-3">
         <div>
           <div className="text-xl font-semibold">Inventory Sheet</div>
           <div className="text-sm text-white/60">
             All variants listed in a spreadsheet-style view.
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2">
             <input
               className="h-9 w-56 rounded-md border border-white/10 bg-bg-900/60 px-3 text-xs text-white/80 placeholder:text-white/40"
@@ -3210,108 +3422,131 @@ export default function InventorySheetPage() {
               </Button>
             ) : null}
           </div>
+          <select
+            className="h-9 rounded-md border border-white/10 bg-bg-900/60 px-2 text-xs text-white/80"
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            aria-label="Filter by category"
+          >
+            <option value={ALL_CATEGORY}>All categories</option>
+            {categoryOptions.map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
           <Badge>{filteredRows.length} rows</Badge>
           <Badge>{totalQty} qty</Badge>
+          <Badge>{selectedRows.length} selected</Badge>
+          {selectedRows.length ? (
+            <Button variant="ghost" size="sm" onClick={clearSelection}>
+              Clear selected
+            </Button>
+          ) : null}
           {searchTerm ? (
             <span className="text-xs text-white/50">
               of {rows.length} loaded
             </span>
           ) : null}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setExpanded((prev) => !prev)}
-          >
-            {expanded ? "Exit full screen" : "Full screen"}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={downloadCsv}
-            disabled={exporting}
-          >
-            {exporting ? "Preparing..." : "Download CSV"}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={downloadSheetHtml}
-            disabled={exportingSheet}
-          >
-            {exportingSheet ? "Preparing..." : "Download HTML (Photos)"}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={downloadEightUpHtml}
-            disabled={exportingTenUp}
-          >
-            {exportingTenUp ? "Preparing..." : "Download 9-up (Inner Box)"}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={downloadEightUpZip}
-            disabled={exportingEightUpZip}
-          >
-            {exportingEightUpZip ? "Preparing..." : "Download 9-up ZIP"}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={syncProductMakeModel}
-            disabled={syncingModel}
-          >
-            {syncingModel ? "Syncing..." : "Sync Make/Model"}
-          </Button>
-          <div className="flex items-center gap-2">
-            <select
-              className="h-9 rounded-md border border-white/10 bg-bg-900/60 px-2 text-xs text-white/80"
-              value={cardGroupMode}
-              onChange={(e) =>
-                setCardGroupMode(
-                  e.target.value as
-                    | "brand"
-                    | "ship_class"
-                    | "ship_class_brand"
-                    | "brand_ship_class"
-                    | "download_category"
-                    | "none"
-                )
-              }
-            >
-              <option value="download_category">Group by 9-up category</option>
-              <option value="brand">Group by brand</option>
-              <option value="ship_class">Group by class</option>
-              <option value="ship_class_brand">Class to brand</option>
-              <option value="brand_ship_class">Brand to class</option>
-              <option value="none">No folders</option>
-            </select>
+        </div>
+        <div className="overflow-x-auto">
+          <div className="flex w-max min-w-full items-center gap-2 pb-1">
             <Button
-              variant="secondary"
+              variant="ghost"
               size="sm"
-              onClick={downloadCardsZip}
-              disabled={exportingCards}
+              onClick={() => setExpanded((prev) => !prev)}
             >
-              {exportingCards ? "Preparing..." : "Download Cards ZIP"}
+              {expanded ? "Exit full screen" : "Full screen"}
             </Button>
             <Button
               variant="secondary"
               size="sm"
-              onClick={previewCardSample}
-              disabled={previewingCard}
+              onClick={downloadCsv}
+              disabled={exporting}
             >
-              {previewingCard ? "Preparing..." : "Preview Card"}
+              {exporting ? "Preparing..." : "Download CSV"}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={downloadSheetHtml}
+              disabled={exportingSheet}
+            >
+              {exportingSheet ? "Preparing..." : "Download HTML (Photos)"}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={downloadEightUpHtml}
+              disabled={exportingTenUp}
+            >
+              {exportingTenUp ? "Preparing..." : "Download 4-up (Inner Box)"}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={downloadEightUpZip}
+              disabled={exportingEightUpZip}
+            >
+              {exportingEightUpZip ? "Preparing..." : "Download 4-up ZIP"}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={syncProductMakeModel}
+              disabled={syncingModel}
+            >
+              {syncingModel ? "Syncing..." : "Sync Make/Model"}
+            </Button>
+            <div className="flex items-center gap-2">
+              <select
+                className="h-9 rounded-md border border-white/10 bg-bg-900/60 px-2 text-xs text-white/80"
+                value={cardGroupMode}
+                onChange={(e) =>
+                  setCardGroupMode(
+                    e.target.value as
+                      | "brand"
+                      | "ship_class"
+                      | "ship_class_brand"
+                      | "brand_ship_class"
+                      | "download_category"
+                      | "none"
+                  )
+                }
+              >
+                <option value="download_category">Group by 4-up category</option>
+                <option value="brand">Group by brand</option>
+                <option value="ship_class">Group by class</option>
+                <option value="ship_class_brand">Class to brand</option>
+                <option value="brand_ship_class">Brand to class</option>
+                <option value="none">No folders</option>
+              </select>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={downloadCardsZip}
+                disabled={exportingCards}
+              >
+                {exportingCards ? "Preparing..." : "Download Cards ZIP"}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={previewCardSample}
+                disabled={previewingCard}
+              >
+                {previewingCard ? "Preparing..." : "Preview Card"}
+              </Button>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={downloadZip}
+              disabled={exportingZip}
+            >
+              {exportingZip ? "Preparing..." : "Download ZIP + Photos"}
             </Button>
           </div>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={downloadZip}
-            disabled={exportingZip}
-          >
-            {exportingZip ? "Preparing..." : "Download ZIP + Photos"}
-          </Button>
         </div>
       </CardHeader>
       <CardBody className="space-y-4">
@@ -3327,6 +3562,16 @@ export default function InventorySheetPage() {
           <table className="min-w-[900px] w-full text-sm">
             <thead className="sticky top-0 bg-bg-900/90 backdrop-blur">
               <tr className="text-left text-white/70">
+                <th className="px-3 py-3 w-10">
+                  <input
+                    ref={headerSelectRef}
+                    type="checkbox"
+                    className="h-4 w-4 accent-orange-400"
+                    checked={allFilteredSelected}
+                    onChange={(e) => toggleSelectFiltered(e.target.checked)}
+                    aria-label="Select all filtered rows"
+                  />
+                </th>
                 <th className="px-4 py-3">Photo</th>
                 <th className="px-4 py-3">Name</th>
                 <th className="px-4 py-3">Model</th>
@@ -3339,7 +3584,7 @@ export default function InventorySheetPage() {
               {groupedRows.map((group) => (
                 <React.Fragment key={group.brand}>
                   <tr className="border-t border-white/10 bg-bg-950/40">
-                    <td className="px-4 py-2 text-sm font-semibold" colSpan={6}>
+                    <td className="px-4 py-2 text-sm font-semibold" colSpan={7}>
                       {group.brand} ({group.rows.length})
                     </td>
                   </tr>
@@ -3348,6 +3593,17 @@ export default function InventorySheetPage() {
                       key={row.id}
                       className="border-t border-white/5 text-white/90"
                     >
+                      <td className="px-3 py-3 align-top">
+                        <input
+                          type="checkbox"
+                          className="mt-1 h-4 w-4 accent-orange-400"
+                          checked={selectedRowIds.has(row.id)}
+                          onChange={(e) =>
+                            toggleRowSelection(row.id, e.target.checked)
+                          }
+                          aria-label={`Select ${formatName(row)}`}
+                        />
+                      </td>
                       <td className="px-4 py-3">
                         <div className="h-12 w-12 rounded-lg border border-white/10 bg-bg-900/50 overflow-hidden">
                           {row.product?.image_urls?.[0] ? (
@@ -3390,7 +3646,7 @@ export default function InventorySheetPage() {
               {!filteredRows.length && !loading ? (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={7}
                     className="px-4 py-6 text-center text-white/50"
                   >
                     {searchTerm ? "No matching items." : "No items yet."}

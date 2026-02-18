@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 import { formatConditionLabel } from "@/lib/conditions";
 import { toast } from "@/components/ui/toast";
 
@@ -351,9 +352,6 @@ export default function CashierShipmentsPage() {
   const [activeCourier, setActiveCourier] = React.useState<string>("ALL");
   const [scanOrderId, setScanOrderId] = React.useState<string | null>(null);
   const [scanCourier, setScanCourier] = React.useState<string>("");
-  const [scanError, setScanError] = React.useState<string | null>(null);
-  const [scanSupported, setScanSupported] = React.useState(false);
-  const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const isAdmin = profile?.role === "admin";
 
   const shippingDays = React.useMemo(
@@ -361,10 +359,6 @@ export default function CashierShipmentsPage() {
     [notices]
   );
   const shippingDaysLabel = shippingDays || "the posted shipping days";
-
-  React.useEffect(() => {
-    setScanSupported(typeof window !== "undefined" && "BarcodeDetector" in window);
-  }, []);
 
   React.useEffect(() => {
     if (!orders.length) return;
@@ -382,67 +376,6 @@ export default function CashierShipmentsPage() {
     });
   }, [orders]);
 
-  React.useEffect(() => {
-    if (!scanOrderId || !scanSupported) return;
-    let stream: MediaStream | null = null;
-    let raf = 0;
-    let cancelled = false;
-    const orderId = scanOrderId;
-
-    const start = async () => {
-      try {
-        const BarcodeDetectorClass = (window as any).BarcodeDetector;
-        if (!BarcodeDetectorClass) {
-          setScanError("Camera scanning is not supported in this browser.");
-          return;
-        }
-        const detector = new BarcodeDetectorClass({
-          formats: ["code_128", "code_39", "ean_13", "ean_8", "upc_a", "upc_e", "qr_code"],
-        });
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" },
-        });
-        if (!videoRef.current) return;
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-
-        const tick = async () => {
-          if (cancelled || !videoRef.current) return;
-          try {
-            const barcodes = await detector.detect(videoRef.current);
-            if (barcodes?.length) {
-              const raw = String(barcodes[0].rawValue ?? "").trim();
-              if (raw) {
-                onDraftChange(orderId, "tracking", raw);
-                await runRpc(orderId, "fn_mark_shipped", {
-                  p_order_id: orderId,
-                  p_courier: scanCourier,
-                  p_tracking_number: raw,
-                });
-                setScanOrderId(null);
-                setScanCourier("");
-                return;
-              }
-            }
-          } catch (err) {
-            setScanError("Unable to scan. Try again.");
-          }
-          raf = requestAnimationFrame(tick);
-        };
-        raf = requestAnimationFrame(tick);
-      } catch (err: any) {
-        setScanError(err?.message ?? "Camera access failed.");
-      }
-    };
-
-    start();
-
-    return () => {
-      cancelled = true;
-      if (raf) cancelAnimationFrame(raf);
-      if (stream) stream.getTracks().forEach((track) => track.stop());
-    };
-  }, [scanOrderId, scanSupported]);
 
   const paidOrders = React.useMemo(
     () =>
@@ -1148,7 +1081,6 @@ export default function CashierShipmentsPage() {
                                 size="sm"
                                 variant="ghost"
                                 onClick={() => {
-                                  setScanError(null);
                                   setScanCourier(draft.courier || o.shipping_method || "");
                                   setScanOrderId(o.id);
                                 }}
@@ -1269,10 +1201,10 @@ export default function CashierShipmentsPage() {
             {selectedOrder ? renderShippingDetails(selectedOrder) : null}
           </OrderDetailsModal>
 
-          <OrderDetailsModal
-            open={Boolean(selectedItem)}
-            onClose={() => setSelectedItem(null)}
-            title={
+      <OrderDetailsModal
+        open={Boolean(selectedItem)}
+        onClose={() => setSelectedItem(null)}
+        title={
               selectedItem ? (
                 <div>
                   <div className="text-xs uppercase tracking-wide text-white/50">
@@ -1291,44 +1223,28 @@ export default function CashierShipmentsPage() {
           </OrderDetailsModal>
         </CardBody>
       </Card>
-      {scanOrderId ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-bg-900/95 p-4">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-white/90">
-                Scan tracking number
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setScanOrderId(null);
-                  setScanCourier("");
-                }}
-              >
-                Close
-              </Button>
-            </div>
-            {scanSupported ? (
-              <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black">
-                <video ref={videoRef} className="h-64 w-full object-cover" />
-              </div>
-            ) : (
-              <div className="mt-3 text-sm text-white/70">
-                Camera scanning is not supported in this browser. Please type or
-                use a barcode scanner.
-              </div>
-            )}
-            {scanError ? (
-              <div className="mt-2 text-sm text-red-200">{scanError}</div>
-            ) : null}
-            <div className="mt-2 text-xs text-white/50">
-              Point the camera at the waybill barcode. The code will fill in automatically.
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <BarcodeScannerModal
+        open={Boolean(scanOrderId)}
+        onClose={() => {
+          setScanOrderId(null);
+          setScanCourier("");
+        }}
+        title="Scan tracking number"
+        description="Point the camera at the waybill barcode. The code will fill in automatically."
+        onScan={async (value) => {
+          const orderId = scanOrderId;
+          const tracking = String(value ?? "").trim();
+          if (!orderId || !tracking) return;
+          onDraftChange(orderId, "tracking", tracking);
+          await runRpc(orderId, "fn_mark_shipped", {
+            p_order_id: orderId,
+            p_courier: scanCourier,
+            p_tracking_number: tracking,
+          });
+          setScanOrderId(null);
+          setScanCourier("");
+        }}
+      />
     </div>
   );
 }

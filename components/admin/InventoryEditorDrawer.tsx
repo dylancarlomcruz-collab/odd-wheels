@@ -111,6 +111,7 @@ export function InventoryEditorDrawer({
   const [isActive, setIsActive] = React.useState(true);
   const [variants, setVariants] = React.useState<VariantDraft[]>([]);
   const [saving, setSaving] = React.useState(false);
+  const [selling, setSelling] = React.useState(false);
   const [deletingVariantId, setDeletingVariantId] = React.useState<string | null>(
     null
   );
@@ -453,6 +454,114 @@ export function InventoryEditorDrawer({
     }
   }
 
+  function resolveOrderId(data: any): string | null {
+    if (!data) return null;
+    if (typeof data === "string" || typeof data === "number") return String(data);
+    if (typeof data === "object") {
+      return (
+        data.order_id ??
+        data.orderId ??
+        data.id ??
+        data.order?.id ??
+        data.data?.id ??
+        null
+      );
+    }
+    return null;
+  }
+
+  async function markOneSoldViaPos() {
+    if (selling || saving || deletingProduct) return;
+
+    const available = variants
+      .filter((v) => !v._delete)
+      .filter((v) => Math.max(0, Math.trunc(safeNumber(v.qty) ?? 0)) > 0)
+      .slice()
+      .sort(
+        (a, b) =>
+          conditionSortOrder(a.condition) - conditionSortOrder(b.condition) ||
+          Number(a.price ?? 0) - Number(b.price ?? 0)
+      );
+
+    if (!available.length) {
+      toast({ intent: "error", message: "No stock available to mark sold." });
+      return;
+    }
+
+    const target = available[0];
+
+    setSelling(true);
+    try {
+      const shippingDetails = {
+        method: "PICKUP",
+        text: "Auto-sold from inventory editor",
+        discount: null,
+      };
+      const items = [{ variant_id: target.id, qty: 1 }];
+
+      const { data, error } = await supabase.rpc("pos_create_order", {
+        p_customer_name: "Odd Wheels FB",
+        p_customer_phone: "N/A",
+        p_shipping_method: "PICKUP",
+        p_shipping_details: shippingDetails,
+        p_payment_method: "CASH",
+        p_save_customer: false,
+        p_items: items,
+      });
+
+      if (error) throw error;
+
+      const orderId = resolveOrderId(data);
+      if (!orderId) {
+        throw new Error("POS order created, but order id is missing.");
+      }
+
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) {
+        throw new Error("Staff session not found. Please sign in again.");
+      }
+
+      const res = await fetch("/api/pos/complete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ orderId }),
+      });
+
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(payload?.error ?? "POS completion failed.");
+      }
+
+      setVariants((prev) =>
+        prev.map((v) => {
+          if (v.id !== target.id) return v;
+          const currentQty = Math.max(0, Math.trunc(safeNumber(v.qty) ?? 0));
+          return { ...v, qty: Math.max(0, currentQty - 1) };
+        })
+      );
+      onSaved();
+      toast({
+        intent: "success",
+        title: "Marked sold",
+        message: `1 qty sold via POS as Odd Wheels FB (${formatConditionLabel(target.condition, {
+          upper: true,
+        })}).`,
+      });
+    } catch (e: any) {
+      toast({
+        intent: "error",
+        title: "Sell failed",
+        message: e?.message ?? "Unable to mark item as sold.",
+      });
+    } finally {
+      setSelling(false);
+    }
+  }
+
   async function deleteProduct() {
     const productName = product?.title?.trim() || "this product";
     if (
@@ -777,6 +886,13 @@ export function InventoryEditorDrawer({
                 label="Active in shop"
               />
               <div className="hidden sm:flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={markOneSoldViaPos}
+                  disabled={saving || deletingProduct || selling}
+                >
+                  {selling ? "Selling..." : "Sold (Odd Wheels FB)"}
+                </Button>
                 <Button
                   variant="danger"
                   onClick={deleteProduct}
@@ -1309,6 +1425,13 @@ export function InventoryEditorDrawer({
 
         <div className="sticky bottom-0 z-10 border-t border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:hidden">
           <div className="grid gap-2">
+            <Button
+              variant="secondary"
+              onClick={markOneSoldViaPos}
+              disabled={saving || deletingProduct || selling}
+            >
+              {selling ? "Selling..." : "Sold (Odd Wheels FB)"}
+            </Button>
             <Button
               variant="danger"
               onClick={deleteProduct}

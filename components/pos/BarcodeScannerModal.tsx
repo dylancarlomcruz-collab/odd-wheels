@@ -10,12 +10,18 @@ type BarcodeScannerModalProps = {
   open: boolean;
   onClose: () => void;
   onScan: (value: string) => void;
+  title?: string;
+  description?: string;
+  startingLabel?: string;
 };
 
 export function BarcodeScannerModal({
   open,
   onClose,
   onScan,
+  title,
+  description,
+  startingLabel,
 }: BarcodeScannerModalProps) {
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const controlsRef = React.useRef<IScannerControls | null>(null);
@@ -23,6 +29,10 @@ export function BarcodeScannerModal({
   const [error, setError] = React.useState<string | null>(null);
   const [starting, setStarting] = React.useState(false);
   const [retryKey, setRetryKey] = React.useState(0);
+  const headerText = title ?? "Scan Barcode";
+  const idleText =
+    description ?? "Point the camera at a barcode to scan automatically.";
+  const startingText = startingLabel ?? "Starting camera...";
 
   React.useEffect(() => {
     if (!open) return;
@@ -112,7 +122,7 @@ export function BarcodeScannerModal({
       <div className="w-full max-w-xl" onClick={(e) => e.stopPropagation()}>
         <Card>
           <CardHeader className="flex items-center justify-between">
-            <div className="text-lg font-semibold">Scan Barcode</div>
+            <div className="text-lg font-semibold">{headerText}</div>
             <Button variant="ghost" onClick={onClose}>
               Close
             </Button>
@@ -143,9 +153,7 @@ export function BarcodeScannerModal({
               </div>
             ) : (
               <div className="text-sm text-white/60">
-                {starting
-                  ? "Starting camera..."
-                  : "Point the camera at a barcode to scan automatically."}
+                {starting ? startingText : idleText}
               </div>
             )}
           </CardBody>

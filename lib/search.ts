@@ -35,6 +35,7 @@ const SMART_SYNONYM_GROUPS: Array<{
       "lbwk",
       "lb-works",
       "lb works",
+      "lb-",
       "liberty",
       "liberty walk",
       "libertywalk",
