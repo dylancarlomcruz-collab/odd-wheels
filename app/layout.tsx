@@ -16,12 +16,16 @@ const socialPreviewImage = "/api/og/shop";
 
 function getMetadataBase() {
   const raw = process.env.NEXT_PUBLIC_SITE_URL?.trim();
-  const fallback = "https://odd-wheels.com";
+  const fallback = "https://www.odd-wheels.com";
 
   if (!raw) return new URL(fallback);
 
   try {
-    return new URL(raw.startsWith("http") ? raw : `https://${raw}`);
+    const url = new URL(raw.startsWith("http") ? raw : `https://${raw}`);
+    if (url.hostname === "odd-wheels.com") {
+      url.hostname = "www.odd-wheels.com";
+    }
+    return url;
   } catch {
     return new URL(fallback);
   }
