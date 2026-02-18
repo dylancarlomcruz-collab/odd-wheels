@@ -12,7 +12,7 @@ import { ShopSortProvider } from "@/hooks/useShopSort";
 const inter = Inter({ subsets: ["latin"] });
 const siteName = "Odd Wheels PH";
 const siteDescription = "Collectibles shop for diecast, resin, and limited runs.";
-const socialPreviewImage = "/api/og/shop";
+const socialPreviewImage = "/og/shop-screenshot.png";
 
 function getMetadataBase() {
   const raw = process.env.NEXT_PUBLIC_SITE_URL?.trim();
@@ -59,7 +59,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: "website",
-    url: "/",
+    url: "https://www.odd-wheels.com/",
     siteName,
     title: siteName,
     description: siteDescription,
