@@ -4,8 +4,9 @@ import type { ShopProduct } from "@/components/ProductCard";
 import { formatConditionLabel } from "@/lib/conditions";
 import { collapseVariants, type VariantRow as ShopVariantRow } from "@/lib/shopProducts";
 
-export const runtime = "nodejs";
+export const runtime = "edge";
 export const dynamic = "force-dynamic";
+const STATIC_OG_SCREENSHOT_PATH = "/og/shop-screenshot.png";
 
 type RawVariantRow = {
   id: string;
@@ -76,6 +77,7 @@ const PREFERRED_BRAND_KEYS: Array<{ label: string; keys: string[] }> = [
   { label: "Tomica", keys: ["tomica"] },
   { label: "Inno64", keys: ["inno64"] },
 ];
+const MAX_OG_IMAGE_BYTES = 1_900_000;
 
 function pickProduct(value: RawVariantRow["product"]) {
   if (!value) return null;
@@ -90,25 +92,42 @@ function normalizeBrandKey(value: string | null | undefined) {
 }
 
 function normalizeImageUrl(raw: string | null | undefined, baseUrl: string) {
+  const toRenderableUrl = (url: string) => {
+    try {
+      const parsed = new URL(url);
+      if (!parsed.pathname.includes("/storage/v1/object/public/")) return url;
+      parsed.pathname = parsed.pathname.replace(
+        "/storage/v1/object/public/",
+        "/storage/v1/render/image/public/"
+      );
+      if (!parsed.searchParams.has("width")) parsed.searchParams.set("width", "720");
+      if (!parsed.searchParams.has("height")) parsed.searchParams.set("height", "480");
+      if (!parsed.searchParams.has("quality")) parsed.searchParams.set("quality", "60");
+      return parsed.toString();
+    } catch {
+      return url;
+    }
+  };
+
   const value = String(raw ?? "").trim();
   if (!value) return null;
   if (value.startsWith("data:")) return value;
-  if (/^https?:\/\//i.test(value)) return value;
+  if (/^https?:\/\//i.test(value)) return toRenderableUrl(value);
 
   const base = baseUrl.replace(/\/$/, "");
   if (!base) return null;
 
   if (value.startsWith("/storage/") || value.startsWith("storage/")) {
     const path = value.startsWith("/") ? value : `/${value}`;
-    return `${base}${path}`;
+    return toRenderableUrl(`${base}${path}`);
   }
 
-  if (value.startsWith("/")) return `${base}${value}`;
+  if (value.startsWith("/")) return toRenderableUrl(`${base}${value}`);
   return null;
 }
 
 function formatPeso(value: number) {
-  return `₱${Math.round(value).toLocaleString("en-PH")}`;
+  return `PHP ${Math.round(value).toLocaleString("en-PH")}`;
 }
 
 function truncate(text: string, max = 60) {
@@ -119,14 +138,44 @@ function truncate(text: string, max = 60) {
 
 async function toDataUrl(url: string) {
   try {
-    const res = await fetch(url, { cache: "force-cache" });
+    const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) return null;
+    const contentLength = Number(res.headers.get("content-length") ?? 0);
+    if (contentLength > MAX_OG_IMAGE_BYTES) return null;
     const contentType = res.headers.get("content-type") || "image/jpeg";
-    const buf = Buffer.from(await res.arrayBuffer());
-    return `data:${contentType};base64,${buf.toString("base64")}`;
+    const arrayBuffer = await res.arrayBuffer();
+    if (arrayBuffer.byteLength > MAX_OG_IMAGE_BYTES) return null;
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return `data:${contentType};base64,${btoa(binary)}`;
   } catch {
     return null;
   }
+}
+
+async function tryServeScreenshot(request: Request) {
+  const configuredUrl = String(process.env.SHOP_OG_SCREENSHOT_URL ?? "").trim();
+  const { origin } = new URL(request.url);
+  const candidates = [configuredUrl, `${origin}${STATIC_OG_SCREENSHOT_PATH}`].filter(Boolean);
+
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok || !res.body) continue;
+      const headers = new Headers();
+      headers.set("content-type", res.headers.get("content-type") || "image/png");
+      headers.set("cache-control", "public, max-age=0, s-maxage=3600");
+      return new Response(res.body, { status: 200, headers });
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
 }
 
 function toCollapseRows(rows: RawVariantRow[]): ShopVariantRow[] {
@@ -305,7 +354,7 @@ async function loadSnapshot(): Promise<ShopSnapshot | null> {
   const cardsWithImages = await Promise.all(
     cards.map(async (card) => ({
       ...card,
-      image: card.image ? await toDataUrl(card.image) : null,
+      image: card.image ? (await toDataUrl(card.image)) ?? card.image : null,
     }))
   );
 
@@ -316,7 +365,10 @@ async function loadSnapshot(): Promise<ShopSnapshot | null> {
   };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const screenshot = await tryServeScreenshot(request);
+  if (screenshot) return screenshot;
+
   const snapshot = await loadSnapshot();
 
   const cards: OgCard[] =
@@ -327,7 +379,7 @@ export async function GET() {
             key: "fallback",
             title: "Nissan GT-R NISMO #23 Winner Suzuka Super GT Series",
             image: null,
-            priceLabel: "₱1,199",
+            priceLabel: "PHP 1,199",
             conditionLabel: "SEALED",
             conditionTags: ["SEALED"],
             lowStock: true,
@@ -337,7 +389,7 @@ export async function GET() {
             key: "fallback-2",
             title: "Mini GT Nissan GT-R (R35) Nismo GT3 FIA GT World Cup Macau 2023",
             image: null,
-            priceLabel: "₱849",
+            priceLabel: "PHP 849",
             conditionLabel: "UNSEALED",
             conditionTags: ["UNSEALED"],
             lowStock: true,
@@ -347,7 +399,7 @@ export async function GET() {
             key: "fallback-3",
             title: "Kaido House Nissan Skyline GT R Works Shinjuku V1 (R34)",
             image: null,
-            priceLabel: "₱799 - ₱1,099",
+            priceLabel: "PHP 799 - PHP 1,099",
             conditionLabel: "SEALED",
             conditionTags: ["SEALED", "UNSEALED"],
             lowStock: true,
@@ -357,7 +409,7 @@ export async function GET() {
             key: "fallback-4",
             title: "Mini GT Nissan LB-ER34 Super Silhouette LBWK Skyline Red/Black",
             image: null,
-            priceLabel: "₱749 - ₱849",
+            priceLabel: "PHP 749 - PHP 849",
             conditionLabel: "SEALED",
             conditionTags: ["SEALED", "UNSEALED"],
             lowStock: false,
@@ -372,6 +424,7 @@ export async function GET() {
 
   const totalCount = snapshot?.totalCount ?? 676;
   const shownCount = Math.min(48, totalCount);
+  const visibleCards = cards.slice(0, 3);
 
   return new ImageResponse(
     (
@@ -381,65 +434,149 @@ export async function GET() {
           height: "630px",
           display: "flex",
           flexDirection: "column",
-          background: "linear-gradient(180deg, #080c14 0%, #0a0f19 100%)",
-          color: "#f8fafc",
+          background: "#0b0d12",
+          color: "#f3f4f6",
           fontFamily: "Arial, sans-serif",
         }}
       >
         <div
           style={{
-            height: 58,
+            height: 66,
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            padding: "0 18px",
-            borderBottom: "1px solid rgba(255,255,255,0.12)",
-            background: "rgba(8,11,18,0.96)",
+            padding: "0 16px",
+            borderBottom: "1px solid rgba(255,255,255,0.08)",
+            background: "linear-gradient(180deg, #12131a 0%, #0f1118 100%)",
           }}
         >
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: 10,
+                background: "radial-gradient(circle at 32% 28%, #ffb25f, #a52f10 78%)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#fff1d6",
+                fontSize: 13,
+                fontWeight: 700,
+              }}
+            >
+              OW
+            </div>
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              <div style={{ fontSize: 34, lineHeight: 1, fontWeight: 700 }}>ODD WHEELS</div>
+              <div style={{ fontSize: 15, lineHeight: 1.2, color: "rgba(255,255,255,0.68)" }}>Shop</div>
+            </div>
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div
               style={{
-                width: 32,
-                height: 32,
-                borderRadius: 16,
-                background: "radial-gradient(circle at 35% 30%, #ff8f49, #a52708 75%)",
-              }}
-            />
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              <div style={{ fontSize: 30, lineHeight: 1, fontWeight: 700 }}>ODD WHEELS</div>
-              <div style={{ fontSize: 16, lineHeight: 1.2, color: "rgba(255,255,255,0.66)" }}>Shop</div>
-            </div>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div
-              style={{
-                width: 290,
-                height: 38,
-                borderRadius: 12,
-                border: "1px solid rgba(255,255,255,0.16)",
+                width: 418,
+                height: 44,
+                borderRadius: 14,
+                border: "1px solid rgba(255,255,255,0.15)",
                 display: "flex",
                 alignItems: "center",
-                padding: "0 12px",
-                color: "rgba(255,255,255,0.46)",
-                fontSize: 14,
+                padding: "0 18px",
+                color: "rgba(255,255,255,0.42)",
+                fontSize: 15,
               }}
             >
               Search brand, model, keyword...
             </div>
             <div
               style={{
-                height: 38,
-                borderRadius: 12,
-                border: "1px solid rgba(255,255,255,0.16)",
-                padding: "0 14px",
-                fontSize: 22,
+                width: 44,
+                height: 44,
+                borderRadius: 14,
+                border: "1px solid rgba(255,255,255,0.15)",
                 display: "flex",
                 alignItems: "center",
-                color: "rgba(255,255,255,0.86)",
+                justifyContent: "center",
+                color: "rgba(255,255,255,0.78)",
               }}
             >
-              Dark
+              S
+            </div>
+            <div
+              style={{
+                height: 44,
+                borderRadius: 14,
+                border: "1px solid rgba(255,255,255,0.15)",
+                padding: "0 14px",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontSize: 30,
+                color: "rgba(255,255,255,0.9)",
+                fontWeight: 700,
+              }}
+            >
+              <div
+                style={{
+                  width: 12,
+                  height: 12,
+                  borderRadius: 99,
+                  background: "rgba(255,255,255,0.95)",
+                }}
+              />
+              <div style={{ fontSize: 30, lineHeight: 1 }}>Dark</div>
+            </div>
+            <div
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 14,
+                border: "1px solid rgba(255,255,255,0.15)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                position: "relative",
+                fontSize: 30,
+                color: "rgba(255,255,255,0.9)",
+                fontWeight: 700,
+              }}
+            >
+              C
+              <div
+                style={{
+                  position: "absolute",
+                  top: -6,
+                  right: -4,
+                  minWidth: 18,
+                  height: 18,
+                  borderRadius: 99,
+                  background: "#e2812a",
+                  color: "#ffffff",
+                  fontSize: 11,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "0 5px",
+                }}
+              >
+                1
+              </div>
+            </div>
+            <div
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 14,
+                border: "1px solid rgba(255,255,255,0.15)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "rgba(255,255,255,0.85)",
+                fontSize: 28,
+                fontWeight: 700,
+              }}
+            >
+              =
             </div>
           </div>
         </div>
@@ -451,33 +588,33 @@ export async function GET() {
             alignItems: "center",
             gap: 8,
             padding: "0 16px",
-            borderBottom: "1px solid rgba(255,255,255,0.1)",
-            background: "rgba(6,10,18,0.98)",
+            borderBottom: "1px solid rgba(255,255,255,0.08)",
+            background: "#10131a",
           }}
         >
           {[
             { label: "RELEVANCE", active: true },
             { label: "NEWEST", active: false },
             { label: "MOST POPULAR", active: false },
-            { label: "PRICE ⇅", active: false },
+            { label: "PRICE UP DOWN", active: false },
           ].map((tab) => (
             <div
               key={tab.label}
               style={{
                 flex: 1,
-                height: 36,
-                borderRadius: 8,
+                height: 42,
+                borderRadius: 11,
                 border: tab.active
-                  ? "1px solid rgba(245,180,72,0.78)"
-                  : "1px solid rgba(255,255,255,0.16)",
-                background: tab.active ? "rgba(151,97,0,0.42)" : "rgba(8,13,22,0.9)",
+                  ? "1px solid rgba(230,162,56,0.9)"
+                  : "1px solid rgba(255,255,255,0.14)",
+                background: tab.active ? "rgba(123,83,18,0.55)" : "rgba(8,11,17,0.95)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                fontSize: 14,
+                fontSize: 13,
                 fontWeight: 700,
-                color: tab.active ? "#f7dfa4" : "rgba(255,255,255,0.78)",
-                letterSpacing: 0.3,
+                color: tab.active ? "#f5dfb0" : "rgba(255,255,255,0.78)",
+                letterSpacing: 0.5,
               }}
             >
               {tab.label}
@@ -487,35 +624,35 @@ export async function GET() {
 
         <div
           style={{
-            height: 52,
+            height: 60,
             display: "flex",
             alignItems: "center",
             gap: 8,
             padding: "0 16px",
-            borderBottom: "1px solid rgba(56,189,248,0.35)",
-            background: "rgba(5,9,16,0.97)",
+            borderBottom: "1px solid rgba(45,138,181,0.5)",
+            background: "#0d1218",
           }}
         >
           {brandTabs.slice(0, 7).map((label, index) => (
             <div
               key={label}
               style={{
-                height: 30,
-                minWidth: index === 0 ? 88 : 100,
-                borderRadius: 9,
+                height: 36,
+                minWidth: index === 0 ? 92 : 104,
+                borderRadius: 10,
                 border:
                   index === 0
-                    ? "1px solid rgba(66,190,255,0.9)"
-                    : "1px solid rgba(255,255,255,0.16)",
+                    ? "1px solid rgba(60,187,255,0.85)"
+                    : "1px solid rgba(255,255,255,0.14)",
                 background:
                   index === 0
-                    ? "rgba(23,118,166,0.54)"
-                    : "rgba(8,12,18,0.86)",
+                    ? "rgba(17,103,146,0.55)"
+                    : "rgba(8,12,18,0.95)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                padding: "0 10px",
-                fontSize: 12,
+                padding: "0 12px",
+                fontSize: 11,
                 color: "rgba(255,255,255,0.88)",
               }}
             >
@@ -524,55 +661,87 @@ export async function GET() {
           ))}
           <div
             style={{
-              height: 30,
-              minWidth: 90,
-              borderRadius: 9,
-              border: "1px solid rgba(255,255,255,0.16)",
-              background: "rgba(8,12,18,0.86)",
+              height: 36,
+              minWidth: 102,
+              borderRadius: 10,
+              border: "1px solid rgba(255,255,255,0.14)",
+              background: "rgba(8,12,18,0.95)",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              fontSize: 12,
+              fontSize: 11,
               color: "rgba(255,255,255,0.88)",
             }}
           >
             Show more
           </div>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+            <div
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 10,
+                border: "1px solid rgba(255,255,255,0.14)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "rgba(255,255,255,0.72)",
+                fontSize: 22,
+              }}
+            >
+              II
+            </div>
+            <div
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 10,
+                border: "1px solid rgba(255,255,255,0.14)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "rgba(255,255,255,0.72)",
+                fontSize: 22,
+              }}
+            >
+              []
+            </div>
+          </div>
         </div>
 
         <div
           style={{
-            height: 54,
+            height: 50,
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            padding: "0 16px",
+            padding: "0 18px",
           }}
         >
-          <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: 0.6 }}>ALL ITEMS</div>
-          <div style={{ fontSize: 16, color: "rgba(255,255,255,0.45)" }}>
-            Showing {shownCount} of {totalCount}
+          <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: 1 }}>ALL ITEMS</div>
+          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.38)" }}>
+            {`Showing ${shownCount} of ${totalCount}`}
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 12, padding: "0 12px 12px", flex: 1 }}>
-          {cards.map((card) => (
+        <div style={{ display: "flex", gap: 16, padding: "0 18px 16px", flex: 1 }}>
+          {visibleCards.map((card) => (
             <div
               key={card.key}
               style={{
                 flex: 1,
                 display: "flex",
                 flexDirection: "column",
-                borderRadius: 14,
+                borderRadius: 18,
                 overflow: "hidden",
-                background: "rgba(23,25,32,0.98)",
-                border: "1px solid rgba(255,255,255,0.14)",
+                background: "rgba(27,30,36,0.98)",
+                border: "1px solid rgba(255,255,255,0.12)",
               }}
             >
               <div
                 style={{
-                  height: 214,
-                  background: "#eef0f3",
+                  height: 184,
+                  background: "#e5e7eb",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
@@ -582,12 +751,12 @@ export async function GET() {
                   <img
                     src={card.image}
                     alt={card.title}
-                    width={287}
-                    height={214}
+                    width={350}
+                    height={184}
                     style={{ width: "100%", height: "100%", objectFit: "cover" }}
                   />
                 ) : (
-                  <div style={{ fontSize: 24, color: "#8a909b" }}>ODD WHEELS</div>
+                  <div style={{ fontSize: 22, color: "#8a909b" }}>ODD WHEELS</div>
                 )}
               </div>
 
@@ -596,25 +765,26 @@ export async function GET() {
                   flex: 1,
                   display: "flex",
                   flexDirection: "column",
-                  padding: "12px 14px 10px",
+                  padding: "12px 16px 14px",
+                  background: "rgba(27,30,36,0.98)",
                 }}
               >
-                <div style={{ fontSize: 18, lineHeight: 1.25, fontWeight: 700, minHeight: 52 }}>
-                  {truncate(card.title, 58)}
+                <div style={{ fontSize: 15, lineHeight: 1.25, fontWeight: 700, minHeight: 56 }}>
+                  {truncate(card.title, 52)}
                 </div>
 
                 <div
                   style={{
-                    marginTop: 8,
+                    marginTop: 6,
                     display: "flex",
-                    alignItems: "center",
+                    alignItems: "flex-end",
                     justifyContent: "space-between",
                   }}
                 >
-                  <div style={{ fontSize: 34, fontWeight: 800, color: "#f5bf7f" }}>
+                  <div style={{ fontSize: 19, fontWeight: 700, color: "#f3bf82", lineHeight: 1.15 }}>
                     {card.priceLabel}
                   </div>
-                  <div style={{ fontSize: 15, color: "rgba(255,255,255,0.68)" }}>
+                  <div style={{ fontSize: 11, color: "rgba(255,255,255,0.68)" }}>
                     {card.conditionLabel}
                   </div>
                 </div>
@@ -624,7 +794,7 @@ export async function GET() {
                     <div
                       style={{
                         borderRadius: 999,
-                        border: "1px solid rgba(248,113,113,0.62)",
+                        border: "1px solid rgba(243,105,105,0.72)",
                         color: "#fecaca",
                         padding: "3px 8px",
                         fontSize: 11,
@@ -637,13 +807,13 @@ export async function GET() {
                     <div
                       style={{
                         borderRadius: 999,
-                        border: "1px solid rgba(255,255,255,0.24)",
-                        color: "rgba(255,255,255,0.78)",
+                        border: "1px solid rgba(255,255,255,0.2)",
+                        color: "rgba(255,255,255,0.72)",
                         padding: "3px 8px",
                         fontSize: 11,
                       }}
                     >
-                      {card.inCarts} in carts
+                      {`${card.inCarts} in carts`}
                     </div>
                   ) : null}
                 </div>
@@ -654,8 +824,8 @@ export async function GET() {
                       key={`${card.key}-${tag}`}
                       style={{
                         borderRadius: 999,
-                        border: "1px solid rgba(56,189,248,0.5)",
-                        background: "rgba(8,77,111,0.4)",
+                        border: "1px solid rgba(56,189,248,0.45)",
+                        background: "rgba(8,70,102,0.45)",
                         color: "#d8f2ff",
                         padding: "3px 8px",
                         fontSize: 11,
@@ -669,14 +839,14 @@ export async function GET() {
                 <div
                   style={{
                     marginTop: "auto",
-                    height: 38,
-                    borderRadius: 11,
-                    background: "#dd7a00",
+                    height: 40,
+                    borderRadius: 12,
+                    background: "#e18400",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
                     color: "#180f02",
-                    fontSize: 18,
+                    fontSize: 16,
                     fontWeight: 700,
                   }}
                 >
