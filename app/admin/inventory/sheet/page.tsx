@@ -43,12 +43,12 @@ const CARD_EXPORT_SIZE = 1080;
 const CARD_FOLDER_LIMIT = 80;
 const EIGHT_UP_WIDTH = 1080;
 const EIGHT_UP_HEIGHT = 1080;
-const GRID_COLS = 4;
-const GRID_ROWS = 2;
+const GRID_COLS = 3;
+const GRID_ROWS = 3;
 const GRID_PAGE_SIZE = GRID_COLS * GRID_ROWS;
 const EXPORT_THUMB_WIDTH = 960;
 const EXPORT_THUMB_HEIGHT = 720;
-const EXPORT_THUMB_QUALITY = 95;
+const EXPORT_THUMB_QUALITY = 100;
 let cachedNoisePattern: CanvasPattern | null = null;
 let cachedNoiseContext: CanvasRenderingContext2D | null = null;
 
@@ -1526,20 +1526,20 @@ function renderEightUpCanvas(
   ctx.save();
   ctx.strokeStyle = "rgba(255,138,0,0.55)";
   ctx.lineWidth = 2;
-  drawRoundedRect(ctx, 1, 1, width - 2, height - 2, 28);
+  drawRoundedRect(ctx, 1, 1, width - 2, height - 2, 24);
   ctx.stroke();
   ctx.restore();
 
-  const padding = 18;
-  const headerHeight = 44;
-  const footerHeight = 32;
+  const padding = 14;
+  const headerHeight = 36;
+  const footerHeight = 24;
   const gridX = padding;
   const gridY = padding + headerHeight;
   const gridW = width - padding * 2;
   const gridH = height - padding * 2 - headerHeight - footerHeight;
   const cols = GRID_COLS;
   const rowsCount = GRID_ROWS;
-  const gap = 16;
+  const gap = 12;
   const cardW = (gridW - gap * (cols - 1)) / cols;
   const cardH = (gridH - gap * (rowsCount - 1)) / rowsCount;
 
@@ -1547,7 +1547,7 @@ function renderEightUpCanvas(
   if (headerTitle) {
     ctx.save();
     ctx.fillStyle = "#ff8a00";
-    ctx.font = '800 26px "Arial Black", Impact, sans-serif';
+    ctx.font = '800 22px "Arial Black", Impact, sans-serif';
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.shadowColor = "rgba(255,138,0,0.35)";
@@ -1562,7 +1562,7 @@ function renderEightUpCanvas(
 
   const footerY = height - padding - footerHeight / 2;
   ctx.save();
-  ctx.font = '700 14px "Segoe UI", Arial, sans-serif';
+  ctx.font = '700 12px "Segoe UI", Arial, sans-serif';
   ctx.textBaseline = "middle";
   const prefix = "EXPLORE THE FULL ";
   const suffix = " COLLECTION AT ODD-WHEELS.COM";
@@ -1598,20 +1598,20 @@ function renderEightUpCanvas(
     cardBg.addColorStop(0, "#1b1c23");
     cardBg.addColorStop(1, "#14151b");
     ctx.fillStyle = cardBg;
-    drawRoundedRect(ctx, x, y, cardW, cardH, 18);
+    drawRoundedRect(ctx, x, y, cardW, cardH, 16);
     ctx.fill();
     ctx.restore();
 
     ctx.save();
     ctx.strokeStyle = "rgba(255,255,255,0.12)";
     ctx.lineWidth = 1;
-    drawRoundedRect(ctx, x, y, cardW, cardH, 18);
+    drawRoundedRect(ctx, x, y, cardW, cardH, 16);
     ctx.stroke();
     ctx.restore();
 
     if (!row) continue;
 
-    const pad = 12;
+    const pad = 10;
     const innerX = x + pad;
     let cursorY = y + pad;
     const innerW = cardW - pad * 2;
@@ -1619,30 +1619,42 @@ function renderEightUpCanvas(
     const brand = formatBrand(row).toUpperCase();
     ctx.save();
     ctx.fillStyle = "rgba(255,210,140,0.9)";
-    ctx.font = '700 11px "Segoe UI", Arial, sans-serif';
+    ctx.font = '700 10px "Segoe UI", Arial, sans-serif';
     ctx.textBaseline = "top";
     drawTrackedCenteredText(
       ctx,
       truncateText(ctx, brand, innerW),
       innerX + innerW / 2,
       cursorY,
-      3
+      2
     );
     ctx.restore();
-    cursorY += 20;
+    cursorY += 16;
 
-    const imageHeight = (innerW * 3) / 4;
+    const metaHeight = 16;
+    const metaY = y + cardH - pad - metaHeight;
+    const titleLines = wrapText(ctx, formatName(row), innerW, 2);
+    const lineHeight = 14;
+    const titleHeight = titleLines.length * lineHeight;
+    const variantsHeight = row.variant_count > 1 ? 12 : 0;
+    const variantsGap = row.variant_count > 1 ? 2 : 0;
+    const spacingAfterImage = 6;
+    const availableHeight = metaY - 6 - cursorY;
+    const imageHeight = Math.max(
+      110,
+      availableHeight - titleHeight - variantsHeight - variantsGap - spacingAfterImage
+    );
     const imageY = cursorY;
     ctx.save();
     ctx.fillStyle = "#ffffff";
-    drawRoundedRect(ctx, innerX, imageY, innerW, imageHeight, 12);
+    drawRoundedRect(ctx, innerX, imageY, innerW, imageHeight, 10);
     ctx.fill();
     ctx.restore();
 
     if (image) {
       ctx.save();
       ctx.beginPath();
-      drawRoundedRect(ctx, innerX, imageY, innerW, imageHeight, 12);
+      drawRoundedRect(ctx, innerX, imageY, innerW, imageHeight, 10);
       ctx.clip();
       drawContainImage(ctx, image, innerX, imageY, innerW, imageHeight);
       ctx.restore();
@@ -1656,38 +1668,35 @@ function renderEightUpCanvas(
       ctx.restore();
     }
 
-    cursorY = imageY + imageHeight + 8;
+    cursorY = imageY + imageHeight + spacingAfterImage;
 
     ctx.save();
     ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.font = '600 13px "Segoe UI", Arial, sans-serif';
+    ctx.font = '600 12px "Segoe UI", Arial, sans-serif';
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    const titleLines = wrapText(ctx, formatName(row), innerW, 2);
-    const lineHeight = 16;
     titleLines.forEach((line, idx) => {
       ctx.fillText(line, innerX, cursorY + idx * lineHeight);
     });
     ctx.restore();
-    cursorY += titleLines.length * lineHeight + 4;
+    cursorY += titleHeight + variantsGap;
 
     if (row.variant_count > 1) {
       ctx.save();
       ctx.fillStyle = "rgba(255,255,255,0.7)";
-      ctx.font = '600 11px "Segoe UI", Arial, sans-serif';
+      ctx.font = '600 10px "Segoe UI", Arial, sans-serif';
       ctx.textBaseline = "top";
       ctx.fillText("Multiple variants available", innerX, cursorY);
       ctx.restore();
     }
 
-    const metaY = y + cardH - pad - 18;
     const condition = formatExportCondition(row);
     ctx.save();
-    ctx.font = '700 10px "Segoe UI", Arial, sans-serif';
+    ctx.font = '700 9px "Segoe UI", Arial, sans-serif';
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
-    const pillPadding = 8;
-    const pillHeight = 18;
+    const pillPadding = 6;
+    const pillHeight = metaHeight;
     const pillWidth = Math.max(ctx.measureText(condition).width + pillPadding * 2, 44);
     drawRoundedRect(ctx, innerX, metaY, pillWidth, pillHeight, pillHeight / 2);
     ctx.fillStyle = "rgba(255,180,90,0.12)";
@@ -1701,7 +1710,7 @@ function renderEightUpCanvas(
 
     const price = formatExportPrice(row);
     ctx.save();
-    ctx.font = '700 14px "Segoe UI", Arial, sans-serif';
+    ctx.font = '700 13px "Segoe UI", Arial, sans-serif';
     const priceWidth = ctx.measureText(price).width;
     const circleRadius = 9;
     const circleX = innerX + innerW - priceWidth - 6 - circleRadius * 2;
@@ -1718,7 +1727,7 @@ function renderEightUpCanvas(
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("🛒", circleX + circleRadius, circleY + 0.5);
-    ctx.font = '700 14px "Segoe UI", Arial, sans-serif';
+    ctx.font = '700 13px "Segoe UI", Arial, sans-serif';
     ctx.textAlign = "left";
     ctx.fillText(price, circleX + circleRadius * 2 + 6, circleY + 0.5);
     ctx.restore();
@@ -2323,7 +2332,7 @@ export default function InventorySheetPage() {
 
       const groupLabel =
         {
-          download_category: "8-up category",
+          download_category: "9-up category",
           brand: "brand",
           ship_class: "class",
           ship_class_brand: "class to brand",
@@ -2770,6 +2779,7 @@ export default function InventorySheetPage() {
               return `<div class="card empty"></div>`;
             }
             const photoUrl = row.product?.image_urls?.[0] ?? "";
+            const fullUrl = photoUrl ? escapeHtml(photoUrl) : "";
             const thumbUrl = photoUrl
               ? getThumbUrl(photoUrl, {
                   width: EXPORT_THUMB_WIDTH,
@@ -2778,14 +2788,13 @@ export default function InventorySheetPage() {
                   format: "webp",
                 })
               : "";
-            const fallbackUrl = escapeHtml(photoUrl);
-            const fallbackAttr = fallbackUrl
-              ? ` onerror="this.onerror=null;this.src=&quot;${fallbackUrl}&quot;;"`
-              : "";
-            const imageCell = thumbUrl
-              ? `<img src="${escapeHtml(
+            const fallbackAttr = thumbUrl
+              ? ` onerror="this.onerror=null;this.src=&quot;${escapeHtml(
                   thumbUrl
-                )}" alt="" loading="lazy" decoding="async" width="${EXPORT_THUMB_WIDTH}" height="${EXPORT_THUMB_HEIGHT}"${fallbackAttr}/>`
+                )}&quot;;"`
+              : "";
+            const imageCell = fullUrl
+              ? `<img src="${fullUrl}" alt="" loading="lazy" decoding="async" width="${EXPORT_THUMB_WIDTH}" height="${EXPORT_THUMB_HEIGHT}"${fallbackAttr}/>`
               : `<div class="img-placeholder">No image</div>`;
             const cardBrand = escapeHtml(formatBrand(row).toUpperCase());
             const titleText = escapeHtml(formatName(row));
@@ -2840,7 +2849,7 @@ export default function InventorySheetPage() {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Inventory 8-up Pages</title>
+    <title>Inventory 9-up Pages</title>
     <style>
       :root {
         color-scheme: dark;
@@ -2884,24 +2893,24 @@ export default function InventorySheetPage() {
         height: 100%;
         margin: 0;
         border: 1px solid rgba(255,138,0,0.55);
-        border-radius: 28px;
-        padding: 18px;
+        border-radius: 24px;
+        padding: 14px;
         background: linear-gradient(180deg, rgba(20,20,26,0.92), rgba(12,12,16,0.96));
         box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 8px;
       }
       .page-header {
         display: flex;
         align-items: center;
         justify-content: center;
-        height: 44px;
+        height: 36px;
       }
       .page-title {
-        font-size: 26px;
+        font-size: 22px;
         font-weight: 800;
-        letter-spacing: 0.18em;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
         color: var(--accent);
         text-shadow: 0 6px 18px rgba(255,138,0,0.35);
@@ -2910,16 +2919,16 @@ export default function InventorySheetPage() {
         display: grid;
         grid-template-columns: repeat(${GRID_COLS}, minmax(0, 1fr));
         grid-template-rows: repeat(${GRID_ROWS}, minmax(0, 1fr));
-        gap: 16px;
+        gap: 12px;
         flex: 1;
       }
       .page-footer {
-        font-size: 14px;
+        font-size: 12px;
         letter-spacing: 0.12em;
         text-transform: uppercase;
         text-align: center;
         color: rgba(255,255,255,0.72);
-        margin-bottom: 4px;
+        margin-bottom: 2px;
       }
       .page-footer__accent {
         color: var(--accent);
@@ -2929,11 +2938,11 @@ export default function InventorySheetPage() {
       .card {
         background: linear-gradient(180deg, #1b1c23 0%, #14151b 100%);
         border: 1px solid rgba(255,255,255,0.12);
-        border-radius: 18px;
-        padding: 12px 12px 14px;
+        border-radius: 16px;
+        padding: 10px 10px 12px;
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 6px;
         box-shadow: 0 10px 22px rgba(0,0,0,0.45);
       }
       .card.empty {
@@ -2942,8 +2951,8 @@ export default function InventorySheetPage() {
         box-shadow: none;
       }
       .card-brand {
-        font-size: 11px;
-        letter-spacing: 0.28em;
+        font-size: 10px;
+        letter-spacing: 0.22em;
         text-transform: uppercase;
         text-align: center;
         color: rgba(255,210,140,0.9);
@@ -2951,9 +2960,9 @@ export default function InventorySheetPage() {
       }
       .card-image {
         background: #ffffff;
-        border-radius: 12px;
-        aspect-ratio: 4 / 3;
-        flex: none;
+        border-radius: 10px;
+        flex: 1 1 0;
+        min-height: 0;
         display: grid;
         place-items: center;
         overflow: hidden;
@@ -2973,17 +2982,17 @@ export default function InventorySheetPage() {
         text-align: center;
       }
       .card-title {
-        font-size: 13px;
-        line-height: 1.3;
+        font-size: 12px;
+        line-height: 1.25;
         color: var(--text);
-        min-height: 36px;
+        min-height: 28px;
         display: -webkit-box;
         -webkit-line-clamp: 2;
         -webkit-box-orient: vertical;
         overflow: hidden;
       }
       .card-variants {
-        font-size: 11px;
+        font-size: 10px;
         color: rgba(255,255,255,0.7);
         letter-spacing: 0.03em;
       }
@@ -2992,19 +3001,20 @@ export default function InventorySheetPage() {
         align-items: center;
         justify-content: space-between;
         gap: 8px;
+        margin-top: auto;
       }
       .card-condition {
-        font-size: 10px;
+        font-size: 9px;
         text-transform: uppercase;
         letter-spacing: 0.08em;
-        padding: 4px 8px;
+        padding: 3px 6px;
         border-radius: 999px;
         border: 1px solid rgba(255,180,90,0.45);
         background: rgba(255,180,90,0.12);
         color: rgba(255,255,255,0.85);
       }
       .card-price {
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 700;
         color: #ffb85c;
         display: inline-flex;
@@ -3012,15 +3022,15 @@ export default function InventorySheetPage() {
         gap: 6px;
       }
       .card-cart {
-        width: 20px;
-        height: 20px;
+        width: 18px;
+        height: 18px;
         border-radius: 50%;
         background: rgba(255,184,92,0.14);
         border: 1px solid rgba(255,184,92,0.45);
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        font-size: 11px;
+        font-size: 10px;
       }
     </style>
   </head>
@@ -3033,13 +3043,13 @@ export default function InventorySheetPage() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = "inventory-8up.html";
+      link.download = "inventory-9up.html";
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
 
-      setExportMsg(`8-up pages downloaded (${pages.length} pages).`);
+      setExportMsg(`9-up pages downloaded (${pages.length} pages).`);
     } catch (err: any) {
       setError(err?.message ?? "Export failed.");
     } finally {
@@ -3084,7 +3094,7 @@ export default function InventorySheetPage() {
                   format: "webp",
                 })
               : "";
-            return await loadImageWithFallback(thumbUrl, imageUrl);
+            return await loadImageWithFallback(imageUrl, thumbUrl);
           })
         );
         while (images.length < GRID_PAGE_SIZE) images.push(null);
@@ -3119,13 +3129,13 @@ export default function InventorySheetPage() {
       const url = URL.createObjectURL(zipBlob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = "inventory-8up-pages.zip";
+      link.download = "inventory-9up-pages.zip";
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
 
-      setExportMsg(`8-up ZIP downloaded (${pages.length} pages).`);
+      setExportMsg(`9-up ZIP downloaded (${pages.length} pages).`);
     } catch (err: any) {
       setError(err?.message ?? "Export failed.");
     } finally {
@@ -3236,7 +3246,7 @@ export default function InventorySheetPage() {
             onClick={downloadEightUpHtml}
             disabled={exportingTenUp}
           >
-            {exportingTenUp ? "Preparing..." : "Download 8-up (Inner Box)"}
+            {exportingTenUp ? "Preparing..." : "Download 9-up (Inner Box)"}
           </Button>
           <Button
             variant="secondary"
@@ -3244,7 +3254,7 @@ export default function InventorySheetPage() {
             onClick={downloadEightUpZip}
             disabled={exportingEightUpZip}
           >
-            {exportingEightUpZip ? "Preparing..." : "Download 8-up ZIP"}
+            {exportingEightUpZip ? "Preparing..." : "Download 9-up ZIP"}
           </Button>
           <Button
             variant="secondary"
@@ -3270,7 +3280,7 @@ export default function InventorySheetPage() {
                 )
               }
             >
-              <option value="download_category">Group by 8-up category</option>
+              <option value="download_category">Group by 9-up category</option>
               <option value="brand">Group by brand</option>
               <option value="ship_class">Group by class</option>
               <option value="ship_class_brand">Class to brand</option>

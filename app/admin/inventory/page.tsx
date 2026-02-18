@@ -3927,6 +3927,7 @@ export default function AdminInventoryPage() {
                   type="file"
                   accept="image/*"
                   capture="environment"
+                  multiple
                   onChange={(e) => {
                     const list = Array.from(e.target.files ?? []);
                     if (!list.length) return;
@@ -3935,7 +3936,7 @@ export default function AdminInventoryPage() {
                     e.currentTarget.value = "";
                   }}
                 />
-                <div className="text-xs text-white/50 mt-1">Take photo</div>
+                <div className="text-xs text-white/50 mt-1">Take photos</div>
               </div>
               {manualUploadLoading ? (
                 <div className="text-xs text-white/60 mt-1">Uploading...</div>
@@ -4246,15 +4247,16 @@ export default function AdminInventoryPage() {
                                 e.currentTarget.value = "";
                               }}
                             />
-                            <div className="text-xs text-white/50">Take photo</div>
+                            <div className="text-xs text-white/50">Take photos</div>
                             <input
                               type="file"
                               accept="image/*"
                               capture="environment"
+                              multiple
                               onChange={(e) => {
-                                const f = e.target.files?.[0];
-                                if (!f) return;
-                                void uploadVariantIssueFiles(v, [f]);
+                                const list = Array.from(e.target.files ?? []);
+                                if (!list.length) return;
+                                void uploadVariantIssueFiles(v, list);
                                 e.currentTarget.value = "";
                               }}
                             />
@@ -4465,16 +4467,17 @@ export default function AdminInventoryPage() {
                         e.currentTarget.value = "";
                       }}
                     />
-                    <div className="text-xs text-white/50">Take photo</div>
+                    <div className="text-xs text-white/50">Take photos</div>
                     <input
                       type="file"
                       accept="image/*"
                       capture="environment"
+                      multiple
                       onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (!f) return;
+                        const list = Array.from(e.target.files ?? []);
+                        if (!list.length) return;
                         const folderId = `issue-${selectedProduct?.id ?? crypto.randomUUID()}`;
-                        void uploadIssueFiles([f], folderId);
+                        void uploadIssueFiles(list, folderId);
                         e.currentTarget.value = "";
                       }}
                     />

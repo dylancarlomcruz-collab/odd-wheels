@@ -882,26 +882,28 @@ export function InventoryEditorDrawer({
               </Button>
             </div>
             <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-2">
-              <div className="text-sm font-medium">Upload image file</div>
+              <div className="text-sm font-medium">Upload image files</div>
               <input
                 type="file"
                 accept="image/*"
+                multiple
                 onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (!f) return;
-                  void uploadImageFile(f, productId);
+                  const list = Array.from(e.target.files ?? []);
+                  if (!list.length) return;
+                  void uploadImageFiles(list, productId);
                   e.currentTarget.value = "";
                 }}
               />
-              <div className="text-xs text-white/50">Take photo</div>
+              <div className="text-xs text-white/50">Take photos</div>
               <input
                 type="file"
                 accept="image/*"
                 capture="environment"
+                multiple
                 onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (!f) return;
-                  void uploadImageFile(f, productId);
+                  const list = Array.from(e.target.files ?? []);
+                  if (!list.length) return;
+                  void uploadImageFiles(list, productId);
                   e.currentTarget.value = "";
                 }}
               />
@@ -1239,15 +1241,16 @@ export function InventoryEditorDrawer({
                                   e.currentTarget.value = "";
                                 }}
                               />
-                              <div className="text-xs text-white/50">Take photo</div>
+                              <div className="text-xs text-white/50">Take photos</div>
                               <input
                                 type="file"
                                 accept="image/*"
                                 capture="environment"
+                                multiple
                                 onChange={(e) => {
-                                  const f = e.target.files?.[0];
-                                  if (!f) return;
-                                  void uploadIssueFiles(v, [f]);
+                                  const list = Array.from(e.target.files ?? []);
+                                  if (!list.length) return;
+                                  void uploadIssueFiles(v, list);
                                   e.currentTarget.value = "";
                                 }}
                               />
