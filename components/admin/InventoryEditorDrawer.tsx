@@ -35,6 +35,12 @@ type InventoryEditorDrawerProps = {
   onSaved: () => void;
 };
 
+type LastSoldEntry = {
+  orderId: string;
+  variantId: string;
+  condition: string;
+};
+
 const CONDITION_OPTIONS: Array<VariantDraft["condition"]> = [
   "sealed",
   "resealed",
@@ -112,6 +118,10 @@ export function InventoryEditorDrawer({
   const [variants, setVariants] = React.useState<VariantDraft[]>([]);
   const [saving, setSaving] = React.useState(false);
   const [selling, setSelling] = React.useState(false);
+  const [revertingSale, setRevertingSale] = React.useState(false);
+  const [lastSoldEntry, setLastSoldEntry] = React.useState<LastSoldEntry | null>(
+    null
+  );
   const [deletingVariantId, setDeletingVariantId] = React.useState<string | null>(
     null
   );
@@ -157,6 +167,7 @@ export function InventoryEditorDrawer({
     );
     setNewImage("");
     setCropEditor(null);
+    setLastSoldEntry(null);
   }, [product]);
 
   if (!product) return null;
@@ -536,6 +547,11 @@ export function InventoryEditorDrawer({
         throw new Error(payload?.error ?? "POS completion failed.");
       }
 
+      setLastSoldEntry({
+        orderId,
+        variantId: target.id,
+        condition: target.condition,
+      });
       setVariants((prev) =>
         prev.map((v) => {
           if (v.id !== target.id) return v;
@@ -559,6 +575,46 @@ export function InventoryEditorDrawer({
       });
     } finally {
       setSelling(false);
+    }
+  }
+
+  async function revertLastSoldViaPos() {
+    if (!lastSoldEntry || selling || saving || deletingProduct || revertingSale) return;
+    const confirmed = window.confirm("Revert the last sold item for this product?");
+    if (!confirmed) return;
+
+    setRevertingSale(true);
+    try {
+      const { error } = await supabase.rpc("fn_staff_void_order", {
+        p_order_id: lastSoldEntry.orderId,
+        p_reason: "Reverted sale from inventory editor",
+      });
+      if (error) throw error;
+
+      setVariants((prev) =>
+        prev.map((v) => {
+          if (v.id !== lastSoldEntry.variantId) return v;
+          const currentQty = Math.max(0, Math.trunc(safeNumber(v.qty) ?? 0));
+          return { ...v, qty: currentQty + 1 };
+        })
+      );
+      onSaved();
+      toast({
+        intent: "success",
+        title: "Sale reverted",
+        message: `Last sale reverted (${formatConditionLabel(lastSoldEntry.condition, {
+          upper: true,
+        })}).`,
+      });
+      setLastSoldEntry(null);
+    } catch (e: any) {
+      toast({
+        intent: "error",
+        title: "Revert failed",
+        message: e?.message ?? "Unable to revert last sale.",
+      });
+    } finally {
+      setRevertingSale(false);
     }
   }
 
@@ -892,6 +948,19 @@ export function InventoryEditorDrawer({
                   disabled={saving || deletingProduct || selling}
                 >
                   {selling ? "Selling..." : "Sold (Odd Wheels FB)"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={revertLastSoldViaPos}
+                  disabled={
+                    saving ||
+                    deletingProduct ||
+                    selling ||
+                    revertingSale ||
+                    !lastSoldEntry
+                  }
+                >
+                  {revertingSale ? "Reverting..." : "Revert last sold"}
                 </Button>
                 <Button
                   variant="danger"
@@ -1431,6 +1500,15 @@ export function InventoryEditorDrawer({
               disabled={saving || deletingProduct || selling}
             >
               {selling ? "Selling..." : "Sold (Odd Wheels FB)"}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={revertLastSoldViaPos}
+              disabled={
+                saving || deletingProduct || selling || revertingSale || !lastSoldEntry
+              }
+            >
+              {revertingSale ? "Reverting..." : "Revert last sold"}
             </Button>
             <Button
               variant="danger"

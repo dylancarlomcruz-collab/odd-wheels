@@ -39,6 +39,7 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useProfile } from "@/hooks/useProfile";
+import { useAdminViewMode } from "@/hooks/useAdminViewMode";
 import { useActiveOrderCount } from "@/hooks/useActiveOrderCount";
 import { useCart } from "@/hooks/useCart";
 import { Badge } from "@/components/ui/Badge";
@@ -100,6 +101,9 @@ export function SiteHeader() {
   });
 
   const isStaff = profile?.role === "admin" || profile?.role === "cashier";
+  const isAdminUser = profile?.role === "admin";
+  const { mode: adminViewMode, setMode: setAdminViewMode } =
+    useAdminViewMode(isAdminUser);
   const staffOrdersHref =
     profile?.role === "admin" ? "/admin/orders" : "/cashier/orders";
   const staffShippingHref =
@@ -653,6 +657,36 @@ export function SiteHeader() {
                   {staffCounts.pendingShipping}
                 </Link>
               ) : null}
+            </div>
+          ) : null}
+          {isAdminUser ? (
+            <div className="flex items-center rounded-xl border border-white/10 bg-bg-950/40 p-0.5">
+              <button
+                type="button"
+                onClick={() => setAdminViewMode("admin")}
+                className={[
+                  "rounded-lg px-2 py-1 text-xs font-semibold transition",
+                  adminViewMode === "admin"
+                    ? "bg-amber-500 text-black"
+                    : "text-white/70 hover:bg-white/5",
+                ].join(" ")}
+                aria-pressed={adminViewMode === "admin"}
+              >
+                Admin
+              </button>
+              <button
+                type="button"
+                onClick={() => setAdminViewMode("customer")}
+                className={[
+                  "rounded-lg px-2 py-1 text-xs font-semibold transition",
+                  adminViewMode === "customer"
+                    ? "bg-amber-500 text-black"
+                    : "text-white/70 hover:bg-white/5",
+                ].join(" ")}
+                aria-pressed={adminViewMode === "customer"}
+              >
+                Customer
+              </button>
             </div>
           ) : null}
           <ThemeToggle />

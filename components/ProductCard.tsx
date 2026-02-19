@@ -119,6 +119,8 @@ export default function ProductCard({
   relatedPool,
   wideView = false,
   mobileVariant,
+  primaryActionLabel = "Add",
+  primaryActionLabelLong,
 }: {
   product: ShopProduct;
   onAddToCart: (option: ConditionOption) => void | Promise<void>;
@@ -132,7 +134,15 @@ export default function ProductCard({
   relatedPool?: ShopProduct[] | null;
   wideView?: boolean;
   mobileVariant?: "diecast";
+  primaryActionLabel?: string;
+  primaryActionLabelLong?: string;
 }) {
+  const actionLabelCompact = primaryActionLabel?.trim() || "Add";
+  const actionLabelExpanded =
+    primaryActionLabelLong?.trim() ||
+    (actionLabelCompact.toLowerCase() === "add"
+      ? "Add to cart"
+      : actionLabelCompact);
   const [selectedId, setSelectedId] = React.useState<string>(
     product.options[0]?.id ?? "",
   );
@@ -950,7 +960,7 @@ export default function ProductCard({
                                     }
                                   }}
                                 >
-                                  Add to cart
+                                  {actionLabelExpanded}
                                 </button>
                               ) : null}
                             </div>
@@ -990,7 +1000,7 @@ export default function ProductCard({
                     disabled={previewIsOut}
                     onClick={() => previewSelected && onAddToCart(previewSelected)}
                   >
-                    Add to cart
+                    {actionLabelExpanded}
                   </button>
                 </div>
               </div>
@@ -1186,7 +1196,7 @@ export default function ProductCard({
                 }}
               >
                 <ShoppingCart className="h-4 w-4" />
-                Add to cart
+                {actionLabelExpanded}
               </button>
             </div>
           </div>
@@ -1263,7 +1273,7 @@ export default function ProductCard({
               <button
                 type="button"
                 onClick={handleAddClick}
-                aria-label="Add to cart"
+                aria-label={actionLabelExpanded}
                 disabled={!hasMultipleVariants && isOut}
                 className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-amber-300/40 bg-amber-500/20 text-amber-200 shadow-[0_6px_12px_rgba(0,0,0,0.3)] hover:bg-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -1450,7 +1460,7 @@ export default function ProductCard({
               disabled={isOut}
               onClick={handleAddClick}
             >
-              Add
+              {actionLabelCompact}
             </button>
 
             {!wideView && hasIssuePhotos ? (

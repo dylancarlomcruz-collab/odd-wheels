@@ -300,6 +300,10 @@ function applyCategoryFilter(rows: SheetRow[], category: string) {
   );
 }
 
+function isInStockRow(row: SheetRow) {
+  return Number(row.qty ?? 0) > 0;
+}
+
 const FALLBACK_DIECAST_BRANDS = [
   "Mini GT",
   "Kaido House",
@@ -1159,6 +1163,35 @@ function getThumbUrl(
   });
 }
 
+function getMaxQualityImageUrl(rawUrl: string) {
+  if (!rawUrl || rawUrl.startsWith("data:")) return rawUrl;
+  try {
+    const parsed = new URL(
+      rawUrl,
+      typeof window !== "undefined" ? window.location.origin : undefined
+    );
+    parsed.hash = "";
+
+    if (parsed.pathname.includes("/storage/v1/render/image/public/")) {
+      parsed.pathname = parsed.pathname.replace(
+        "/storage/v1/render/image/public/",
+        "/storage/v1/object/public/"
+      );
+      parsed.search = "";
+      return parsed.toString();
+    }
+
+    if (parsed.pathname.includes("/storage/v1/object/public/")) {
+      parsed.search = "";
+      return parsed.toString();
+    }
+
+    return parsed.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
 function drawRoundedRect(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -1346,12 +1379,16 @@ async function loadImageBitmap(url: string) {
   }
 }
 
-async function loadImageWithFallback(primary: string, fallback?: string | null) {
-  if (!primary && fallback) return await loadImageBitmap(fallback);
-  if (!primary) return null;
-  const first = await loadImageBitmap(primary);
-  if (first || !fallback) return first;
-  return await loadImageBitmap(fallback);
+async function loadImageFromCandidates(
+  candidates: Array<string | null | undefined>
+) {
+  for (const candidate of candidates) {
+    const url = String(candidate ?? "").trim();
+    if (!url) continue;
+    const loaded = await loadImageBitmap(url);
+    if (loaded) return loaded;
+  }
+  return null;
 }
 
 function getNoisePattern(ctx: CanvasRenderingContext2D) {
@@ -1774,8 +1811,6 @@ function renderEightUpCanvas(
 
 export default function InventorySheetPage() {
   const [rows, setRows] = React.useState<SheetRow[]>([]);
-  const [page, setPage] = React.useState(0);
-  const [hasMore, setHasMore] = React.useState(true);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [searchTerm, setSearchTerm] = React.useState("");
@@ -1912,33 +1947,43 @@ export default function InventorySheetPage() {
     setSelectedRowIds(new Set());
   }, []);
 
-  async function loadPage(nextPage: number, replace = false) {
+  async function loadAllRows() {
     if (loading) return;
     setLoading(true);
     setError(null);
 
-    const from = nextPage * PAGE_SIZE;
-    const to = from + PAGE_SIZE - 1;
+    try {
+      const all: SheetRow[] = [];
+      let nextPage = 0;
 
-    const { data, error: qErr } = await supabase
-      .from("product_variants")
-      .select(
-        "id,condition,ship_class,qty,price, product:products(id,title,brand,model,variation,image_urls)"
-      )
-      .order("created_at", { ascending: false })
-      .range(from, to);
+      while (true) {
+        const from = nextPage * PAGE_SIZE;
+        const to = from + PAGE_SIZE - 1;
+        const { data, error: qErr } = await supabase
+          .from("product_variants")
+          .select(
+            "id,condition,ship_class,qty,price, product:products(id,title,brand,model,variation,image_urls)"
+          )
+          .order("created_at", { ascending: false })
+          .range(from, to);
 
-    setLoading(false);
+        if (qErr) {
+          throw new Error(qErr.message || "Failed to load inventory sheet.");
+        }
 
-    if (qErr) {
-      setError(qErr.message || "Failed to load inventory sheet.");
-      return;
+        const batch = normalizeSheetRows((data as any[]) ?? []);
+        all.push(...batch);
+
+        if (batch.length < PAGE_SIZE) break;
+        nextPage += 1;
+      }
+
+      setRows(all);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to load inventory sheet.");
+    } finally {
+      setLoading(false);
     }
-
-    const batch = normalizeSheetRows((data as any[]) ?? []);
-    setRows((prev) => (replace ? batch : [...prev, ...batch]));
-    setPage(nextPage);
-    setHasMore(batch.length === PAGE_SIZE);
   }
 
   function groupRows(source: SheetRow[]) {
@@ -2023,14 +2068,16 @@ export default function InventorySheetPage() {
 
   async function resolveExportRows() {
     if (selectedRows.length) {
+      const inStockSelected = selectedRows.filter(isInStockRow);
       return {
-        rows: selectedRows,
+        rows: inStockSelected,
         scope: "selected" as const,
       };
     }
     const allRows = await fetchAllRows();
+    const inStockRows = allRows.filter(isInStockRow);
     return {
-      rows: applyCategoryFilter(allRows, categoryFilter),
+      rows: applyCategoryFilter(inStockRows, categoryFilter),
       scope: "category" as const,
     };
   }
@@ -2293,7 +2340,7 @@ export default function InventorySheetPage() {
 
       setExportMsg(`Updated ${updated} products.`);
       VEHICLE_CACHE.clear();
-      await loadPage(0, true);
+      await loadAllRows();
     } catch (err: any) {
       setError(err?.message ?? "Update failed.");
     } finally {
@@ -3278,6 +3325,9 @@ export default function InventorySheetPage() {
         const images = await Promise.all(
           page.rows.map(async (row) => {
             const imageUrl = row.product?.image_urls?.[0] ?? "";
+            const maxQualityUrl = imageUrl
+              ? getMaxQualityImageUrl(imageUrl)
+              : "";
             const thumbUrl = imageUrl
               ? getThumbUrl(imageUrl, {
                   width: EXPORT_THUMB_WIDTH,
@@ -3286,7 +3336,11 @@ export default function InventorySheetPage() {
                   format: "webp",
                 })
               : "";
-            return await loadImageWithFallback(imageUrl, thumbUrl);
+            return await loadImageFromCandidates([
+              maxQualityUrl,
+              imageUrl,
+              thumbUrl,
+            ]);
           })
         );
         while (images.length < GRID_PAGE_SIZE) images.push(null);
@@ -3336,7 +3390,7 @@ export default function InventorySheetPage() {
   }
 
   React.useEffect(() => {
-    loadPage(0, true);
+    loadAllRows();
   }, []);
 
   React.useEffect(() => {
@@ -3659,13 +3713,6 @@ export default function InventorySheetPage() {
 
         {loading ? <div className="text-sm text-white/60">Loading...</div> : null}
 
-        {hasMore && !loading ? (
-          <div className="flex justify-center">
-            <Button variant="secondary" onClick={() => loadPage(page + 1)}>
-              Load more
-            </Button>
-          </div>
-        ) : null}
       </CardBody>
     </Card>
   );

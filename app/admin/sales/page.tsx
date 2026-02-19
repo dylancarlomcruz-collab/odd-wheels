@@ -257,6 +257,9 @@ export default function AdminSalesPage() {
   const [selectedChannel, setSelectedChannel] = React.useState<string | null>(null);
   const [orderDetailsLoading, setOrderDetailsLoading] = React.useState(false);
   const [orderDetailsError, setOrderDetailsError] = React.useState<string | null>(null);
+  const [revertingOrderId, setRevertingOrderId] = React.useState<string | null>(
+    null
+  );
   const [selectedKpi, setSelectedKpi] = React.useState<
     "sales" | "orders" | "aov" | "cogs" | "profit" | "margin" | null
   >(null);
@@ -302,6 +305,7 @@ export default function AdminSalesPage() {
           "id,created_at,total,channel,payment_status,discount_total,shipping_discount"
         )
         .or("payment_status.eq.PAID,channel.eq.POS")
+        .not("status", "in", "(VOIDED,CANCELLED)")
         .gte("created_at", startISO)
         .lte("created_at", endISO)
         .order("created_at", { ascending: true })
@@ -314,6 +318,7 @@ export default function AdminSalesPage() {
             "id,created_at,total,channel,payment_status,discount_total,shipping_discount"
           )
           .eq("payment_status", "PAID")
+          .not("status", "in", "(VOIDED,CANCELLED)")
           .gte("created_at", startISO)
           .lte("created_at", endISO)
           .order("created_at", { ascending: true })
@@ -617,6 +622,95 @@ export default function AdminSalesPage() {
 
     loadDetails();
   }, [selectedOrderId]);
+
+  async function revertSale(orderId: string) {
+    const shortId = String(orderId).slice(0, 8);
+    const confirmed = window.confirm(
+      `Revert sale for order #${shortId}? This will void the order.`
+    );
+    if (!confirmed) return;
+
+    setRevertingOrderId(orderId);
+    try {
+      const { data: orderItems, error: itemsError } = await supabase
+        .from("order_items")
+        .select("variant_id,item_id,qty")
+        .eq("order_id", orderId)
+        .limit(500);
+      if (itemsError) throw itemsError;
+
+      const variantQtyToRestore = new Map<string, number>();
+      (orderItems as any[] | null)?.forEach((it) => {
+        const variantId = String(it?.variant_id ?? it?.item_id ?? "").trim();
+        if (!variantId) return;
+        const qty = Math.max(0, Number(it?.qty ?? 0));
+        if (!qty) return;
+        variantQtyToRestore.set(
+          variantId,
+          (variantQtyToRestore.get(variantId) ?? 0) + qty
+        );
+      });
+
+      const variantIds = Array.from(variantQtyToRestore.keys());
+      const beforeQty = new Map<string, number>();
+      if (variantIds.length) {
+        const { data: beforeRows, error: beforeErr } = await supabase
+          .from("product_variants")
+          .select("id,qty")
+          .in("id", variantIds);
+        if (beforeErr) throw beforeErr;
+        (beforeRows as any[] | null)?.forEach((row) => {
+          beforeQty.set(
+            String(row.id),
+            Math.max(0, Number(row?.qty ?? 0))
+          );
+        });
+      }
+
+      const { error } = await supabase.rpc("fn_staff_void_order", {
+        p_order_id: orderId,
+        p_reason: "Reverted from sales report",
+      });
+      if (error) throw error;
+
+      // Guarantee stock is restored even if backend void function did not restock.
+      if (variantIds.length) {
+        const { data: afterRows, error: afterErr } = await supabase
+          .from("product_variants")
+          .select("id,qty")
+          .in("id", variantIds);
+        if (afterErr) throw afterErr;
+
+        const afterQty = new Map<string, number>();
+        (afterRows as any[] | null)?.forEach((row) => {
+          afterQty.set(String(row.id), Math.max(0, Number(row?.qty ?? 0)));
+        });
+
+        for (const variantId of variantIds) {
+          const restoreQty = variantQtyToRestore.get(variantId) ?? 0;
+          if (restoreQty <= 0) continue;
+
+          const before = beforeQty.get(variantId) ?? 0;
+          const after = afterQty.get(variantId) ?? 0;
+          const targetMin = before + restoreQty;
+          if (after >= targetMin) continue;
+
+          const { error: updateErr } = await supabase
+            .from("product_variants")
+            .update({ qty: targetMin })
+            .eq("id", variantId);
+          if (updateErr) throw updateErr;
+        }
+      }
+
+      setSelectedOrderId(null);
+      await run();
+    } catch (err: any) {
+      alert(err?.message ?? "Failed to revert sale.");
+    } finally {
+      setRevertingOrderId(null);
+    }
+  }
 
   return (
     <RequireAuth>
@@ -1122,6 +1216,31 @@ export default function AdminSalesPage() {
             <div className="text-sm text-white/60">Order not found.</div>
           ) : (
             <div className="space-y-4">
+              {(() => {
+                const channel = String(selectedOrder.channel ?? "WEB").toUpperCase();
+                const status = String(selectedOrder.status ?? "").toUpperCase();
+                const paymentStatus = String(
+                  selectedOrder.payment_status ?? ""
+                ).toUpperCase();
+                const canRevert =
+                  (paymentStatus === "PAID" || channel === "POS") &&
+                  status !== "VOIDED" &&
+                  status !== "CANCELLED";
+                if (!canRevert) return null;
+                const busy = revertingOrderId === String(selectedOrder.id);
+                return (
+                  <div className="flex justify-end">
+                    <Button
+                      variant="danger"
+                      disabled={busy}
+                      onClick={() => void revertSale(String(selectedOrder.id))}
+                    >
+                      {busy ? "Reverting..." : "Revert sale"}
+                    </Button>
+                  </div>
+                );
+              })()}
+
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="text-xs text-white/60">
