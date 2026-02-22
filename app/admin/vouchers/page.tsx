@@ -171,6 +171,15 @@ export default function AdminVouchersPage() {
   const [syncLoading, setSyncLoading] = React.useState(false);
   const [syncMsg, setSyncMsg] = React.useState<string | null>(null);
 
+  type GrantVoucherResult = {
+    ok?: boolean;
+    voucher_id?: string;
+    created?: boolean;
+    updated?: boolean;
+    granted?: number;
+    maxed_out?: boolean;
+  };
+
   const loadVouchers = React.useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -219,7 +228,7 @@ export default function AdminVouchersPage() {
     }
 
     if (grantAllOnCreate && data?.id) {
-      const { error: grantError } = await supabase.rpc("fn_admin_grant_voucher", {
+      const { data: grantData, error: grantError } = await supabase.rpc("fn_admin_grant_voucher", {
         p_kind: "FREE_SHIPPING",
         p_voucher_id: data.id,
         p_include_ship_classes: null,
@@ -232,7 +241,14 @@ export default function AdminVouchersPage() {
           `Voucher created, but grant failed: ${grantError.message || "Unknown error."}`
         );
       } else {
-        setCreateMsg("Voucher created and granted to all users.");
+        const granted = Number((grantData as GrantVoucherResult | null)?.granted ?? 0);
+        if (granted <= 0) {
+          setCreateMsg(
+            "Voucher created, but no users were granted. Please ensure users exist and run Grant to all again."
+          );
+        } else {
+          setCreateMsg(`Voucher created and granted to ${granted} user(s).`);
+        }
       }
     } else {
       setCreateMsg("Voucher created.");
@@ -291,7 +307,7 @@ export default function AdminVouchersPage() {
     }
 
     setGrantAllId(id);
-    const { error: grantError } = await supabase.rpc("fn_admin_grant_voucher", {
+    const { data: grantData, error: grantError } = await supabase.rpc("fn_admin_grant_voucher", {
       p_kind: "FREE_SHIPPING",
       p_voucher_id: id,
       p_include_ship_classes: null,
@@ -307,7 +323,12 @@ export default function AdminVouchersPage() {
     }
 
     setGrantAllId(null);
-    alert("Voucher granted to all users.");
+    const granted = Number((grantData as GrantVoucherResult | null)?.granted ?? 0);
+    if (granted <= 0) {
+      alert("No users were granted. Ensure customer accounts exist, then try again.");
+    } else {
+      alert(`Voucher granted to ${granted} user(s).`);
+    }
   }
 
   async function onGrantVoucher() {

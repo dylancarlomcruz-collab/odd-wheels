@@ -13,6 +13,8 @@ const MODEL_SYNONYMS: Array<{ pattern: RegExp; append: string }> = [
   { pattern: /\br33\b/i, append: "skyline r33" },
   { pattern: /\br32\b/i, append: "skyline r32" },
   { pattern: /\bgtr\b/i, append: "gt-r" },
+  { pattern: /\brx\s*-?\s*7\b/i, append: "rx-7" },
+  { pattern: /\brx\s*-?\s*7\b/i, append: "rx7" },
 ];
 
 const SMART_SYNONYM_GROUPS: Array<{

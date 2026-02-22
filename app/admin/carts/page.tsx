@@ -4,6 +4,8 @@ import * as React from "react";
 import {
   BarChart3,
   Boxes,
+  ChevronDown,
+  ChevronUp,
   Layers,
   MousePointerClick,
   RefreshCw,
@@ -55,6 +57,10 @@ type ProductClickRow = {
 type VisitorItem = {
   name: string;
   qty: number;
+  price: number;
+  cogs: number;
+  profit: number;
+  imageUrl: string | null;
 };
 
 type VisitorRow = {
@@ -64,6 +70,9 @@ type VisitorRow = {
   clicks: number;
   cartLines: number;
   cartQty: number;
+  price: number;
+  cogs: number;
+  expectedProfit: number;
   items: VisitorItem[];
   lastActivity: string | null;
 };
@@ -122,6 +131,15 @@ function maxDate(a: string | null, b: string | null) {
   return a > b ? a : b;
 }
 
+function sortVisitorRowsByRecentActivity(a: VisitorRow, b: VisitorRow) {
+  if (!a.lastActivity && !b.lastActivity) {
+    return b.clicks - a.clicks || b.cartQty - a.cartQty;
+  }
+  if (!a.lastActivity) return 1;
+  if (!b.lastActivity) return -1;
+  return b.lastActivity.localeCompare(a.lastActivity) || b.clicks - a.clicks || b.cartQty - a.cartQty;
+}
+
 export default function AdminCartInsightsPage() {
   const [days, setDays] = React.useState("30");
   const [limit, setLimit] = React.useState("20");
@@ -137,9 +155,13 @@ export default function AdminCartInsightsPage() {
   const [topClicks, setTopClicks] = React.useState<ProductClickRow[]>([]);
   const [topClicksLoading, setTopClicksLoading] = React.useState(false);
   const [topClicksError, setTopClicksError] = React.useState<string | null>(null);
+  const [customerRows, setCustomerRows] = React.useState<VisitorRow[]>([]);
   const [visitorRows, setVisitorRows] = React.useState<VisitorRow[]>([]);
   const [visitorLoading, setVisitorLoading] = React.useState(false);
   const [visitorError, setVisitorError] = React.useState<string | null>(null);
+  const [showCustomerCarts, setShowCustomerCarts] = React.useState(false);
+  const [expandedCustomerPanel, setExpandedCustomerPanel] = React.useState<string | null>(null);
+  const customerSectionRef = React.useRef<HTMLDivElement | null>(null);
 
   async function load() {
     setLoading(true);
@@ -243,6 +265,16 @@ export default function AdminCartInsightsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  React.useEffect(() => {
+    if (!showCustomerCarts) return;
+    customerSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [showCustomerCarts]);
+
+  React.useEffect(() => {
+    if (showCustomerCarts) return;
+    setExpandedCustomerPanel(null);
+  }, [showCustomerCarts]);
+
   const visibleRows = React.useMemo(() => {
     const ordered = [...rows].sort((a, b) => {
       if (sortBy === "customers") return b.customers - a.customers || b.qty - a.qty;
@@ -289,14 +321,14 @@ export default function AdminCartInsightsPage() {
         supabase
           .from("cart_items")
           .select(
-            "id,user_id,variant_id,qty,created_at, variant:product_variants(id,condition,price,qty, product:products(id,title,brand,model,variation,image_urls))"
+            "id,user_id,variant_id,qty,created_at, variant:product_variants(id,condition,cost,price,qty, product:products(id,title,brand,model,variation,image_urls))"
           )
           .order("created_at", { ascending: false })
           .limit(5000),
         supabase
           .from("guest_cart_items")
           .select(
-            "session_id,variant_id,qty,updated_at, variant:product_variants(id,condition,price,qty, product:products(id,title,brand,model,variation,image_urls))"
+            "session_id,variant_id,qty,updated_at, variant:product_variants(id,condition,cost,price,qty, product:products(id,title,brand,model,variation,image_urls))"
           )
           .order("updated_at", { ascending: false })
           .limit(5000),
@@ -403,7 +435,7 @@ export default function AdminCartInsightsPage() {
 
       const authMap = new Map<
         string,
-        VisitorRow & { itemMap: Map<string, number> }
+        VisitorRow & { itemMap: Map<string, VisitorItem> }
       >();
       for (const line of cartLines) {
         const userId = String(line?.user_id ?? "").trim();
@@ -412,6 +444,10 @@ export default function AdminCartInsightsPage() {
         const variant = line?.variant ?? null;
         const product = variant?.product ?? null;
         const itemName = buildItemLabel(product);
+        const itemImage = pickImage(product);
+        const itemPrice = Number(variant?.price ?? 0) * qty;
+        const itemCogs = Number(variant?.cost ?? 0) * qty;
+        const itemProfit = itemPrice - itemCogs;
         const current =
           authMap.get(userId) ??
           ({
@@ -421,14 +457,35 @@ export default function AdminCartInsightsPage() {
             clicks: 0,
             cartLines: 0,
             cartQty: 0,
+            price: 0,
+            cogs: 0,
+            expectedProfit: 0,
             items: [],
             lastActivity: null,
-            itemMap: new Map<string, number>(),
-          } as VisitorRow & { itemMap: Map<string, number> });
+            itemMap: new Map<string, VisitorItem>(),
+          } as VisitorRow & { itemMap: Map<string, VisitorItem> });
 
         current.cartLines += 1;
         current.cartQty += qty;
-        current.itemMap.set(itemName, (current.itemMap.get(itemName) ?? 0) + qty);
+        current.price += itemPrice;
+        current.cogs += itemCogs;
+        current.expectedProfit += itemProfit;
+        const item =
+          current.itemMap.get(itemName) ??
+          ({
+            name: itemName,
+            qty: 0,
+            price: 0,
+            cogs: 0,
+            profit: 0,
+            imageUrl: itemImage,
+          } as VisitorItem);
+        item.qty += qty;
+        item.price += itemPrice;
+        item.cogs += itemCogs;
+        item.profit += itemProfit;
+        if (!item.imageUrl && itemImage) item.imageUrl = itemImage;
+        current.itemMap.set(itemName, item);
         current.lastActivity = maxDate(
           current.lastActivity,
           line?.created_at ? String(line.created_at) : null
@@ -446,10 +503,13 @@ export default function AdminCartInsightsPage() {
           clicks: 0,
           cartLines: 0,
           cartQty: 0,
+          price: 0,
+          cogs: 0,
+          expectedProfit: 0,
           items: [],
           lastActivity: null,
-          itemMap: new Map<string, number>(),
-        } as VisitorRow & { itemMap: Map<string, number> });
+          itemMap: new Map<string, VisitorItem>(),
+        } as VisitorRow & { itemMap: Map<string, VisitorItem> });
         const profile = profileMap.get(userId);
         const displayName =
           profile?.full_name?.trim() ||
@@ -459,16 +519,15 @@ export default function AdminCartInsightsPage() {
         base.label = displayName;
         base.clicks = clickInfo?.clicks ?? 0;
         base.lastActivity = maxDate(base.lastActivity, clickInfo?.last ?? null);
-        base.items = Array.from(base.itemMap.entries()).map(([name, qty]) => ({
-          name,
-          qty,
-        }));
+        base.items = Array.from(base.itemMap.values()).sort(
+          (a, b) => b.qty - a.qty || b.price - a.price || a.name.localeCompare(b.name)
+        );
         authRows.push(base);
       });
 
       const guestMap = new Map<
         string,
-        VisitorRow & { itemMap: Map<string, number> }
+        VisitorRow & { itemMap: Map<string, VisitorItem> }
       >();
       for (const line of guestCartLines) {
         const sessionId = String(line?.session_id ?? "").trim();
@@ -477,6 +536,10 @@ export default function AdminCartInsightsPage() {
         const variant = line?.variant ?? null;
         const product = variant?.product ?? null;
         const itemName = buildItemLabel(product);
+        const itemImage = pickImage(product);
+        const itemPrice = Number(variant?.price ?? 0) * qty;
+        const itemCogs = Number(variant?.cost ?? 0) * qty;
+        const itemProfit = itemPrice - itemCogs;
         const current =
           guestMap.get(sessionId) ??
           ({
@@ -486,14 +549,35 @@ export default function AdminCartInsightsPage() {
             clicks: 0,
             cartLines: 0,
             cartQty: 0,
+            price: 0,
+            cogs: 0,
+            expectedProfit: 0,
             items: [],
             lastActivity: null,
-            itemMap: new Map<string, number>(),
-          } as VisitorRow & { itemMap: Map<string, number> });
+            itemMap: new Map<string, VisitorItem>(),
+          } as VisitorRow & { itemMap: Map<string, VisitorItem> });
 
         current.cartLines += 1;
         current.cartQty += qty;
-        current.itemMap.set(itemName, (current.itemMap.get(itemName) ?? 0) + qty);
+        current.price += itemPrice;
+        current.cogs += itemCogs;
+        current.expectedProfit += itemProfit;
+        const item =
+          current.itemMap.get(itemName) ??
+          ({
+            name: itemName,
+            qty: 0,
+            price: 0,
+            cogs: 0,
+            profit: 0,
+            imageUrl: itemImage,
+          } as VisitorItem);
+        item.qty += qty;
+        item.price += itemPrice;
+        item.cogs += itemCogs;
+        item.profit += itemProfit;
+        if (!item.imageUrl && itemImage) item.imageUrl = itemImage;
+        current.itemMap.set(itemName, item);
         current.lastActivity = maxDate(
           current.lastActivity,
           line?.updated_at ? String(line.updated_at) : null
@@ -514,10 +598,13 @@ export default function AdminCartInsightsPage() {
           clicks: 0,
           cartLines: 0,
           cartQty: 0,
+          price: 0,
+          cogs: 0,
+          expectedProfit: 0,
           items: [],
           lastActivity: null,
-          itemMap: new Map<string, number>(),
-        } as VisitorRow & { itemMap: Map<string, number> });
+          itemMap: new Map<string, VisitorItem>(),
+        } as VisitorRow & { itemMap: Map<string, VisitorItem> });
         const clickInfo = guestClickMap.get(sessionId);
         const sessionInfo = guestSessionMap.get(sessionId);
         base.label = `Guest ${shortId(sessionId)}`;
@@ -527,24 +614,23 @@ export default function AdminCartInsightsPage() {
           base.lastActivity,
           sessionInfo?.last_seen_at ?? null
         );
-        base.items = Array.from(base.itemMap.entries()).map(([name, qty]) => ({
-          name,
-          qty,
-        }));
+        base.items = Array.from(base.itemMap.values()).sort(
+          (a, b) => b.qty - a.qty || b.price - a.price || a.name.localeCompare(b.name)
+        );
         guestRows.push(base);
       });
 
-      const guestOnly = guestRows.sort((a, b) => {
-        if (!a.lastActivity && !b.lastActivity) return b.clicks - a.clicks;
-        if (!a.lastActivity) return 1;
-        if (!b.lastActivity) return -1;
-        return b.lastActivity.localeCompare(a.lastActivity);
-      });
+      const accountOnly = authRows
+        .filter((row) => row.cartLines > 0)
+        .sort(sortVisitorRowsByRecentActivity);
+      const guestOnly = guestRows.sort(sortVisitorRowsByRecentActivity);
 
+      setCustomerRows(accountOnly);
       setVisitorRows(guestOnly);
     } catch (e: any) {
       console.error(e);
       setVisitorError(e?.message ?? "Failed to load visitor carts.");
+      setCustomerRows([]);
       setVisitorRows([]);
     } finally {
       setVisitorLoading(false);
@@ -583,7 +669,11 @@ export default function AdminCartInsightsPage() {
               </div>
               <div className="mt-2 text-2xl font-semibold text-amber-200">{stats.lines}</div>
             </div>
-            <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-3 sm:p-4">
+            <button
+              type="button"
+              onClick={() => setShowCustomerCarts((prev) => !prev)}
+              className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-3 text-left transition hover:border-sky-400/50 hover:bg-sky-500/10 sm:p-4"
+            >
               <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
                 <span>Customers</span>
                 <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-sky-500/30 bg-sky-500/10 text-sky-200">
@@ -591,7 +681,10 @@ export default function AdminCartInsightsPage() {
                 </span>
               </div>
               <div className="mt-2 text-2xl font-semibold text-sky-200">{stats.customers}</div>
-            </div>
+              <div className="mt-1 text-xs text-sky-100/70">
+                {showCustomerCarts ? "Hide customer carts" : "View customer carts"}
+              </div>
+            </button>
             <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-3 sm:p-4">
               <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
                 <span>Total qty</span>
@@ -792,6 +885,165 @@ export default function AdminCartInsightsPage() {
             </div>
           </div>
 
+          {showCustomerCarts ? (
+            <div
+              ref={customerSectionRef}
+              className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2 font-semibold">
+                  <Users className="h-4 w-4 text-sky-200" />
+                  Customer carts
+                </div>
+                <Button
+                  variant="ghost"
+                  onClick={loadVisitors}
+                  disabled={visitorLoading}
+                >
+                  {visitorLoading ? "Refreshing..." : "Refresh"}
+                </Button>
+              </div>
+              <div className="mt-1 text-xs text-white/60">
+                Shows account customers and everything currently in their carts.
+              </div>
+              <div className="mt-3 space-y-2">
+                {visitorError ? (
+                  <div className="text-sm text-red-200">{visitorError}</div>
+                ) : null}
+                {visitorLoading && customerRows.length === 0 ? (
+                  <div className="text-sm text-white/60">Loading customer carts...</div>
+                ) : null}
+                {!visitorLoading && customerRows.length === 0 ? (
+                  <div className="text-sm text-white/60">No customer carts found.</div>
+                ) : null}
+                {customerRows.map((row) => {
+                  const panelKey = `${row.kind}-${row.id}`;
+                  const expanded = expandedCustomerPanel === panelKey;
+                  return (
+                    <div
+                      key={panelKey}
+                      className="rounded-xl border border-white/10 bg-paper/5"
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedCustomerPanel((prev) =>
+                            prev === panelKey ? null : panelKey
+                          )
+                        }
+                        className="flex w-full flex-wrap items-start justify-between gap-3 px-3 py-2 text-left sm:py-3"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="font-medium truncate">{row.label}</div>
+                            <Badge className="border-sky-500/30 text-sky-200">Account</Badge>
+                            {row.lastActivity ? (
+                              <span className="text-xs text-white/50">
+                                Last activity: {formatLogDate(row.lastActivity)}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="text-xs text-white/60">
+                            {row.cartLines} line(s) | {row.cartQty} total qty
+                          </div>
+                          <div className="text-xs text-white/60">
+                            Price {peso(row.price)} | COGS {peso(row.cogs)} | Expected profit{" "}
+                            <span
+                              className={
+                                row.expectedProfit >= 0 ? "text-emerald-300" : "text-red-300"
+                              }
+                            >
+                              {peso(row.expectedProfit)}
+                            </span>
+                          </div>
+                          <div className="mt-1 inline-flex items-center gap-1 text-xs text-sky-200">
+                            {expanded ? (
+                              <ChevronUp className="h-3 w-3" />
+                            ) : (
+                              <ChevronDown className="h-3 w-3" />
+                            )}
+                            {expanded ? "Hide cart items" : `Show cart items (${row.items.length})`}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-6 text-right">
+                          <div>
+                            <div className="text-xs text-white/60">Price</div>
+                            <div className="text-lg font-semibold text-amber-200">{peso(row.price)}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-white/60">COGS</div>
+                            <div className="text-lg font-semibold text-orange-200">{peso(row.cogs)}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-white/60">Expected profit</div>
+                            <div
+                              className={`text-lg font-semibold ${
+                                row.expectedProfit >= 0 ? "text-emerald-200" : "text-red-200"
+                              }`}
+                            >
+                              {peso(row.expectedProfit)}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="flex items-center justify-end gap-1 text-xs text-white/60">
+                              <MousePointerClick className="h-3 w-3" />
+                              Clicks
+                            </div>
+                            <div className="text-lg font-semibold">{row.clicks}</div>
+                          </div>
+                        </div>
+                      </button>
+
+                      {expanded ? (
+                        <div className="border-t border-white/10 px-3 py-2 sm:px-4 sm:py-3">
+                          {row.items.length ? (
+                            <div className="space-y-2">
+                              {row.items.map((item) => (
+                                <div
+                                  key={`${row.id}-${item.name}`}
+                                  className="flex items-center gap-3 rounded-lg border border-white/10 bg-black/10 px-2 py-2"
+                                >
+                                  <div className="h-10 w-10 overflow-hidden rounded-md border border-white/10 bg-bg-800">
+                                    {item.imageUrl ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img
+                                        src={item.imageUrl}
+                                        alt={item.name}
+                                        className="h-full w-full object-cover"
+                                      />
+                                    ) : null}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="truncate text-xs text-white/70">
+                                      {item.qty}x {item.name}
+                                    </div>
+                                    <div className="text-[11px] text-white/40">
+                                      Price {peso(item.price)} | COGS {peso(item.cogs)} | Profit{" "}
+                                      <span
+                                        className={
+                                          item.profit >= 0 ? "text-emerald-300" : "text-red-300"
+                                        }
+                                      >
+                                        {peso(item.profit)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-white/50">No items in this cart.</div>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-3 sm:p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2 font-semibold">
@@ -823,8 +1075,8 @@ export default function AdminCartInsightsPage() {
                 const itemsPreview = row.items.slice(0, 3);
                 const remaining = row.items.length - itemsPreview.length;
                 const itemSummary = itemsPreview
-                  .map((item) => `${item.qty}× ${item.name}`)
-                  .join(" · ");
+                  .map((item) => `${item.qty}x ${item.name}`)
+                  .join(" | ");
                 return (
                   <div
                     key={`${row.kind}-${row.id}`}
@@ -850,18 +1102,46 @@ export default function AdminCartInsightsPage() {
                       </div>
                       <div className="text-xs text-white/60">
                         {row.cartLines > 0
-                          ? `${row.cartLines} line(s) · ${row.cartQty} total qty`
+                          ? `${row.cartLines} line(s) | ${row.cartQty} total qty`
                           : "Cart empty"}
+                      </div>
+                      <div className="text-xs text-white/60">
+                        Price {peso(row.price)} | COGS {peso(row.cogs)} | Expected profit{" "}
+                        <span
+                          className={
+                            row.expectedProfit >= 0 ? "text-emerald-300" : "text-red-300"
+                          }
+                        >
+                          {peso(row.expectedProfit)}
+                        </span>
                       </div>
                       {itemSummary ? (
                         <div className="text-xs text-white/50">
                           {itemSummary}
-                          {remaining > 0 ? ` · +${remaining} more` : ""}
+                          {remaining > 0 ? ` | +${remaining} more` : ""}
                         </div>
                       ) : null}
                     </div>
 
                     <div className="flex items-center gap-6 text-right">
+                      <div>
+                        <div className="text-xs text-white/60">Price</div>
+                        <div className="text-lg font-semibold text-amber-200">{peso(row.price)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-white/60">COGS</div>
+                        <div className="text-lg font-semibold text-orange-200">{peso(row.cogs)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-white/60">Expected profit</div>
+                        <div
+                          className={`text-lg font-semibold ${
+                            row.expectedProfit >= 0 ? "text-emerald-200" : "text-red-200"
+                          }`}
+                        >
+                          {peso(row.expectedProfit)}
+                        </div>
+                      </div>
                       <div>
                         <div className="flex items-center justify-end gap-1 text-xs text-white/60">
                           <MousePointerClick className="h-3 w-3" />
@@ -880,3 +1160,4 @@ export default function AdminCartInsightsPage() {
     </div>
   );
 }
+

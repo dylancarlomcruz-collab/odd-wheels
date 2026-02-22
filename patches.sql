@@ -2849,8 +2849,8 @@ begin
   end if;
 
   with target_users as (
-    select distinct p.id as user_id
-    from public.profiles p
+    select distinct u.id as user_id
+    from auth.users u
     where coalesce(p_grant_all, false)
     union
     select distinct u as user_id
