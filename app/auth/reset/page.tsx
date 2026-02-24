@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { isSupabaseConfigured } from "@/lib/env";
 
+const PROD_RESET_REDIRECT = "https://www.odd-wheels.com/auth/reset";
+
 function detectRecoveryFromUrl() {
   if (typeof window === "undefined") return false;
   const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
@@ -70,8 +72,10 @@ function ResetPasswordContent() {
 
     const redirectTo =
       typeof window === "undefined"
-        ? "https://www.odd-wheels.com/auth/reset"
-        : `${window.location.origin}/auth/reset`;
+        ? PROD_RESET_REDIRECT
+        : window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+          ? `${window.location.origin}/auth/reset`
+          : PROD_RESET_REDIRECT;
 
     setLoading(true);
     const { error: resetError } = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
