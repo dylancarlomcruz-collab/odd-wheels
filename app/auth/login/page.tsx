@@ -11,6 +11,18 @@ import { isSupabaseConfigured } from "@/lib/env";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { REMEMBER_ME_KEY, SUPABASE_AUTH_STORAGE_KEY } from "@/lib/supabase/browser";
 
+function formatLoginError(message: string) {
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("email not confirmed") ||
+    lower.includes("email not verified") ||
+    lower.includes("email_not_confirmed")
+  ) {
+    return "Your email is not verified yet. Please verify your email before logging in, and check your spam/junk folder if you cannot find the verification email in your inbox.";
+  }
+  return message;
+}
+
 function LoginContent() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -63,7 +75,7 @@ function LoginContent() {
     setLoading(false);
 
     if (error) {
-      setError(error.message);
+      setError(formatLoginError(error.message));
       return;
     }
 
@@ -94,6 +106,12 @@ function LoginContent() {
                 onChange={setRememberMe}
                 label="Remember me"
               />
+              <Link
+                href={`/auth/reset?email=${encodeURIComponent(email.trim())}`}
+                className="text-sm text-accent-700 hover:underline dark:text-accent-200"
+              >
+                Forgot password?
+              </Link>
             </div>
 
             {error ? <div className="text-sm text-red-400">{error}</div> : null}

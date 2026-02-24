@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase/browser";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
@@ -12,6 +13,10 @@ import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 import { toast } from "@/components/ui/toast";
 import { normalizeBarcode } from "@/lib/barcode";
 import { formatConditionLabel } from "@/lib/conditions";
+import {
+  makePosHandoffStorageKey,
+  parsePosHandoffPayload,
+} from "@/lib/posHandoff";
 
 type Product = {
   id: string;
@@ -119,6 +124,8 @@ const BARCODE_CONTROL_KEYS = new Set([
 ]);
 
 export default function CashierPOSPage() {
+  const searchParams = useSearchParams();
+
   // customer
   const [customerName, setCustomerName] = React.useState("");
   const [customerPhone, setCustomerPhone] = React.useState("");
@@ -148,6 +155,7 @@ export default function CashierPOSPage() {
 
   const barcodeRef = React.useRef<HTMLInputElement>(null);
   const searchRef = React.useRef<HTMLInputElement>(null);
+  const appliedHandoffRef = React.useRef<string | null>(null);
 
   // cart
   const [cart, setCart] = React.useState<CartLine[]>([]);
@@ -164,6 +172,200 @@ export default function CashierPOSPage() {
       ? Math.min(subtotal, Math.max(0, subtotal * Math.min(100, discountBase) / 100))
       : Math.min(subtotal, Math.max(0, discountBase));
   const totalAfterDiscount = Math.max(0, subtotal - discountAmount);
+
+  React.useEffect(() => {
+    const handoffId = searchParams.get("handoff");
+    if (!handoffId) return;
+    if (appliedHandoffRef.current === handoffId) return;
+    appliedHandoffRef.current = handoffId;
+
+    const storageKey = makePosHandoffStorageKey(handoffId);
+    const payload = parsePosHandoffPayload(
+      window.sessionStorage.getItem(storageKey)
+    );
+    window.sessionStorage.removeItem(storageKey);
+
+    if (!payload) return;
+    const handoffPayload = payload;
+
+    async function applyHandoff() {
+      const requestedQtyMap = new Map<string, number>();
+      const requestedMetaMap = new Map<
+        string,
+        {
+          title?: string;
+          image_url?: string | null;
+          condition?: string | null;
+          unit_price?: number | null;
+          product_id?: string | null;
+          barcode?: string | null;
+        }
+      >();
+      handoffPayload.items.forEach((item) => {
+        requestedQtyMap.set(
+          item.variant_id,
+          (requestedQtyMap.get(item.variant_id) ?? 0) + Math.max(1, item.qty)
+        );
+        if (!requestedMetaMap.has(item.variant_id)) {
+          requestedMetaMap.set(item.variant_id, {
+            title: item.title,
+            image_url: item.image_url ?? null,
+            condition: item.condition ?? null,
+            unit_price: item.unit_price ?? null,
+            product_id: item.product_id ?? null,
+            barcode: item.barcode ?? null,
+          });
+        }
+      });
+
+      const variantIds = Array.from(requestedQtyMap.keys());
+      if (!variantIds.length) return;
+
+      const { data, error } = await supabase
+        .from("product_variants")
+        .select(
+          "id,product_id,condition,price,qty,barcode,ship_class, product:products(id,title,brand,model,variation,image_urls,is_active)"
+        )
+        .in("id", variantIds);
+
+      let lookupErrorMessage: string | null = null;
+      if (error) {
+        console.error(error);
+        lookupErrorMessage = error.message || "Could not load variants for handoff.";
+      }
+
+      const variantRows = ((data as any[]) ?? [])
+        .map((row) => ({
+          ...row,
+          product: Array.isArray(row.product)
+            ? row.product[0] ?? null
+            : row.product ?? null,
+        }))
+        .filter((row) => row?.id) as Array<
+        Variant & { product: Product | null }
+      >;
+
+      const byVariantId = new Map<string, Variant & { product: Product | null }>();
+      variantRows.forEach((row) => {
+        byVariantId.set(String(row.id), row);
+      });
+
+      const nextCart: CartLine[] = [];
+      let skippedQty = 0;
+      let unresolvedLines = 0;
+
+      variantIds.forEach((variantId) => {
+        const hit = byVariantId.get(variantId);
+        const requestedQty = Math.max(1, requestedQtyMap.get(variantId) ?? 1);
+        const fallbackMeta = requestedMetaMap.get(variantId);
+
+        if (!hit) {
+          unresolvedLines += 1;
+          const fallbackPriceRaw = Number(fallbackMeta?.unit_price ?? 0);
+          const fallbackPrice = Number.isFinite(fallbackPriceRaw)
+            ? Math.max(0, fallbackPriceRaw)
+            : 0;
+          nextCart.push({
+            variant_id: variantId,
+            product_id: String(fallbackMeta?.product_id ?? ""),
+            title: fallbackMeta?.title || `Item ${variantId.slice(0, 8)}`,
+            image: fallbackMeta?.image_url ?? null,
+            condition: formatCondition(fallbackMeta?.condition ?? null),
+            barcode: fallbackMeta?.barcode ?? null,
+            unit_price: fallbackPrice,
+            qty: requestedQty,
+            stock: requestedQty,
+            line_total: fallbackPrice * requestedQty,
+          });
+          return;
+        }
+
+        const stock = Math.max(0, Number(hit.qty ?? 0));
+        const qty = stock > 0 ? Math.max(1, Math.min(requestedQty, stock)) : requestedQty;
+        if (stock > 0 && qty < requestedQty) {
+          skippedQty += requestedQty - qty;
+        }
+        const unitPriceRaw = Number(hit.price ?? fallbackMeta?.unit_price ?? 0);
+        const unitPrice = Number.isFinite(unitPriceRaw) ? Math.max(0, unitPriceRaw) : 0;
+        const title =
+          (typeof hit.product?.title === "string" && hit.product.title.trim()) ||
+          fallbackMeta?.title ||
+          `Item ${variantId.slice(0, 8)}`;
+
+        nextCart.push({
+          variant_id: String(hit.id),
+          product_id: String(hit.product_id ?? fallbackMeta?.product_id ?? ""),
+          title,
+          image: firstImg(hit.product?.image_urls) ?? fallbackMeta?.image_url ?? null,
+          condition: formatCondition(hit.condition ?? fallbackMeta?.condition ?? null),
+          barcode: hit.barcode ?? fallbackMeta?.barcode ?? null,
+          unit_price: unitPrice,
+          qty,
+          stock: stock > 0 ? stock : requestedQty,
+          line_total: unitPrice * qty,
+        });
+      });
+
+      if (!nextCart.length) {
+        toast({
+          title: "POS handoff failed",
+          message: "No valid in-stock variants were found.",
+          intent: "error",
+        });
+        return;
+      }
+
+      setCustomerName(handoffPayload.customer.name ?? "");
+      setCustomerPhone(handoffPayload.customer.phone ?? "");
+      setCart(nextCart);
+
+      setSearch("");
+      setResults([]);
+      setSearchHint(null);
+      setSelectedProduct(null);
+      setVariants([]);
+      setBarcode("");
+      setBarcodeHint(null);
+      setBarcodeMatches([]);
+
+      const productIds = Array.from(
+        new Set(
+          nextCart
+            .map((line) => line.product_id)
+            .filter((productId) => productId && productId.length > 0)
+        )
+      );
+      productIds.forEach((productId) => {
+        void ensureVariantsLoaded(productId);
+      });
+
+      if (lookupErrorMessage) {
+        toast({
+          title: "Loaded with warnings",
+          message: `${nextCart.length} line(s) loaded. Variant lookup had issues; review quantities and prices before checkout.`,
+          intent: "error",
+        });
+        return;
+      }
+
+      if (unresolvedLines > 0 || skippedQty > 0) {
+        toast({
+          title: "Loaded with warnings",
+          message: `${nextCart.length} line(s) loaded. ${unresolvedLines} line(s) used cart snapshot data and ${skippedQty} qty was capped to current stock.`,
+          intent: "error",
+        });
+        return;
+      }
+
+      toast({
+        title: "Loaded to POS",
+        message: `${nextCart.length} line(s) loaded from admin cart.`,
+        intent: "success",
+      });
+    }
+
+    void applyHandoff();
+  }, [searchParams]);
 
   async function runSearch() {
     const q = search.trim();

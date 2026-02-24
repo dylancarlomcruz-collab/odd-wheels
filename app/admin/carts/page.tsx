@@ -6,6 +6,8 @@ import {
   Boxes,
   ChevronDown,
   ChevronUp,
+  ClipboardPlus,
+  FileDown,
   Layers,
   MousePointerClick,
   RefreshCw,
@@ -20,6 +22,11 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { formatConditionLabel } from "@/lib/conditions";
+import {
+  createPosHandoffId,
+  makePosHandoffStorageKey,
+  type PosHandoffPayload,
+} from "@/lib/posHandoff";
 
 type CartInsightRow = {
   key: string;
@@ -55,18 +62,25 @@ type ProductClickRow = {
 };
 
 type VisitorItem = {
+  variantId: string | null;
   name: string;
   qty: number;
   price: number;
   cogs: number;
   profit: number;
   imageUrl: string | null;
+  condition: string | null;
+  notes: string | null;
 };
 
 type VisitorRow = {
   id: string;
   kind: "ACCOUNT" | "GUEST";
   label: string;
+  customerName: string;
+  customerUsername: string;
+  customerEmail: string;
+  customerPhone: string;
   clicks: number;
   cartLines: number;
   cartQty: number;
@@ -75,6 +89,14 @@ type VisitorRow = {
   expectedProfit: number;
   items: VisitorItem[];
   lastActivity: string | null;
+};
+
+type AdminCustomerDetail = {
+  id: string;
+  name: string;
+  username: string;
+  email: string;
+  contact: string;
 };
 
 function peso(n: number) {
@@ -86,6 +108,17 @@ function peso(n: number) {
     }).format(n);
   } catch {
     return `PHP ${Math.round(n)}`;
+  }
+}
+
+function pdfMoney(n: number) {
+  const value = Number.isFinite(n) ? Math.round(n) : 0;
+  try {
+    return `PHP ${new Intl.NumberFormat("en-US", {
+      maximumFractionDigits: 0,
+    }).format(value)}`;
+  } catch {
+    return `PHP ${value}`;
   }
 }
 
@@ -131,6 +164,45 @@ function maxDate(a: string | null, b: string | null) {
   return a > b ? a : b;
 }
 
+async function loadAdminCustomerDetails(userIds: string[]) {
+  if (!userIds.length) return new Map<string, AdminCustomerDetail>();
+
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token ?? "";
+  if (!token) {
+    throw new Error("Not authenticated.");
+  }
+
+  const response = await fetch("/api/admin/carts/customers", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ userIds }),
+  });
+
+  const json = await response.json().catch(() => null);
+  if (!response.ok || !json?.ok) {
+    throw new Error(json?.error ?? "Failed to load customer details.");
+  }
+
+  const rows = Array.isArray(json?.rows) ? (json.rows as AdminCustomerDetail[]) : [];
+  const map = new Map<string, AdminCustomerDetail>();
+  rows.forEach((row) => {
+    const id = String(row?.id ?? "").trim();
+    if (!id) return;
+    map.set(id, {
+      id,
+      name: String(row?.name ?? "").trim(),
+      username: String(row?.username ?? "").trim(),
+      email: String(row?.email ?? "").trim().toLowerCase(),
+      contact: String(row?.contact ?? "").trim(),
+    });
+  });
+  return map;
+}
+
 function sortVisitorRowsByRecentActivity(a: VisitorRow, b: VisitorRow) {
   if (!a.lastActivity && !b.lastActivity) {
     return b.clicks - a.clicks || b.cartQty - a.cartQty;
@@ -138,6 +210,218 @@ function sortVisitorRowsByRecentActivity(a: VisitorRow, b: VisitorRow) {
   if (!a.lastActivity) return 1;
   if (!b.lastActivity) return -1;
   return b.lastActivity.localeCompare(a.lastActivity) || b.clicks - a.clicks || b.cartQty - a.cartQty;
+}
+
+function sanitizeFileName(value: string) {
+  const cleaned = value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "").trim();
+  return cleaned || "customer";
+}
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read image data."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function loadImageDataUrl(url: string, cache: Map<string, string | null>) {
+  const existing = cache.get(url);
+  if (existing !== undefined) return existing;
+
+  try {
+    const response = await fetch(url, { cache: "force-cache" });
+    if (!response.ok) throw new Error(`Failed to fetch image: ${response.status}`);
+    const blob = await response.blob();
+    if (!blob.type.startsWith("image/")) throw new Error("URL is not an image.");
+    const dataUrl = await blobToDataUrl(blob);
+    cache.set(url, dataUrl);
+    return dataUrl;
+  } catch {
+    cache.set(url, null);
+    return null;
+  }
+}
+
+function imageFormatForDataUrl(dataUrl: string): "PNG" | "JPEG" {
+  return dataUrl.startsWith("data:image/png") ? "PNG" : "JPEG";
+}
+
+async function exportCustomerInvoicePdf(row: VisitorRow, imageCache: Map<string, string | null>) {
+  const { jsPDF } = await import("jspdf");
+
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const now = new Date();
+  const generatedAt = now.toLocaleString("en-PH");
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const marginX = 42;
+  const marginTop = 42;
+  const marginBottom = 48;
+
+  const photoLeft = marginX;
+  const photoSize = 42;
+  const nameLeft = photoLeft + photoSize + 12;
+  const qtyCenter = pageWidth - 120;
+  const amountRight = pageWidth - marginX;
+  const nameMaxWidth = qtyCenter - 24 - nameLeft;
+
+  const customerIdShort = shortId(row.id);
+  const customerName = row.label?.trim() || `User ${customerIdShort}`;
+
+  const drawMeta = (continued: boolean) => {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(17);
+    doc.setTextColor(20, 20, 20);
+    doc.text("ODD WHEELS", marginX, marginTop);
+
+    doc.setFontSize(12);
+    doc.text(continued ? "Customer Cart Invoice (Continued)" : "Customer Cart Invoice", marginX, marginTop + 20);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(70, 70, 70);
+    doc.text(`Generated: ${generatedAt}`, pageWidth - marginX, marginTop, { align: "right" });
+    doc.text(`Customer ID: ${customerIdShort}`, pageWidth - marginX, marginTop + 14, {
+      align: "right",
+    });
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(20, 20, 20);
+    const nameLines = doc.splitTextToSize(`Customer: ${customerName}`, pageWidth - marginX * 2);
+    doc.text(nameLines, marginX, marginTop + 42);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(70, 70, 70);
+    const activityLabel = row.lastActivity ? formatLogDate(row.lastActivity) : "N/A";
+    doc.text(`Last activity: ${activityLabel}`, marginX, marginTop + 66);
+    doc.text("Source: Admin Cart Insights current snapshot", marginX, marginTop + 79);
+  };
+
+  const drawTableHeader = (topY: number) => {
+    doc.setDrawColor(220, 220, 220);
+    doc.line(marginX, topY, pageWidth - marginX, topY);
+
+    const textY = topY + 14;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(35, 35, 35);
+    doc.text("Photo", photoLeft, textY);
+    doc.text("Product", nameLeft, textY);
+    doc.text("Qty", qtyCenter, textY, { align: "center" });
+    doc.text("Amount", amountRight, textY, { align: "right" });
+    doc.line(marginX, textY + 6, pageWidth - marginX, textY + 6);
+    return textY + 6;
+  };
+
+  drawMeta(false);
+  let y = drawTableHeader(136) + 8;
+
+  if (row.items.length === 0) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.setTextColor(70, 70, 70);
+    doc.text("No cart items found for this customer.", marginX, y + 18);
+    y += 36;
+  } else {
+    for (const item of row.items) {
+      const productName = item.name?.trim() || "Item";
+      const nameLines = doc.splitTextToSize(productName, nameMaxWidth);
+      const details: string[] = [];
+      if (item.condition) {
+        details.push(`Condition: ${item.condition}`);
+      }
+      if (item.notes) {
+        details.push(`Notes: ${item.notes}`);
+      }
+      const detailLines = details.flatMap((line) => doc.splitTextToSize(line, nameMaxWidth));
+      const nameHeight =
+        nameLines.length * 11 + (detailLines.length ? detailLines.length * 10 + 4 : 0);
+      const rowHeight = Math.max(photoSize + 10, nameHeight + 12);
+
+      if (y + rowHeight + 90 > pageHeight - marginBottom) {
+        doc.addPage();
+        drawMeta(true);
+        y = drawTableHeader(136) + 8;
+      }
+
+      doc.setDrawColor(235, 235, 235);
+      doc.line(marginX, y + rowHeight, pageWidth - marginX, y + rowHeight);
+
+      if (item.imageUrl) {
+        const dataUrl = await loadImageDataUrl(item.imageUrl, imageCache);
+        if (dataUrl) {
+          doc.addImage(
+            dataUrl,
+            imageFormatForDataUrl(dataUrl),
+            photoLeft,
+            y + 4,
+            photoSize,
+            photoSize
+          );
+        } else {
+          doc.setDrawColor(215, 215, 215);
+          doc.rect(photoLeft, y + 4, photoSize, photoSize);
+        }
+      } else {
+        doc.setDrawColor(215, 215, 215);
+        doc.rect(photoLeft, y + 4, photoSize, photoSize);
+      }
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.setTextColor(15, 15, 15);
+      doc.text(nameLines, nameLeft, y + 14);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(90, 90, 90);
+      doc.text(detailLines, nameLeft, y + 14 + nameLines.length * 11 + 1);
+
+      const numbersY = y + rowHeight / 2 + 3;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(20, 20, 20);
+      doc.text(String(item.qty), qtyCenter, numbersY, { align: "center" });
+      doc.text(pdfMoney(item.price), amountRight, numbersY, { align: "right" });
+
+      y += rowHeight;
+    }
+  }
+
+  if (y + 88 > pageHeight - marginBottom) {
+    doc.addPage();
+    drawMeta(true);
+    y = 146;
+  }
+
+  doc.setDrawColor(220, 220, 220);
+  doc.line(marginX, y + 10, pageWidth - marginX, y + 10);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.setTextColor(20, 20, 20);
+  doc.text("Totals", marginX, y + 30);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.text(`Total qty: ${row.cartQty}`, marginX, y + 48);
+  doc.text(`Total lines: ${row.cartLines}`, marginX, y + 64);
+
+  doc.text(`Total amount: ${pdfMoney(row.price)}`, pageWidth - marginX, y + 30, {
+    align: "right",
+  });
+
+  doc.setFontSize(8);
+  doc.setTextColor(120, 120, 120);
+  doc.text("Generated from current cart data in Admin > Cart Insights.", marginX, pageHeight - 26);
+
+  const fileDate = now.toISOString().slice(0, 10);
+  const fileName = `invoice-${sanitizeFileName(customerName)}-${customerIdShort}-${fileDate}.pdf`;
+  doc.save(fileName);
 }
 
 export default function AdminCartInsightsPage() {
@@ -161,7 +445,10 @@ export default function AdminCartInsightsPage() {
   const [visitorError, setVisitorError] = React.useState<string | null>(null);
   const [showCustomerCarts, setShowCustomerCarts] = React.useState(false);
   const [expandedCustomerPanel, setExpandedCustomerPanel] = React.useState<string | null>(null);
+  const [downloadingInvoicePanel, setDownloadingInvoicePanel] = React.useState<string | null>(null);
+  const [sendingPosPanel, setSendingPosPanel] = React.useState<string | null>(null);
   const customerSectionRef = React.useRef<HTMLDivElement | null>(null);
+  const invoiceImageCacheRef = React.useRef<Map<string, string | null>>(new Map());
 
   async function load() {
     setLoading(true);
@@ -321,14 +608,14 @@ export default function AdminCartInsightsPage() {
         supabase
           .from("cart_items")
           .select(
-            "id,user_id,variant_id,qty,created_at, variant:product_variants(id,condition,cost,price,qty, product:products(id,title,brand,model,variation,image_urls))"
+            "id,user_id,variant_id,qty,created_at, variant:product_variants(id,condition,public_notes,cost,price,qty, product:products(id,title,brand,model,variation,image_urls))"
           )
           .order("created_at", { ascending: false })
           .limit(5000),
         supabase
           .from("guest_cart_items")
           .select(
-            "session_id,variant_id,qty,updated_at, variant:product_variants(id,condition,cost,price,qty, product:products(id,title,brand,model,variation,image_urls))"
+            "session_id,variant_id,qty,updated_at, variant:product_variants(id,condition,public_notes,cost,price,qty, product:products(id,title,brand,model,variation,image_urls))"
           )
           .order("updated_at", { ascending: false })
           .limit(5000),
@@ -374,13 +661,14 @@ export default function AdminCartInsightsPage() {
         if (id) sessionIds.add(id);
       });
 
-      const [profilesRes, guestSessionsRes] = await Promise.all([
-        userIds.size
-          ? supabase
-              .from("profiles")
-              .select("id,full_name,username")
-              .in("id", Array.from(userIds))
-          : Promise.resolve({ data: [] }),
+      const accountIds = Array.from(userIds);
+      const [customerDetailsMap, guestSessionsRes] = await Promise.all([
+        accountIds.length
+          ? loadAdminCustomerDetails(accountIds).catch((error) => {
+              console.warn("Failed to load admin customer details for cart insights.", error);
+              return new Map<string, AdminCustomerDetail>();
+            })
+          : Promise.resolve(new Map<string, AdminCustomerDetail>()),
         sessionIds.size
           ? supabase
               .from("guest_sessions")
@@ -389,17 +677,7 @@ export default function AdminCartInsightsPage() {
           : Promise.resolve({ data: [] }),
       ]);
 
-      const profiles = (profilesRes as any)?.data ?? [];
       const guestSessions = (guestSessionsRes as any)?.data ?? [];
-
-      const profileMap = new Map<string, { full_name?: string; username?: string }>();
-      profiles.forEach((row: any) => {
-        if (!row?.id) return;
-        profileMap.set(String(row.id), {
-          full_name: row.full_name ?? "",
-          username: row.username ?? "",
-        });
-      });
 
       const guestSessionMap = new Map<string, { last_seen_at?: string | null }>();
       guestSessions.forEach((row: any) => {
@@ -444,7 +722,12 @@ export default function AdminCartInsightsPage() {
         const variant = line?.variant ?? null;
         const product = variant?.product ?? null;
         const itemName = buildItemLabel(product);
+        const itemVariantId = variant?.id ? String(variant.id) : null;
         const itemImage = pickImage(product);
+        const itemConditionRaw = String(variant?.condition ?? "").trim();
+        const itemCondition = itemConditionRaw ? formatConditionLabel(itemConditionRaw) : null;
+        const itemNotesRaw = String(variant?.public_notes ?? "").trim();
+        const itemNotes = itemNotesRaw || null;
         const itemPrice = Number(variant?.price ?? 0) * qty;
         const itemCogs = Number(variant?.cost ?? 0) * qty;
         const itemProfit = itemPrice - itemCogs;
@@ -454,6 +737,10 @@ export default function AdminCartInsightsPage() {
             id: userId,
             kind: "ACCOUNT",
             label: "",
+            customerName: "",
+            customerUsername: "",
+            customerEmail: "",
+            customerPhone: "",
             clicks: 0,
             cartLines: 0,
             cartQty: 0,
@@ -470,22 +757,29 @@ export default function AdminCartInsightsPage() {
         current.price += itemPrice;
         current.cogs += itemCogs;
         current.expectedProfit += itemProfit;
+        const itemKey =
+          itemVariantId ?? `${itemName}::${itemCondition ?? ""}::${itemNotes ?? ""}`;
         const item =
-          current.itemMap.get(itemName) ??
+          current.itemMap.get(itemKey) ??
           ({
+            variantId: itemVariantId,
             name: itemName,
             qty: 0,
             price: 0,
             cogs: 0,
             profit: 0,
             imageUrl: itemImage,
+            condition: itemCondition,
+            notes: itemNotes,
           } as VisitorItem);
         item.qty += qty;
         item.price += itemPrice;
         item.cogs += itemCogs;
         item.profit += itemProfit;
         if (!item.imageUrl && itemImage) item.imageUrl = itemImage;
-        current.itemMap.set(itemName, item);
+        if (!item.condition && itemCondition) item.condition = itemCondition;
+        if (!item.notes && itemNotes) item.notes = itemNotes;
+        current.itemMap.set(itemKey, item);
         current.lastActivity = maxDate(
           current.lastActivity,
           line?.created_at ? String(line.created_at) : null
@@ -500,6 +794,10 @@ export default function AdminCartInsightsPage() {
           id: userId,
           kind: "ACCOUNT",
           label: "",
+          customerName: "",
+          customerUsername: "",
+          customerEmail: "",
+          customerPhone: "",
           clicks: 0,
           cartLines: 0,
           cartQty: 0,
@@ -510,13 +808,17 @@ export default function AdminCartInsightsPage() {
           lastActivity: null,
           itemMap: new Map<string, VisitorItem>(),
         } as VisitorRow & { itemMap: Map<string, VisitorItem> });
-        const profile = profileMap.get(userId);
+        const customerDetails = customerDetailsMap.get(userId);
         const displayName =
-          profile?.full_name?.trim() ||
-          profile?.username?.trim() ||
+          customerDetails?.name?.trim() ||
+          customerDetails?.username?.trim() ||
           `User ${shortId(userId)}`;
         const clickInfo = userClickMap.get(userId);
         base.label = displayName;
+        base.customerName = customerDetails?.name?.trim() || displayName;
+        base.customerUsername = customerDetails?.username?.trim() ?? "";
+        base.customerEmail = customerDetails?.email?.trim() ?? "";
+        base.customerPhone = customerDetails?.contact?.trim() ?? "";
         base.clicks = clickInfo?.clicks ?? 0;
         base.lastActivity = maxDate(base.lastActivity, clickInfo?.last ?? null);
         base.items = Array.from(base.itemMap.values()).sort(
@@ -536,7 +838,12 @@ export default function AdminCartInsightsPage() {
         const variant = line?.variant ?? null;
         const product = variant?.product ?? null;
         const itemName = buildItemLabel(product);
+        const itemVariantId = variant?.id ? String(variant.id) : null;
         const itemImage = pickImage(product);
+        const itemConditionRaw = String(variant?.condition ?? "").trim();
+        const itemCondition = itemConditionRaw ? formatConditionLabel(itemConditionRaw) : null;
+        const itemNotesRaw = String(variant?.public_notes ?? "").trim();
+        const itemNotes = itemNotesRaw || null;
         const itemPrice = Number(variant?.price ?? 0) * qty;
         const itemCogs = Number(variant?.cost ?? 0) * qty;
         const itemProfit = itemPrice - itemCogs;
@@ -546,6 +853,10 @@ export default function AdminCartInsightsPage() {
             id: sessionId,
             kind: "GUEST",
             label: "",
+            customerName: "",
+            customerUsername: "",
+            customerEmail: "",
+            customerPhone: "",
             clicks: 0,
             cartLines: 0,
             cartQty: 0,
@@ -562,22 +873,29 @@ export default function AdminCartInsightsPage() {
         current.price += itemPrice;
         current.cogs += itemCogs;
         current.expectedProfit += itemProfit;
+        const itemKey =
+          itemVariantId ?? `${itemName}::${itemCondition ?? ""}::${itemNotes ?? ""}`;
         const item =
-          current.itemMap.get(itemName) ??
+          current.itemMap.get(itemKey) ??
           ({
+            variantId: itemVariantId,
             name: itemName,
             qty: 0,
             price: 0,
             cogs: 0,
             profit: 0,
             imageUrl: itemImage,
+            condition: itemCondition,
+            notes: itemNotes,
           } as VisitorItem);
         item.qty += qty;
         item.price += itemPrice;
         item.cogs += itemCogs;
         item.profit += itemProfit;
         if (!item.imageUrl && itemImage) item.imageUrl = itemImage;
-        current.itemMap.set(itemName, item);
+        if (!item.condition && itemCondition) item.condition = itemCondition;
+        if (!item.notes && itemNotes) item.notes = itemNotes;
+        current.itemMap.set(itemKey, item);
         current.lastActivity = maxDate(
           current.lastActivity,
           line?.updated_at ? String(line.updated_at) : null
@@ -595,6 +913,10 @@ export default function AdminCartInsightsPage() {
           id: sessionId,
           kind: "GUEST",
           label: "",
+          customerName: "",
+          customerUsername: "",
+          customerEmail: "",
+          customerPhone: "",
           clicks: 0,
           cartLines: 0,
           cartQty: 0,
@@ -608,6 +930,10 @@ export default function AdminCartInsightsPage() {
         const clickInfo = guestClickMap.get(sessionId);
         const sessionInfo = guestSessionMap.get(sessionId);
         base.label = `Guest ${shortId(sessionId)}`;
+        base.customerName = "";
+        base.customerUsername = "";
+        base.customerEmail = "";
+        base.customerPhone = "";
         base.clicks = clickInfo?.clicks ?? 0;
         base.lastActivity = maxDate(base.lastActivity, clickInfo?.last ?? null);
         base.lastActivity = maxDate(
@@ -634,6 +960,81 @@ export default function AdminCartInsightsPage() {
       setVisitorRows([]);
     } finally {
       setVisitorLoading(false);
+    }
+  }
+
+  async function handleDownloadCustomerInvoice(row: VisitorRow) {
+    const panelKey = `${row.kind}-${row.id}`;
+    setDownloadingInvoicePanel(panelKey);
+    try {
+      await exportCustomerInvoicePdf(row, invoiceImageCacheRef.current);
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message ?? "Failed to generate invoice PDF.");
+    } finally {
+      setDownloadingInvoicePanel((current) => (current === panelKey ? null : current));
+    }
+  }
+
+  function handleSendToPos(row: VisitorRow) {
+    const panelKey = `${row.kind}-${row.id}`;
+    setSendingPosPanel(panelKey);
+    try {
+      const items = row.items
+        .map((item) => {
+          const qty = Math.max(1, Math.round(Number(item.qty ?? 0)));
+          const linePrice = Number(item.price ?? 0);
+          const unitPrice = qty > 0 ? linePrice / qty : linePrice;
+          return {
+            variant_id: item.variantId,
+            qty,
+            title: item.name,
+            image_url: item.imageUrl ?? null,
+            condition: item.condition ?? null,
+            unit_price: Number.isFinite(unitPrice) ? Math.max(0, unitPrice) : 0,
+          };
+        })
+        .filter(
+          (
+            item
+          ): item is {
+            variant_id: string;
+            qty: number;
+            title: string;
+            image_url: string | null;
+            condition: string | null;
+            unit_price: number;
+          } =>
+            Boolean(item.variant_id) && item.qty > 0
+        );
+
+      if (!items.length) {
+        alert("No valid variant items found to send to POS.");
+        return;
+      }
+
+      const handoffId = createPosHandoffId("admin-carts");
+      const payload: PosHandoffPayload = {
+        source: "admin-carts",
+        created_at: new Date().toISOString(),
+        customer: {
+          id: row.kind === "ACCOUNT" ? row.id : null,
+          name: row.customerName || row.label,
+          phone: row.customerPhone || "",
+        },
+        items,
+      };
+
+      window.sessionStorage.setItem(
+        makePosHandoffStorageKey(handoffId),
+        JSON.stringify(payload)
+      );
+      window.location.assign(`/cashier/pos?handoff=${encodeURIComponent(handoffId)}`);
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message ?? "Failed to send cart to POS.");
+    } finally {
+      setSendingPosPanel((current) => (current === panelKey ? null : current));
     }
   }
 
@@ -919,6 +1320,12 @@ export default function AdminCartInsightsPage() {
                 {customerRows.map((row) => {
                   const panelKey = `${row.kind}-${row.id}`;
                   const expanded = expandedCustomerPanel === panelKey;
+                  const accountMeta = [
+                    row.customerUsername ? `@${row.customerUsername}` : null,
+                    row.customerEmail || null,
+                    row.customerPhone || null,
+                    `ID: ${shortId(row.id)}`,
+                  ].filter(Boolean);
                   return (
                     <div
                       key={panelKey}
@@ -946,6 +1353,11 @@ export default function AdminCartInsightsPage() {
                           <div className="text-xs text-white/60">
                             {row.cartLines} line(s) | {row.cartQty} total qty
                           </div>
+                          {accountMeta.length ? (
+                            <div className="text-xs text-sky-100/80">
+                              {accountMeta.join(" | ")}
+                            </div>
+                          ) : null}
                           <div className="text-xs text-white/60">
                             Price {peso(row.price)} | COGS {peso(row.cogs)} | Expected profit{" "}
                             <span
@@ -997,11 +1409,42 @@ export default function AdminCartInsightsPage() {
 
                       {expanded ? (
                         <div className="border-t border-white/10 px-3 py-2 sm:px-4 sm:py-3">
+                          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/10 px-2 py-2">
+                            <div className="text-xs text-white/60">
+                              Send this cart to POS with customer details pre-filled (editable).
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => handleSendToPos(row)}
+                                disabled={
+                                  row.items.length === 0 || sendingPosPanel === panelKey
+                                }
+                              >
+                                <ClipboardPlus className="mr-1 h-4 w-4" />
+                                {sendingPosPanel === panelKey ? "Sending..." : "Send to POS"}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => void handleDownloadCustomerInvoice(row)}
+                                disabled={
+                                  row.items.length === 0 || downloadingInvoicePanel === panelKey
+                                }
+                              >
+                                <FileDown className="mr-1 h-4 w-4" />
+                                {downloadingInvoicePanel === panelKey
+                                  ? "Generating..."
+                                  : "Download Invoice PDF"}
+                              </Button>
+                            </div>
+                          </div>
                           {row.items.length ? (
                             <div className="space-y-2">
                               {row.items.map((item) => (
                                 <div
-                                  key={`${row.id}-${item.name}`}
+                                  key={`${row.id}-${item.variantId ?? item.name}-${item.condition ?? ""}-${item.notes ?? ""}`}
                                   className="flex items-center gap-3 rounded-lg border border-white/10 bg-black/10 px-2 py-2"
                                 >
                                   <div className="h-10 w-10 overflow-hidden rounded-md border border-white/10 bg-bg-800">

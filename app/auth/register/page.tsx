@@ -26,10 +26,12 @@ function RegisterContent() {
   const [acceptedTerms, setAcceptedTerms] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setNotice(null);
 
     if (!isSupabaseConfigured()) {
       setError("Supabase is not configured. Fill .env.local first.");
@@ -107,6 +109,14 @@ function RegisterContent() {
     }
 
     // Profiles row will be created via DB trigger (see schema.sql).
+    if (data.user && !data.session && !data.user.email_confirmed_at) {
+      setPassword("");
+      setNotice(
+        "Account created. Please verify your email before logging in. Check your inbox first, then your spam/junk folder if the email is not visible."
+      );
+      return;
+    }
+
     if (data.user) router.replace(redirectTo);
   }
 
@@ -170,6 +180,7 @@ function RegisterContent() {
             </div>
 
             {error ? <div className="text-sm text-red-400">{error}</div> : null}
+            {notice ? <div className="text-sm text-emerald-400">{notice}</div> : null}
 
             <Button className="w-full" type="submit" disabled={loading}>
               {loading ? "Creating..." : "Create account"}
