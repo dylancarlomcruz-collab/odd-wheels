@@ -195,22 +195,6 @@ export function InventoryEditorDrawer({
     return await uploadImageFileRaw(file, productIdForPath);
   }
 
-  function orderUploadedFilesTopToBottom(files: File[]) {
-    return files
-      .map((file, index) => ({ file, index }))
-      .sort((a, b) => {
-        const aTs = Number.isFinite(a.file.lastModified)
-          ? a.file.lastModified
-          : 0;
-        const bTs = Number.isFinite(b.file.lastModified)
-          ? b.file.lastModified
-          : 0;
-        if (aTs !== bTs) return aTs - bTs;
-        return a.index - b.index;
-      })
-      .map((entry) => entry.file);
-  }
-
   async function uploadImageFiles(files: File[], productIdForPath: string) {
     if (!files.length) return;
     setUploadingImages(true);
@@ -234,7 +218,7 @@ export function InventoryEditorDrawer({
 
   function handleImagePaste(e: React.ClipboardEvent) {
     const items = Array.from(e.clipboardData?.items ?? []);
-    const files = orderUploadedFilesTopToBottom(
+    const files = (
       items
       .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
       .map((item) => item.getAsFile())
@@ -1085,9 +1069,7 @@ export function InventoryEditorDrawer({
                 accept="image/*"
                 multiple
                 onChange={(e) => {
-                  const list = orderUploadedFilesTopToBottom(
-                    Array.from(e.target.files ?? [])
-                  );
+                  const list = Array.from(e.target.files ?? []);
                   if (!list.length) return;
                   void uploadImageFiles(list, productId);
                   e.currentTarget.value = "";
@@ -1100,9 +1082,7 @@ export function InventoryEditorDrawer({
                 capture="environment"
                 multiple
                 onChange={(e) => {
-                  const list = orderUploadedFilesTopToBottom(
-                    Array.from(e.target.files ?? [])
-                  );
+                  const list = Array.from(e.target.files ?? []);
                   if (!list.length) return;
                   void uploadImageFiles(list, productId);
                   e.currentTarget.value = "";
