@@ -897,12 +897,25 @@ export function InventoryEditorDrawer({
     }
   }
 
-  async function handleQuickThumbUpload(file: File) {
-    if (!file) return;
+  async function handleQuickThumbUpload(files: File[]) {
+    if (!files.length) return;
     setQuickThumbUploading(true);
     try {
-      const url = await uploadImageFileRaw(file, productId);
-      const nextImages = [url, ...images.filter((u) => u !== url)];
+      const uploaded: string[] = [];
+      for (const file of files) {
+        try {
+          const url = await uploadImageFileRaw(file, productId);
+          uploaded.push(url);
+        } catch (e) {
+          console.error("Thumbnail upload failed", e);
+        }
+      }
+      if (!uploaded.length) {
+        throw new Error("No images were uploaded.");
+      }
+      const nextImages = Array.from(
+        new Set([...uploaded, ...images.filter((u) => !uploaded.includes(u))])
+      );
       setImages(nextImages);
       await save({ imagesOverride: nextImages, closeAfter: true });
     } catch (e: any) {
@@ -1022,11 +1035,12 @@ export function InventoryEditorDrawer({
               ref={quickThumbInputRef}
               type="file"
               accept="image/*"
+              multiple
               className="hidden"
               onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (!f) return;
-                void handleQuickThumbUpload(f);
+                const list = Array.from(e.target.files ?? []);
+                if (!list.length) return;
+                void handleQuickThumbUpload(list);
                 e.currentTarget.value = "";
               }}
             />
