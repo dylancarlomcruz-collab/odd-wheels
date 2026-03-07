@@ -2952,31 +2952,32 @@ export default function AdminInventoryPage() {
     }
   }
 
-  async function uploadImageFile(
-    file: File,
-    productIdForPath: string,
-    options?: { skipLoading?: boolean }
-  ) {
-    if (!options?.skipLoading) setManualUploadLoading(true);
-    try {
-      const url = await uploadFileToStorage(file, productIdForPath);
-      setImages((prev) => uniq([...prev, url]));
-      setSelectedImages((prev) => ({ ...prev, [url]: true }));
-    } finally {
-      if (!options?.skipLoading) setManualUploadLoading(false);
-    }
+  async function uploadImageFile(file: File, productIdForPath: string) {
+    return await uploadFileToStorage(file, productIdForPath);
   }
 
   async function uploadImageFiles(files: File[], productIdForPath: string) {
     if (!files.length) return;
     setManualUploadLoading(true);
     try {
+      const uploaded: string[] = [];
       for (const file of files) {
         try {
-          await uploadImageFile(file, productIdForPath, { skipLoading: true });
+          const url = await uploadImageFile(file, productIdForPath);
+          uploaded.push(url);
         } catch (e) {
           console.error("Image upload failed", e);
         }
+      }
+      if (uploaded.length) {
+        setImages((prev) => uniq([...uploaded, ...prev]));
+        setSelectedImages((prev) => {
+          const next = { ...prev };
+          uploaded.forEach((url) => {
+            next[url] = true;
+          });
+          return next;
+        });
       }
     } finally {
       setManualUploadLoading(false);
