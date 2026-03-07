@@ -162,6 +162,7 @@ export function buildSearchOr(terms: string[]) {
       clauses.push(`brand.ilike.${ilike}`);
       clauses.push(`model.ilike.${ilike}`);
       clauses.push(`variation.ilike.${ilike}`);
+      clauses.push(`product_variants.barcode.ilike.${ilike}`);
       clauses.push(`product_variants.public_notes.ilike.${ilike}`);
       clauses.push(`product_variants.issue_notes.ilike.${ilike}`);
     }
@@ -178,7 +179,11 @@ export function buildSearchTermTokens(query: string) {
 
 export function buildProductSearchText(product: ShopProduct) {
   const optionNotes = (product.options ?? [])
-    .flatMap((option) => [option.public_notes, option.issue_notes])
+    .flatMap((option) => [
+      option.public_notes,
+      option.issue_notes,
+      option.barcode,
+    ])
     .filter(Boolean);
   const raw = [
     product.title,

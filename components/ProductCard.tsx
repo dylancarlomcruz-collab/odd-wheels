@@ -17,6 +17,7 @@ type ConditionOption = {
   id: string; // this is the PRODUCT ROW ID for that condition
   condition_raw?: string | null;
   condition: string;
+  barcode?: string | null;
   price: number;
   sale_price?: number | null;
   discount_percent?: number | null;

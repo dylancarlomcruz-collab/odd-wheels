@@ -17,20 +17,20 @@ type LookupResult = {
 const MAX_IMAGES = 9;
 
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const rawUrl = String(searchParams.get("url") ?? "").trim();
-
-  if (!rawUrl) {
-    return NextResponse.json({ ok: false, error: "Missing URL." }, { status: 400 });
-  }
-  if (!/^https?:\/\//i.test(rawUrl)) {
-    return NextResponse.json(
-      { ok: false, error: "URL must start with http:// or https://." },
-      { status: 400 }
-    );
-  }
-
   try {
+    const { searchParams } = new URL(req.url);
+    const rawUrl = String(searchParams.get("url") ?? "").trim();
+
+    if (!rawUrl) {
+      return NextResponse.json({ ok: false, error: "Missing URL." }, { status: 400 });
+    }
+    if (!/^https?:\/\//i.test(rawUrl)) {
+      return NextResponse.json(
+        { ok: false, error: "URL must start with http:// or https://." },
+        { status: 400 }
+      );
+    }
+
     const res = await fetch(rawUrl, {
       headers: {
         "user-agent":
@@ -40,6 +40,16 @@ export async function GET(req: Request) {
     });
 
     if (!res.ok) {
+      if (res.status === 403) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "Source blocked this lookup request (403). Try opening the page in a browser first or use barcode lookup/manual input.",
+          },
+          { status: 200 }
+        );
+      }
       return NextResponse.json(
         { ok: false, error: `Failed to fetch (${res.status}).` },
         { status: 200 }

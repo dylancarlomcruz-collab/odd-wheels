@@ -485,7 +485,7 @@ export default function ShopPageClient() {
       const { data, error } = await supabase
         .from("product_variants")
         .select(
-          "id,condition,issue_notes,issue_photo_urls,public_notes,ship_class,price,sale_price,discount_percent,qty, product:products(id,title,brand,model,variation,image_urls,is_active,created_at)"
+          "id,condition,barcode,issue_notes,issue_photo_urls,public_notes,ship_class,price,sale_price,discount_percent,qty, product:products(id,title,brand,model,variation,image_urls,is_active,created_at)"
         )
         .gt("qty", 0)
         .order("created_at", { ascending: false });

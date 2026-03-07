@@ -252,7 +252,7 @@ export default function SearchContent() {
           const { data } = await supabase
             .from("products")
             .select(
-              "id, title, brand, model, variation, image_urls, is_active, created_at, product_variants(id, condition, issue_notes, issue_photo_urls, public_notes, price, sale_price, discount_percent, qty)"
+              "id, title, brand, model, variation, image_urls, is_active, created_at, product_variants(id, condition, barcode, issue_notes, issue_photo_urls, public_notes, price, sale_price, discount_percent, qty)"
             )
             .eq("is_active", true)
             .or(orClause)
@@ -273,7 +273,7 @@ export default function SearchContent() {
           const { data: sellerProducts } = await supabase
             .from("products")
             .select(
-              "id, title, brand, model, variation, image_urls, is_active, created_at, product_variants(id, condition, issue_notes, issue_photo_urls, public_notes, price, sale_price, discount_percent, qty)"
+              "id, title, brand, model, variation, image_urls, is_active, created_at, product_variants(id, condition, barcode, issue_notes, issue_photo_urls, public_notes, price, sale_price, discount_percent, qty)"
             )
             .in("id", sellerIds);
           sellers = mapProductsToShopProducts((sellerProducts as any[]) ?? []);
@@ -289,7 +289,7 @@ export default function SearchContent() {
           const { data: recentProducts } = await supabase
             .from("products")
             .select(
-              "id, title, brand, model, variation, image_urls, is_active, created_at, product_variants(id, condition, issue_notes, issue_photo_urls, public_notes, price, sale_price, discount_percent, qty)"
+              "id, title, brand, model, variation, image_urls, is_active, created_at, product_variants(id, condition, barcode, issue_notes, issue_photo_urls, public_notes, price, sale_price, discount_percent, qty)"
             )
             .in("id", recentIds);
           recents = mapProductsToShopProducts((recentProducts as any[]) ?? []);

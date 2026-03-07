@@ -16,6 +16,7 @@ import { formatConditionLabel } from "@/lib/conditions";
 
 type SheetRow = {
   id: string;
+  created_at: string | null;
   condition: string | null;
   ship_class: string | null;
   qty: number | null;
@@ -27,6 +28,7 @@ type SheetRow = {
     model: string | null;
     variation: string | null;
     image_urls: string[] | null;
+    created_at: string | null;
   } | null;
 };
 
@@ -50,6 +52,8 @@ const EXPORT_THUMB_WIDTH = 960;
 const EXPORT_THUMB_HEIGHT = 720;
 const EXPORT_THUMB_QUALITY = 100;
 const ALL_CATEGORY = "ALL";
+const NEW_ARRIVAL_CATEGORY = "New Arrival";
+const NEW_ARRIVAL_WINDOW_DAYS = 5;
 let cachedNoisePattern: CanvasPattern | null = null;
 let cachedNoiseContext: CanvasRenderingContext2D | null = null;
 
@@ -118,6 +122,7 @@ const POP_RACE_BRANDS = new Set(
   )
 );
 const DOWNLOAD_CATEGORY_ORDER = [
+  NEW_ARRIVAL_CATEGORY,
   "Truescales JDM",
   "Truescales EUR/US",
   "Mini GT JDM",
@@ -229,7 +234,22 @@ function isJdmMarket(row: SheetRow) {
   return hasJdmModelHint(combined);
 }
 
+function getRowAddedTimestamp(row: SheetRow) {
+  const raw = row.created_at ?? row.product?.created_at;
+  const ts = raw ? new Date(raw).getTime() : NaN;
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function isNewArrivalRow(row: SheetRow) {
+  const addedTs = getRowAddedTimestamp(row);
+  if (!addedTs) return false;
+  const cutoffMs = NEW_ARRIVAL_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  return Date.now() - addedTs <= cutoffMs;
+}
+
 function formatDownloadCategory(row: SheetRow) {
+  if (isNewArrivalRow(row)) return NEW_ARRIVAL_CATEGORY;
+
   const shipClass = String(row.ship_class ?? "").toUpperCase().trim();
   const brandKey = normalizeCategoryBrand(formatBrand(row));
 
@@ -942,6 +962,7 @@ function inferVehicleMakeModelFromFields(fields: {
 }) {
   const row: SheetRow = {
     id: fields.id ?? "",
+    created_at: null,
     condition: null,
     ship_class: null,
     qty: null,
@@ -953,6 +974,7 @@ function inferVehicleMakeModelFromFields(fields: {
       model: fields.model ?? null,
       variation: fields.variation ?? null,
       image_urls: null,
+      created_at: null,
     },
   };
   return inferVehicleMakeModel(row);
@@ -1962,7 +1984,7 @@ export default function InventorySheetPage() {
         const { data, error: qErr } = await supabase
           .from("product_variants")
           .select(
-            "id,condition,ship_class,qty,price, product:products(id,title,brand,model,variation,image_urls)"
+            "id,created_at,condition,ship_class,qty,price, product:products(id,title,brand,model,variation,image_urls,created_at)"
           )
           .order("created_at", { ascending: false })
           .range(from, to);
@@ -2018,7 +2040,7 @@ export default function InventorySheetPage() {
       const { data, error: qErr } = await supabase
         .from("product_variants")
         .select(
-          "id,condition,ship_class,qty,price, product:products(id,title,brand,model,variation,image_urls)"
+          "id,created_at,condition,ship_class,qty,price, product:products(id,title,brand,model,variation,image_urls,created_at)"
         )
         .gt("qty", 0)
         .order("created_at", { ascending: false })

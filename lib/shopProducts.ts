@@ -5,6 +5,7 @@ import type { ShopProduct } from "@/components/ProductCard";
 export type VariantRow = {
   id: string;
   condition: string | null;
+  barcode?: string | null;
   issue_notes: string | null;
   issue_photo_urls: string[] | null;
   public_notes: string | null;
@@ -37,6 +38,7 @@ export type ProductRow = {
   product_variants: Array<{
     id: string;
     condition: string | null;
+    barcode?: string | null;
     issue_notes: string | null;
     issue_photo_urls: string[] | null;
     public_notes: string | null;
@@ -90,6 +92,7 @@ export function collapseVariants(rows: VariantRow[]): ShopProduct[] {
     const option = {
       id: v.id,
       condition,
+      barcode: v.barcode ?? null,
       price,
       sale_price,
       discount_percent,
@@ -185,6 +188,7 @@ export function mapProductsToShopProducts(rows: ProductRow[]): ShopProduct[] {
         return {
           id: v.id,
           condition: conditionRaw,
+          barcode: v.barcode ?? null,
           price,
           sale_price,
           discount_percent,

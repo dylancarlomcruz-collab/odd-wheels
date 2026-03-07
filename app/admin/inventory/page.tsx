@@ -112,6 +112,15 @@ type LookupData = {
 type ProductUrlLookupData = LookupData & {
   source_url?: string;
 };
+type ExistingBarcodeMatch = {
+  id: string;
+  product_id: string;
+  qty: number;
+  condition: VariantCondition;
+  ship_class: ShipClass | null;
+  barcode: string | null;
+  product: Product | null;
+};
 
 type InventoryValuation = {
   units: number;
@@ -397,6 +406,22 @@ function titleCase(value: string) {
     .replace(/\b([a-z])/g, (match) => match.toUpperCase());
 }
 
+function properLookupCase(value: string | null | undefined) {
+  const raw = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!raw) return "";
+  const lowerCount = (raw.match(/[a-z]/g) ?? []).length;
+  const upperCount = (raw.match(/[A-Z]/g) ?? []).length;
+  const mostlyUpper = upperCount > 0 && lowerCount <= upperCount * 0.2;
+  let next = mostlyUpper ? titleCase(raw) : raw;
+  next = next
+    .replace(/\bGt\b/g, "GT")
+    .replace(/\bGtr\b/g, "GTR")
+    .replace(/\bLbwk\b/g, "LBWK")
+    .replace(/\bRhd\b/g, "RHD")
+    .replace(/\bLhd\b/g, "LHD");
+  return next;
+}
+
 function normalizeBulkCondition(
   raw: string | undefined,
   fallback: VariantCondition
@@ -671,6 +696,10 @@ export default function AdminInventoryPage() {
   // Search
   const [search, setSearch] = React.useState("");
   const [results, setResults] = React.useState<Product[]>([]);
+  const [compactAddMode, setCompactAddMode] = React.useState(true);
+  const [showAllSearchResults, setShowAllSearchResults] = React.useState(false);
+  const [showExistingVariants, setShowExistingVariants] = React.useState(false);
+  const [showAdvancedTools, setShowAdvancedTools] = React.useState(false);
   const [selectedProduct, setSelectedProduct] = React.useState<Product | null>(
     null
   );
@@ -682,6 +711,28 @@ export default function AdminInventoryPage() {
   const [lookupLoading, setLookupLoading] = React.useState(false);
   const [lookupMsg, setLookupMsg] = React.useState<string | null>(null);
   const [barcodeScannerOpen, setBarcodeScannerOpen] = React.useState(false);
+  const [quickAddEnabled, setQuickAddEnabled] = React.useState(false);
+  const [quickAddConfigOpen, setQuickAddConfigOpen] = React.useState(false);
+  const [quickAddQty, setQuickAddQty] = React.useState("1");
+  const [quickAddCondition, setQuickAddCondition] = React.useState<
+    VariantCondition | "any"
+  >("any");
+  const [quickAddBusy, setQuickAddBusy] = React.useState(false);
+  const quickAddInFlightRef = React.useRef<Set<string>>(new Set());
+  const quickAddRecentRef = React.useRef<Map<string, number>>(new Map());
+  const [existingBarcodePrompt, setExistingBarcodePrompt] = React.useState<{
+    barcode: string;
+    matches: ExistingBarcodeMatch[];
+  } | null>(null);
+  const [existingBarcodeVariantId, setExistingBarcodeVariantId] =
+    React.useState("");
+  const [existingBarcodeAddQty, setExistingBarcodeAddQty] = React.useState("1");
+  const [existingBarcodeActionLoading, setExistingBarcodeActionLoading] =
+    React.useState(false);
+  const [newCardTitle, setNewCardTitle] = React.useState("");
+  const [newCardBrand, setNewCardBrand] = React.useState("");
+  const [newCardModel, setNewCardModel] = React.useState("");
+  const [newCardVariation, setNewCardVariation] = React.useState("");
   const barcodeLookupTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastAutoLookupRef = React.useRef("");
   const barcodeInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -700,11 +751,6 @@ export default function AdminInventoryPage() {
   const [productUrl, setProductUrl] = React.useState("");
   const [productUrlLoading, setProductUrlLoading] = React.useState(false);
   const [productUrlMsg, setProductUrlMsg] = React.useState<string | null>(null);
-  const [productUrlResult, setProductUrlResult] =
-    React.useState<ProductUrlLookupData | null>(null);
-  const [productUrlSelectedImages, setProductUrlSelectedImages] = React.useState<
-    Record<string, boolean>
-  >({});
 
   // Auto-match uploads
   const [autoMatchFiles, setAutoMatchFiles] = React.useState<File[]>([]);
@@ -951,8 +997,11 @@ export default function AdminInventoryPage() {
   React.useEffect(() => {
     if (isBlisterCondition(condition)) return;
     if (isLalamoveOnlyShipClass(shipClass)) return;
-    setShipClass(shipClassFromBrand(brand));
-  }, [brand, condition, shipClass]);
+    const nextShipClass = shipClassFromBrand(brand);
+    if (shipClass !== nextShipClass) {
+      setShipClass(nextShipClass);
+    }
+  }, [brand]);
 
   React.useEffect(() => {
     if (conditionTouchedRef.current) return;
@@ -978,6 +1027,30 @@ export default function AdminInventoryPage() {
     window.scrollTo({ top: 0, behavior: "auto" });
     focusBarcodeInput({ preventScroll: false });
   });
+
+  React.useEffect(() => {
+    if (!compactAddMode) return;
+    setShowAllSearchResults(false);
+  }, [search, results.length, compactAddMode]);
+
+  function handleVariantConditionChange(next: VariantCondition) {
+    conditionTouchedRef.current = true;
+    const leavingNearMint =
+      condition === "near_mint" &&
+      publicNotes.trim() === "Near Mint Condition" &&
+      next !== "near_mint";
+    setCondition(next);
+    if (next === "near_mint" && !publicNotes.trim()) {
+      setPublicNotes("Near Mint Condition");
+    } else if (leavingNearMint) {
+      setPublicNotes("");
+    }
+    if (isBlisterCondition(next)) {
+      setShipClass("BLISTER");
+    } else if (shipClass === "BLISTER") {
+      setShipClass(shipClassFromBrand(brand));
+    }
+  }
 
   async function loadValuations() {
     setValuationLoading(true);
@@ -1210,6 +1283,253 @@ export default function AdminInventoryPage() {
     });
   }
 
+  function syncVariantQtyIfSelected(
+    productId: string,
+    variantId: string,
+    qtyValue: number
+  ) {
+    if (selectedProduct?.id !== productId) return;
+    setVariants((prev) =>
+      prev.map((variant) =>
+        variant.id === variantId ? { ...variant, qty: qtyValue } : variant
+      )
+    );
+  }
+
+  function upsertVariantIfSelected(productId: string, nextVariant: Variant) {
+    if (selectedProduct?.id !== productId) return;
+    setVariants((prev) => [
+      nextVariant,
+      ...prev.filter((variant) => variant.id !== nextVariant.id),
+    ]);
+  }
+
+  async function addToExistingVariantFromBarcodePrompt() {
+    if (!existingBarcodePrompt) return;
+    const target =
+      existingBarcodePrompt.matches.find((v) => v.id === existingBarcodeVariantId) ??
+      existingBarcodePrompt.matches[0];
+    if (!target) return;
+
+    const delta = Math.trunc(n(existingBarcodeAddQty, NaN));
+    if (!Number.isFinite(delta) || delta <= 0) {
+      toast({ intent: "error", message: "Enter a valid quantity to add." });
+      return;
+    }
+
+    setExistingBarcodeActionLoading(true);
+    try {
+      const nextQty = Math.max(0, Math.trunc(n(target.qty, 0)) + delta);
+      const { error } = await supabase
+        .from("product_variants")
+        .update({ qty: nextQty })
+        .eq("id", target.id);
+      if (error) throw error;
+
+      syncVariantQtyIfSelected(target.product_id, target.id, nextQty);
+      setVariantBarcode(existingBarcodePrompt.barcode);
+      setLookupMsg(
+        `Added ${delta} unit${delta === 1 ? "" : "s"} to existing variant.`
+      );
+      toast({
+        intent: "success",
+        message: `Existing variant updated (+${delta}).`,
+      });
+      clearBarcodeInputAfterAdd();
+      setExistingBarcodePrompt(null);
+      setExistingBarcodeVariantId("");
+      setExistingBarcodeAddQty("1");
+      focusBarcodeInput();
+    } catch (e: any) {
+      toast({ intent: "error", message: e?.message ?? "Update failed." });
+    } finally {
+      setExistingBarcodeActionLoading(false);
+    }
+  }
+
+  async function buildDuplicatePromptVariantPayload(fallbackBarcode: string) {
+    if (!cost || !price || !qty) {
+      throw new Error("Cost, price, and quantity are required for a new variant.");
+    }
+
+    const costN = n(cost, NaN);
+    const priceN = n(price, NaN);
+    const qtyN = Math.trunc(n(qty, NaN));
+    if (!Number.isFinite(costN) || !Number.isFinite(priceN)) {
+      throw new Error("Enter valid cost and selling price.");
+    }
+    if (!Number.isFinite(qtyN) || qtyN < 0) {
+      throw new Error("Enter a valid quantity.");
+    }
+    if (condition === "with_issues" && !publicNotes.trim()) {
+      throw new Error("Notes are required for with issues.");
+    }
+
+    let generatedBarcode: string | null = null;
+    let barcodeValue =
+      normalizeBarcode(variantBarcode) || normalizeBarcode(fallbackBarcode) || "";
+    if (!barcodeValue) {
+      barcodeValue = await generateUniqueBarcode();
+      generatedBarcode = barcodeValue;
+    }
+
+    const notesValue = publicNotes.trim();
+    const resolvedNotes =
+      condition === "near_mint"
+        ? notesValue || "Near Mint Condition"
+        : notesValue || null;
+
+    return {
+      payload: {
+        condition,
+        public_notes: resolvedNotes,
+        issue_notes: null,
+        issue_photo_urls:
+          condition === "with_issues" && issuePhotos.length ? issuePhotos : null,
+        cost: costN,
+        price: priceN,
+        qty: qtyN,
+        ship_class: shipClass,
+        barcode: barcodeValue,
+      },
+      barcodeValue,
+      generatedBarcode,
+    };
+  }
+
+  async function createNewVariantFromBarcodePrompt() {
+    if (!existingBarcodePrompt) return;
+    const target =
+      existingBarcodePrompt.matches.find((v) => v.id === existingBarcodeVariantId) ??
+      existingBarcodePrompt.matches[0];
+    if (!target) return;
+
+    setExistingBarcodeActionLoading(true);
+    try {
+      const { payload, barcodeValue, generatedBarcode } =
+        await buildDuplicatePromptVariantPayload(existingBarcodePrompt.barcode);
+
+      const { data: createdVariant, error } = await supabase
+        .from("product_variants")
+        .insert({
+          product_id: target.product_id,
+          ...payload,
+        })
+        .select(
+          "id,product_id,condition,issue_notes,issue_photo_urls,public_notes,cost,price,qty,ship_class,barcode,created_at"
+        )
+        .single();
+      if (error) throw error;
+
+      if (generatedBarcode) {
+        await recordGeneratedBarcode(
+          target.product_id,
+          generatedBarcode,
+          condition,
+          target.product?.title ?? undefined
+        );
+      }
+
+      if (createdVariant) {
+        upsertVariantIfSelected(target.product_id, createdVariant as Variant);
+      }
+      setVariantBarcode(barcodeValue);
+      setLookupMsg("New variant created for this existing product.");
+      toast({ intent: "success", message: "New variant created." });
+      clearBarcodeInputAfterAdd();
+      setExistingBarcodePrompt(null);
+      setExistingBarcodeVariantId("");
+      setExistingBarcodeAddQty("1");
+      focusBarcodeInput();
+    } catch (e: any) {
+      toast({ intent: "error", message: e?.message ?? "Failed to create variant." });
+    } finally {
+      setExistingBarcodeActionLoading(false);
+    }
+  }
+
+  async function createNewProductCardFromBarcodePrompt() {
+    if (!existingBarcodePrompt) return;
+    const normalizedTitle = normalizeTitleBrandAliases(newCardTitle).trim();
+    if (!normalizedTitle) {
+      toast({ intent: "error", message: "Product title is required." });
+      return;
+    }
+
+    setExistingBarcodeActionLoading(true);
+    try {
+      const { payload, barcodeValue, generatedBarcode } =
+        await buildDuplicatePromptVariantPayload(existingBarcodePrompt.barcode);
+
+      const normalizedBrand = normalizeBrandAlias(newCardBrand) ?? newCardBrand.trim();
+      const normalizedModel = newCardModel.trim();
+      const normalizedVariation = newCardVariation.trim();
+      const seedImages =
+        selectedExistingBarcodeMatch?.product?.image_urls &&
+        selectedExistingBarcodeMatch.product.image_urls.length
+          ? selectedExistingBarcodeMatch.product.image_urls
+          : [];
+
+      const { data: createdProduct, error: productError } = await supabase
+        .from("products")
+        .insert({
+          title: normalizedTitle,
+          brand: normalizedBrand || null,
+          model: normalizedModel || null,
+          variation: normalizedVariation || null,
+          image_urls: seedImages,
+          is_active: true,
+        })
+        .select("id,title,brand,model,variation,image_urls,is_active,created_at")
+        .single();
+      if (productError || !createdProduct) {
+        throw productError ?? new Error("Failed to create product card.");
+      }
+
+      const { error: variantError } = await supabase
+        .from("product_variants")
+        .insert({
+          product_id: String(createdProduct.id),
+          ...payload,
+        });
+      if (variantError) throw variantError;
+
+      if (generatedBarcode) {
+        await recordGeneratedBarcode(
+          String(createdProduct.id),
+          generatedBarcode,
+          condition,
+          normalizedTitle,
+          [normalizedBrand, normalizedModel, normalizedVariation]
+            .filter(Boolean)
+            .join(" ")
+        );
+      }
+
+      await loadProduct(createdProduct as Product);
+      setVariantBarcode(barcodeValue);
+      setSearch(normalizedTitle);
+      setLookupMsg("Created a new product card and variant.");
+      toast({ intent: "success", message: "New product card created." });
+      clearBarcodeInputAfterAdd();
+      setExistingBarcodePrompt(null);
+      setExistingBarcodeVariantId("");
+      setExistingBarcodeAddQty("1");
+      setNewCardTitle("");
+      setNewCardBrand("");
+      setNewCardModel("");
+      setNewCardVariation("");
+      focusBarcodeInput();
+    } catch (e: any) {
+      toast({
+        intent: "error",
+        message: e?.message ?? "Failed to create product card.",
+      });
+    } finally {
+      setExistingBarcodeActionLoading(false);
+    }
+  }
+
   function clearProduct() {
     conditionTouchedRef.current = false;
     titleEditedRef.current = false;
@@ -1225,8 +1545,6 @@ export default function AdminInventoryPage() {
     setVariants([]);
     setProductUrl("");
     setProductUrlMsg(null);
-    setProductUrlResult(null);
-    setProductUrlSelectedImages({});
     resetBarcodeLookup();
     setManualImageUrl("");
     setQueuedVariants([]);
@@ -1285,11 +1603,50 @@ export default function AdminInventoryPage() {
   function resetBarcodeLookup() {
     setBarcodeLookup("");
     setLookupMsg(null);
+    setExistingBarcodePrompt(null);
+    setExistingBarcodeVariantId("");
+    setExistingBarcodeAddQty("1");
+    setNewCardTitle("");
+    setNewCardBrand("");
+    setNewCardModel("");
+    setNewCardVariation("");
     lastAutoLookupRef.current = "";
     if (barcodeLookupTimerRef.current) {
       clearTimeout(barcodeLookupTimerRef.current);
       barcodeLookupTimerRef.current = null;
     }
+  }
+
+  function openExistingBarcodePrompt(
+    barcode: string,
+    matches: ExistingBarcodeMatch[]
+  ) {
+    if (!matches.length) return;
+    const baseMatch = matches[0];
+    const baseProduct = baseMatch.product;
+    setExistingBarcodePrompt({ barcode, matches });
+    setExistingBarcodeVariantId(baseMatch.id);
+    setExistingBarcodeAddQty("1");
+    setVariantBarcode(barcode);
+    setShipClass(
+      (baseMatch.ship_class as ShipClass | null) ??
+        shipClassFromBrand(baseProduct?.brand ?? brand)
+    );
+    setNewCardTitle(title.trim() || baseProduct?.title || "");
+    setNewCardBrand(brand.trim() || baseProduct?.brand || "");
+    setNewCardModel(model.trim() || baseProduct?.model || "");
+    setNewCardVariation(variation.trim() || baseProduct?.variation || "");
+  }
+
+  function closeExistingBarcodePrompt() {
+    if (existingBarcodeActionLoading) return;
+    setExistingBarcodePrompt(null);
+    setExistingBarcodeVariantId("");
+    setExistingBarcodeAddQty("1");
+    setNewCardTitle("");
+    setNewCardBrand("");
+    setNewCardModel("");
+    setNewCardVariation("");
   }
 
   const conditionCycle: VariantCondition[] = [
@@ -1337,14 +1694,137 @@ export default function AdminInventoryPage() {
     saveNewVariant({ keepProduct: true, drafts, reloadAfterSave: true });
   }
 
+  async function tryQuickAddFromBarcodeMatches(
+    code: string,
+    matches: ExistingBarcodeMatch[]
+  ) {
+    if (!quickAddEnabled || !matches.length) return false;
+    const delta = Math.trunc(n(quickAddQty, NaN));
+    if (!Number.isFinite(delta) || delta <= 0) {
+      toast({ intent: "error", message: "Quick Add quantity must be at least 1." });
+      setQuickAddConfigOpen(true);
+      return false;
+    }
+
+    const preferred =
+      quickAddCondition === "any"
+        ? matches[0]
+        : matches.find((m) => m.condition === quickAddCondition) ?? null;
+    if (!preferred) {
+      if (quickAddCondition !== "any") {
+        openExistingBarcodePrompt(code, matches);
+        handleVariantConditionChange(quickAddCondition);
+        setShipClass(
+          (matches[0]?.ship_class as ShipClass | null) ??
+            shipClassFromBrand(matches[0]?.product?.brand ?? brand)
+        );
+        setLookupMsg(
+          `Quick Add did not find ${formatConditionLabel(
+            quickAddCondition
+          )}. Create a new variant in the popup.`
+        );
+        toast({
+          intent: "error",
+          message: `${formatConditionLabel(
+            quickAddCondition
+          )} variation not found. Create new variant.`,
+        });
+        return true;
+      }
+      return false;
+    }
+
+    const now = Date.now();
+    if (quickAddRecentRef.current.size > 300) {
+      const cutoff = now - 60_000;
+      quickAddRecentRef.current.forEach((value, key) => {
+        if (value < cutoff) quickAddRecentRef.current.delete(key);
+      });
+    }
+    const actionKey = `${preferred.id}:${delta}:${code}`;
+    const recentAt = quickAddRecentRef.current.get(actionKey) ?? 0;
+    if (quickAddInFlightRef.current.has(actionKey)) {
+      return true;
+    }
+    if (now - recentAt < 1200) {
+      return true;
+    }
+
+    quickAddInFlightRef.current.add(actionKey);
+    setQuickAddBusy(true);
+    try {
+      const nextQty = Math.max(0, Math.trunc(n(preferred.qty, 0)) + delta);
+      const { error } = await supabase
+        .from("product_variants")
+        .update({ qty: nextQty })
+        .eq("id", preferred.id);
+      if (error) throw error;
+
+      syncVariantQtyIfSelected(preferred.product_id, preferred.id, nextQty);
+      setVariantBarcode(code);
+      const conditionLabel = formatConditionLabel(preferred.condition, {
+        upper: true,
+      });
+      setLookupMsg(
+        `Quick add applied: +${delta} to ${conditionLabel}.`
+      );
+      toast({
+        intent: "success",
+        message: `Quick add +${delta} (${conditionLabel}).`,
+      });
+      quickAddRecentRef.current.set(actionKey, Date.now());
+      clearBarcodeInputAfterAdd();
+      focusBarcodeInput();
+      return true;
+    } catch (e: any) {
+      toast({ intent: "error", message: e?.message ?? "Quick add failed." });
+      return false;
+    } finally {
+      quickAddInFlightRef.current.delete(actionKey);
+      setQuickAddBusy(false);
+    }
+  }
+
   async function lookupBarcode(override?: string) {
-    const code = (override ?? barcodeLookup).trim();
+    const code = normalizeBarcode(override ?? barcodeLookup);
     if (!code) return;
 
+    setBarcodeLookup(code);
     setLookupLoading(true);
     setLookupMsg(null);
 
     try {
+      const { data: existingRows, error: existingError } = await supabase
+        .from("product_variants")
+        .select(
+          "id,product_id,qty,condition,ship_class,barcode,product:products(id,title,brand,model,variation,image_urls,is_active,created_at)"
+        )
+        .eq("barcode", code)
+        .limit(20);
+      if (existingError) throw existingError;
+
+      const existingMatches = ((existingRows as any[]) ?? [])
+        .map((row) => ({
+          id: String(row?.id ?? "").trim(),
+          product_id: String(row?.product_id ?? "").trim(),
+          qty: Math.max(0, Math.trunc(n(row?.qty, 0))),
+          condition: (row?.condition ?? "unsealed") as VariantCondition,
+          ship_class: (row?.ship_class ?? null) as ShipClass | null,
+          barcode: row?.barcode ? String(row.barcode) : null,
+          product: row?.product ? (row.product as Product) : null,
+        }))
+        .filter((row) => row.id && row.product_id) as ExistingBarcodeMatch[];
+
+      if (existingMatches.length) {
+        if (quickAddEnabled) {
+          const quickAdded = await tryQuickAddFromBarcodeMatches(code, existingMatches);
+          if (quickAdded) return;
+        }
+        openExistingBarcodePrompt(code, existingMatches);
+        setLookupMsg("Barcode already exists in inventory. Choose an action.");
+        return;
+      }
+
       const r = await fetch(
         `/api/barcode/lookup?barcode=${encodeURIComponent(code)}`
       );
@@ -1359,7 +1839,9 @@ export default function AdminInventoryPage() {
 
       // Fill product identity, but do not overwrite manual edits
       const rawTitle = String(d.title ?? title ?? "");
-      const normalizedTitle = normalizeLookupTitle(rawTitle, d.brand ?? null);
+      const normalizedTitle = properLookupCase(
+        normalizeLookupTitle(rawTitle, d.brand ?? null)
+      );
       const kaidoNormalized = normalizeKaidoMiniGtTitle(
         normalizedTitle || normalizeTitleBrandAliases(rawTitle),
         d.color_style ?? null
@@ -1368,7 +1850,7 @@ export default function AdminInventoryPage() {
       if (kaidoNormalized) {
         if (kaidoNormalized.title) {
           setTitle((prev) =>
-            resolveNormalizedTitle(prev, kaidoNormalized.title)
+            resolveNormalizedTitle(prev, properLookupCase(kaidoNormalized.title))
           );
         }
         if (kaidoNormalized.brand) {
@@ -1376,8 +1858,12 @@ export default function AdminInventoryPage() {
             resolveNormalizedBrand(prev, kaidoNormalized.brand)
           );
         }
-        const cleanedModel = normalizeLookupField(kaidoNormalized.model);
-        const cleanedVariation = normalizeLookupField(kaidoNormalized.variation);
+        const cleanedModel = properLookupCase(
+          normalizeLookupField(kaidoNormalized.model)
+        );
+        const cleanedVariation = properLookupCase(
+          normalizeLookupField(kaidoNormalized.variation)
+        );
         if (cleanedModel && !model) setModel(cleanedModel);
         if (cleanedVariation && !variation) setVariation(cleanedVariation);
       } else {
@@ -1390,8 +1876,10 @@ export default function AdminInventoryPage() {
         } else if (d.brand) {
           setBrand((prev) => resolveNormalizedBrand(prev, d.brand));
         }
-        const cleanedModel = normalizeLookupField(d.model);
-        const cleanedVariation = normalizeLookupField(d.color_style);
+        const cleanedModel = properLookupCase(normalizeLookupField(d.model));
+        const cleanedVariation = properLookupCase(
+          normalizeLookupField(d.color_style)
+        );
         if (cleanedModel && !model) setModel(cleanedModel);
         if (cleanedVariation && !variation) setVariation(cleanedVariation);
 
@@ -1400,11 +1888,15 @@ export default function AdminInventoryPage() {
           setBrand((prev) => resolveNormalizedBrand(prev, inferred.brand));
         }
         if (!d.model && !model && inferred.model) {
-          const inferredModel = normalizeLookupField(inferred.model);
+          const inferredModel = properLookupCase(
+            normalizeLookupField(inferred.model)
+          );
           if (inferredModel) setModel(inferredModel);
         }
         if (!d.color_style && !variation && inferred.color_style) {
-          const inferredVariation = normalizeLookupField(inferred.color_style);
+          const inferredVariation = properLookupCase(
+            normalizeLookupField(inferred.color_style)
+          );
           if (inferredVariation) setVariation(inferredVariation);
         }
       }
@@ -1469,6 +1961,15 @@ export default function AdminInventoryPage() {
     }, 200);
   }
 
+  function clearBarcodeInputAfterAdd() {
+    setBarcodeLookup("");
+    lastAutoLookupRef.current = "";
+    if (barcodeLookupTimerRef.current) {
+      clearTimeout(barcodeLookupTimerRef.current);
+      barcodeLookupTimerRef.current = null;
+    }
+  }
+
   function applyLookupResult(
     result: LookupData,
     options?: { selected?: Record<string, boolean>; applyImages?: boolean }
@@ -1531,12 +2032,22 @@ export default function AdminInventoryPage() {
       const r = await fetch(
         `/api/product-url/lookup?url=${encodeURIComponent(url)}`
       );
-      const j = await r.json();
+      const raw = await r.text();
+      let j: any = null;
+      try {
+        j = JSON.parse(raw);
+      } catch {
+        j = null;
+      }
+
+      if (!j || typeof j !== "object") {
+        const statusText = `URL lookup endpoint error (${r.status}).`;
+        setProductUrlMsg(statusText);
+        return;
+      }
 
       if (!j.ok) {
         setProductUrlMsg(j.error ?? "URL lookup failed.");
-        setProductUrlResult(null);
-        setProductUrlSelectedImages({});
         return;
       }
 
@@ -1557,25 +2068,19 @@ export default function AdminInventoryPage() {
       );
       const normalizedResult: ProductUrlLookupData = {
         ...d,
-        title: normalizedTitle || d.title,
+        title: properLookupCase(normalizedTitle || d.title || rawTitle),
         brand: normalizedBrand ?? d.brand ?? inferred.brand ?? null,
-        model: cleanedModel || null,
-        variation: cleanedVariation || null,
+        model: properLookupCase(cleanedModel) || null,
+        variation: properLookupCase(cleanedVariation) || null,
         images: imgs,
         source_url: d.source_url ?? url,
       };
-      const map: Record<string, boolean> = {};
-      imgs.forEach((u) => {
-        map[u] = true;
-      });
 
-      setProductUrlResult(normalizedResult);
-      setProductUrlSelectedImages(map);
-
-      applyLookupResult(normalizedResult, { applyImages: false });
+      // Apply URL lookup result immediately to Product Identity + images.
+      applyLookupResult(normalizedResult);
 
       setProductUrlMsg(
-        "URL lookup success. Review details and confirm images before saving."
+        "URL lookup success. Product identity and images were updated."
       );
     } catch (e: any) {
       setProductUrlMsg(e?.message ?? "Lookup failed.");
@@ -2716,6 +3221,14 @@ export default function AdminInventoryPage() {
     });
   }
 
+  function stepQuickAddQty(delta: number) {
+    setQuickAddQty((prev) => {
+      const current = Math.max(1, Math.trunc(n(prev, 1)));
+      const next = Math.max(1, current + delta);
+      return String(next);
+    });
+  }
+
   function stepExistingQty(v: Variant, delta: number) {
     const current = Math.trunc(n(v.qty));
     const next = Math.max(0, current + delta);
@@ -3399,20 +3912,42 @@ export default function AdminInventoryPage() {
     () => parseHotWheelsBulkLines(bulkHotWheelsLines, bulkHotWheelsCondition),
     [bulkHotWheelsCondition, bulkHotWheelsLines]
   );
+  const selectedExistingBarcodeMatch = React.useMemo(() => {
+    if (!existingBarcodePrompt?.matches.length) return null;
+    return (
+      existingBarcodePrompt.matches.find(
+        (match) => match.id === existingBarcodeVariantId
+      ) ?? existingBarcodePrompt.matches[0]
+    );
+  }, [existingBarcodePrompt, existingBarcodeVariantId]);
+  const visibleSearchResults =
+    compactAddMode && !showAllSearchResults ? results.slice(0, 4) : results;
+  const hiddenSearchResultCount = Math.max(0, results.length - visibleSearchResults.length);
 
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <div className="text-xl font-semibold">Inventory</div>
-          <div className="text-sm text-white/60">
-            Search, edit product identity, manage variants
-            (qty/price/cost/barcode), and mark items as sold out.
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-xl font-semibold">Inventory</div>
+              <div className="text-sm text-white/60">
+                Search, edit product identity, manage variants
+                (qty/price/cost/barcode), and mark items as sold out.
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              onClick={() => setCompactAddMode((prev) => !prev)}
+            >
+              {compactAddMode ? "Compact Add: ON" : "Compact Add: OFF"}
+            </Button>
           </div>
         </CardHeader>
 
         <CardBody className="space-y-6">
           {/* Inventory worth */}
+          {!compactAddMode ? (
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -3497,6 +4032,7 @@ export default function AdminInventoryPage() {
               </div>
             </div>
           </div>
+          ) : null}
 
           {/* Search */}
           <div
@@ -3522,7 +4058,7 @@ export default function AdminInventoryPage() {
 
             {results.length ? (
               <div className="grid gap-2">
-                {results.map((p) => {
+                {visibleSearchResults.map((p) => {
                   const img =
                     Array.isArray(p.image_urls) && p.image_urls.length
                       ? p.image_urls[0]
@@ -3567,6 +4103,15 @@ export default function AdminInventoryPage() {
                     </button>
                   );
                 })}
+                {hiddenSearchResultCount > 0 ? (
+                  <Button
+                    variant="ghost"
+                    onClick={() => setShowAllSearchResults(true)}
+                  >
+                    Show {hiddenSearchResultCount} more result
+                    {hiddenSearchResultCount === 1 ? "" : "s"}
+                  </Button>
+                ) : null}
               </div>
             ) : (
               <div className="text-sm text-white/50">
@@ -3575,181 +4120,136 @@ export default function AdminInventoryPage() {
             )}
           </div>
 
-          {/* Barcode lookup */}
-          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
-            <div className="font-semibold">
-              Barcode Lookup (for identity + images)
-            </div>
-            <div className="flex gap-2">
-              <div className="flex-1">
-                <Input
-                  placeholder="Scan or enter barcode..."
-                  value={barcodeLookup}
-                  autoFocus
-                  ref={barcodeInputRef}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    setBarcodeLookup(next);
-                    scheduleBarcodeLookup(next);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      lookupBarcode();
-                    }
-                  }}
-                />
+          {/* Lookup tools */}
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+              <div className="font-semibold">
+                Barcode Lookup (for identity + images)
               </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <Input
+                    placeholder="Scan or enter barcode..."
+                    value={barcodeLookup}
+                    autoFocus
+                    ref={barcodeInputRef}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setBarcodeLookup(next);
+                      scheduleBarcodeLookup(next);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        lookupBarcode();
+                      }
+                    }}
+                  />
+                </div>
               <Button
                 variant="secondary"
                 onClick={() => setBarcodeScannerOpen(true)}
+                disabled={quickAddBusy}
               >
                 Scan
               </Button>
               <Button
                 variant="secondary"
                 onClick={() => lookupBarcode()}
-                disabled={lookupLoading}
+                disabled={lookupLoading || quickAddBusy}
               >
                 {lookupLoading ? "Looking up..." : "Lookup"}
               </Button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Checkbox
+                checked={quickAddEnabled}
+                onChange={(next) => {
+                  setQuickAddEnabled(next);
+                  if (next) setQuickAddConfigOpen(true);
+                }}
+                label="Quick Add"
+                disabled={quickAddBusy}
+              />
+              {quickAddEnabled ? (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setQuickAddConfigOpen(true)}
+                    disabled={quickAddBusy}
+                  >
+                    Edit
+                  </Button>
+                  <div className="text-xs text-white/60">
+                    +{Math.max(1, Math.trunc(n(quickAddQty, 1)))} each scan |{" "}
+                    {quickAddCondition === "any"
+                      ? "Any variation"
+                      : formatConditionLabel(quickAddCondition)}
+                  </div>
+                </>
+              ) : null}
             </div>
 
             {lookupMsg ? (
               <div className="text-sm text-white/70">{lookupMsg}</div>
             ) : null}
 
-            <BarcodeScannerModal
-              open={barcodeScannerOpen}
-              onClose={() => setBarcodeScannerOpen(false)}
-              onScan={(value) => {
-                const next = normalizeBarcode(value);
-                if (!next) return;
-                lastAutoLookupRef.current = next;
-                setBarcodeLookup(next);
-                lookupBarcode(next);
-                setBarcodeScannerOpen(false);
-                focusBarcodeInput();
-              }}
-            />
-          </div>
-
-          {/* Product URL lookup */}
-          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
-            <div className="font-semibold">Item URL Lookup</div>
-            <div className="flex gap-2">
-              <div className="flex-1">
-                <Input
-                  placeholder="Paste product URL..."
-                  value={productUrl}
-                  onChange={(e) => setProductUrl(e.target.value)}
-                  onPaste={(e) => {
-                    const text = e.clipboardData.getData("text");
-                    const normalized = normalizeUrlInput(text);
-                    if (!normalized) return;
-                    setProductUrl(normalized);
-                    requestAnimationFrame(() => lookupProductUrl());
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      lookupProductUrl();
-                    }
-                  }}
-                />
-              </div>
-              <Button
-                variant="secondary"
-                onClick={lookupProductUrl}
-                disabled={productUrlLoading}
-              >
-                {productUrlLoading ? "Looking up..." : "Lookup URL"}
-              </Button>
+              <BarcodeScannerModal
+                open={barcodeScannerOpen}
+                onClose={() => setBarcodeScannerOpen(false)}
+                onScan={(value) => {
+                  const next = normalizeBarcode(value);
+                  if (!next) return;
+                  lastAutoLookupRef.current = next;
+                  setBarcodeLookup(next);
+                  lookupBarcode(next);
+                  setBarcodeScannerOpen(false);
+                  focusBarcodeInput();
+                }}
+              />
             </div>
 
-            {productUrlMsg ? (
-              <div className="text-sm text-white/70">{productUrlMsg}</div>
-            ) : null}
-
-            {productUrlResult ? (
-              <div className="space-y-3">
-                <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+              <div className="font-semibold">Item URL Lookup</div>
+              <div className="flex gap-2">
+                <div className="flex-1">
                   <Input
-                    label="Suggested Title"
-                    value={productUrlResult.title ?? ""}
-                    readOnly
+                    placeholder="Paste product URL..."
+                    value={productUrl}
+                    onChange={(e) => setProductUrl(e.target.value)}
+                    onPaste={(e) => {
+                      const text = e.clipboardData.getData("text");
+                      const normalized = normalizeUrlInput(text);
+                      if (!normalized) return;
+                      setProductUrl(normalized);
+                      requestAnimationFrame(() => lookupProductUrl());
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        lookupProductUrl();
+                      }
+                    }}
                   />
-                  <Input
-                    label="Suggested Brand"
-                    value={productUrlResult.brand ?? ""}
-                    readOnly
-                  />
-                  <Input
-                    label="Suggested Model"
-                    value={productUrlResult.model ?? ""}
-                    readOnly
-                  />
-                  <Input
-                    label="Suggested Variation"
-                    value={productUrlResult.variation ?? ""}
-                    readOnly
-                  />
-                  <div className="md:col-span-2">
-                    <Input
-                      label="Source URL"
-                      value={productUrlResult.source_url ?? ""}
-                      readOnly
-                    />
-                  </div>
                 </div>
-
-                {productUrlResult.images?.length ? (
-                  <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
-                    {productUrlResult.images.slice(0, 9).map((u) => (
-                      <div
-                        key={u}
-                        className="rounded-xl border border-white/10 bg-bg-900/40 overflow-hidden"
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={u} alt="" className="h-40 w-full object-cover" />
-                        <div className="p-3">
-                          <Checkbox
-                            checked={!!productUrlSelectedImages[u]}
-                            onChange={(v) =>
-                              setProductUrlSelectedImages((m) => ({
-                                ...m,
-                                [u]: v,
-                              }))
-                            }
-                            label="Include image"
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-sm text-white/50">
-                    No images found for this URL.
-                  </div>
-                )}
-
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="secondary"
-                    type="button"
-                    onClick={() =>
-                      productUrlResult &&
-                      applyLookupResult(productUrlResult, {
-                        selected: productUrlSelectedImages,
-                      })
-                    }
-                    disabled={productUrlLoading || !productUrlResult}
-                  >
-                    Use result
-                  </Button>
-                </div>
+                <Button
+                  variant="secondary"
+                  onClick={lookupProductUrl}
+                  disabled={productUrlLoading}
+                >
+                  {productUrlLoading ? "Looking up..." : "Lookup URL"}
+                </Button>
               </div>
-            ) : null}
+
+              {productUrlMsg ? (
+                <div className="text-sm text-white/70">{productUrlMsg}</div>
+              ) : null}
+              <div className="text-xs text-white/50">
+                URL lookup auto-fills Product Identity and adds images directly.
+              </div>
+            </div>
           </div>
 
           {/* Product identity */}
@@ -4032,11 +4532,26 @@ export default function AdminInventoryPage() {
           {/* Variants list (edit) */}
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <div className="font-semibold">Existing Variants</div>
-              <Badge>{variants.length}</Badge>
+              <div className="flex items-center gap-2">
+                <div className="font-semibold">Existing Variants</div>
+                <Badge>{variants.length}</Badge>
+              </div>
+              {compactAddMode && variants.length > 0 ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowExistingVariants((prev) => !prev)}
+                >
+                  {showExistingVariants ? "Hide" : "Show"}
+                </Button>
+              ) : null}
             </div>
 
-            {loadingVariants ? (
+            {compactAddMode && variants.length > 0 && !showExistingVariants ? (
+              <div className="text-xs text-white/60">
+                Hidden to keep add flow compact. Click "Show" to edit existing variants.
+              </div>
+            ) : loadingVariants ? (
               <div className="text-white/60">Loading variants…</div>
             ) : variants.length === 0 ? (
               <div className="text-white/60">
@@ -4333,25 +4848,9 @@ export default function AdminInventoryPage() {
               <Select
                 label="Condition"
                 value={condition}
-                onChange={(e) => {
-                  const next = e.target.value as VariantCondition;
-                  conditionTouchedRef.current = true;
-                  const leavingNearMint =
-                    condition === "near_mint" &&
-                    publicNotes.trim() === "Near Mint Condition" &&
-                    next !== "near_mint";
-                  setCondition(next);
-                  if (next === "near_mint" && !publicNotes.trim()) {
-                    setPublicNotes("Near Mint Condition");
-                  } else if (leavingNearMint) {
-                    setPublicNotes("");
-                  }
-                  if (isBlisterCondition(next)) {
-                    setShipClass("BLISTER");
-                  } else if (shipClass === "BLISTER") {
-                    setShipClass(shipClassFromBrand(brand));
-                  }
-                }}
+                onChange={(e) =>
+                  handleVariantConditionChange(e.target.value as VariantCondition)
+                }
               >
                 <option value="sealed">Sealed</option>
                 <option value="resealed">Resealed</option>
@@ -4550,6 +5049,25 @@ export default function AdminInventoryPage() {
             </div>
           </div>
 
+          {compactAddMode ? (
+            <div className="rounded-2xl border border-white/10 bg-bg-900/20 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs text-white/60">
+                  Advanced tools (bulk add, logs, protector stock, photo inbox)
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowAdvancedTools((prev) => !prev)}
+                >
+                  {showAdvancedTools ? "Hide advanced" : "Show advanced"}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {!compactAddMode || showAdvancedTools ? (
+          <>
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
@@ -5089,6 +5607,8 @@ export default function AdminInventoryPage() {
               </div>
             ) : null}
           </div>
+          </>
+          ) : null}
 
           {bulkPreviewUrl ? (
             <div
@@ -5139,6 +5659,359 @@ export default function AdminInventoryPage() {
           ) : null}
         </CardBody>
       </Card>
+
+      {quickAddConfigOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/70"
+            onClick={() => setQuickAddConfigOpen(false)}
+            aria-label="Close quick add settings"
+          />
+          <div className="relative w-full max-w-md rounded-2xl border border-white/10 bg-bg-900/95 p-5 shadow-soft space-y-4">
+            <div>
+              <div className="text-xs text-white/60">Barcode Quick Add</div>
+              <div className="text-lg font-semibold">Quick Add Settings</div>
+            </div>
+            <div className="space-y-1">
+              <div className="text-sm text-white/80">Quantity per scan</div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  type="button"
+                  className="h-10 w-10 px-0"
+                  onClick={() => stepQuickAddQty(-1)}
+                  aria-label="Decrease quick add quantity"
+                >
+                  -
+                </Button>
+                <div className="flex-1">
+                  <Input
+                    value={quickAddQty}
+                    onChange={(e) =>
+                      setQuickAddQty(e.target.value.replace(/[^0-9]/g, ""))
+                    }
+                    placeholder="1"
+                  />
+                </div>
+                <Button
+                  variant="ghost"
+                  type="button"
+                  className="h-10 w-10 px-0"
+                  onClick={() => stepQuickAddQty(1)}
+                  aria-label="Increase quick add quantity"
+                >
+                  +
+                </Button>
+              </div>
+            </div>
+            <Select
+              label="Preferred variation"
+              value={quickAddCondition}
+              onChange={(e) =>
+                setQuickAddCondition(e.target.value as VariantCondition | "any")
+              }
+            >
+              <option value="any">Any variation (first match)</option>
+              <option value="sealed">Sealed</option>
+              <option value="resealed">Resealed</option>
+              <option value="near_mint">Near Mint</option>
+              <option value="sealed_blister">Sealed blister</option>
+              <option value="unsealed">Unsealed</option>
+              <option value="unsealed_blister">Unsealed blister</option>
+              <option value="blistered">Blistered</option>
+              <option value="with_issues">With Issues</option>
+            </Select>
+            <div className="flex justify-end">
+              <Button
+                variant="secondary"
+                onClick={() => setQuickAddConfigOpen(false)}
+              >
+                Done
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {existingBarcodePrompt ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/70"
+            onClick={closeExistingBarcodePrompt}
+            aria-label="Close barcode action prompt"
+          />
+          <div className="relative w-full max-w-5xl max-h-[88vh] overflow-y-auto rounded-2xl border border-white/10 bg-bg-900/95 p-5 shadow-soft">
+            <div className="text-xs text-white/60">Barcode already exists</div>
+            <div className="mt-1 text-lg font-semibold">{existingBarcodePrompt.barcode}</div>
+            <div className="mt-2 text-sm text-white/70">
+              Choose whether to add stock to an existing variant, or create a new
+              variant in this same popup, or save as a new product card.
+            </div>
+
+            {existingBarcodePrompt.matches.length > 1 ? (
+              <div className="mt-4">
+                <Select
+                  label="Existing variant"
+                  value={existingBarcodeVariantId}
+                  onChange={(e) => {
+                    const nextId = e.target.value;
+                    setExistingBarcodeVariantId(nextId);
+                    const match = existingBarcodePrompt.matches.find(
+                      (item) => item.id === nextId
+                    );
+                    if (match?.ship_class) {
+                      setShipClass(match.ship_class);
+                    } else {
+                      setShipClass(
+                        shipClassFromBrand(match?.product?.brand ?? brand)
+                      );
+                    }
+                  }}
+                >
+                  {existingBarcodePrompt.matches.map((match) => {
+                    const productTitle = match.product?.title?.trim() || "Untitled";
+                    return (
+                      <option key={match.id} value={match.id}>
+                        {productTitle} - {formatConditionLabel(match.condition)} (qty {match.qty})
+                      </option>
+                    );
+                  })}
+                </Select>
+              </div>
+            ) : null}
+
+            {selectedExistingBarcodeMatch ? (
+              <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3 text-sm text-white/80">
+                <div className="font-medium">
+                  {selectedExistingBarcodeMatch.product?.title ?? "Untitled product"}
+                </div>
+                <div className="mt-1 text-xs text-white/60">
+                  {selectedExistingBarcodeMatch.product?.brand ?? "-"}
+                  {selectedExistingBarcodeMatch.product?.model
+                    ? ` - ${selectedExistingBarcodeMatch.product.model}`
+                    : ""}
+                  {selectedExistingBarcodeMatch.product?.variation
+                    ? ` - ${selectedExistingBarcodeMatch.product.variation}`
+                    : ""}
+                </div>
+                <div className="mt-1 text-xs text-white/60">
+                  Condition {formatConditionLabel(selectedExistingBarcodeMatch.condition)} -
+                  {" "}Current qty {selectedExistingBarcodeMatch.qty}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="mt-5 grid gap-4 lg:grid-cols-2">
+              <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4 space-y-3">
+                <div className="font-semibold">Add To Existing Variant</div>
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  label="Quantity to add"
+                  value={existingBarcodeAddQty}
+                  onChange={(e) => setExistingBarcodeAddQty(e.target.value)}
+                  disabled={existingBarcodeActionLoading}
+                />
+                <Button
+                  onClick={addToExistingVariantFromBarcodePrompt}
+                  disabled={existingBarcodeActionLoading}
+                >
+                  {existingBarcodeActionLoading ? "Processing..." : "Add to existing variant"}
+                </Button>
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4 space-y-4">
+                <div className="font-semibold">Add New Variant (Condition)</div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Select
+                    label="Condition"
+                    value={condition}
+                    onChange={(e) =>
+                      handleVariantConditionChange(e.target.value as VariantCondition)
+                    }
+                    disabled={existingBarcodeActionLoading}
+                  >
+                    <option value="sealed">Sealed</option>
+                    <option value="resealed">Resealed</option>
+                    <option value="near_mint">Near Mint</option>
+                    <option value="sealed_blister">Sealed blister</option>
+                    <option value="unsealed">Unsealed</option>
+                    <option value="unsealed_blister">Unsealed blister</option>
+                    <option value="blistered">Blistered</option>
+                    <option value="with_issues">With Issues</option>
+                  </Select>
+
+                  <Select
+                    label="Shipping Class"
+                    value={shipClass}
+                    onChange={(e) => setShipClass(e.target.value as ShipClass)}
+                    disabled={existingBarcodeActionLoading}
+                  >
+                    <option value="MINI_GT">Mini GT</option>
+                    <option value="KAIDO">Kaido</option>
+                    <option value="POPRACE">Pop Race</option>
+                    <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
+                    <option value="TRUCKS">Trucks</option>
+                    <option value="BLISTER">Blister</option>
+                    <option value="TOMICA">Tomica</option>
+                    <option value="HOT_WHEELS_MAINLINE">Hot Wheels Mainline</option>
+                    <option value="HOT_WHEELS_PREMIUM">Hot Wheels Premium</option>
+                    <option value="LOOSE_NO_BOX">Loose (No Box)</option>
+                    <option value="LALAMOVE">Lalamove</option>
+                    <option value="FIGURES_DIORAMA">Figures & Diorama (Lalamove)</option>
+                  </Select>
+
+                  <Input
+                    label="Variant Barcode (optional)"
+                    value={variantBarcode}
+                    onChange={(e) => setVariantBarcode(e.target.value)}
+                    disabled={existingBarcodeActionLoading}
+                  />
+                  <div />
+
+                  <Input
+                    label="Cost (P)"
+                    value={cost}
+                    onChange={(e) =>
+                      setCost(e.target.value.replace(/[^0-9.]/g, ""))
+                    }
+                    placeholder="(empty)"
+                    disabled={existingBarcodeActionLoading}
+                  />
+                  <Input
+                    label="Selling Price (P)"
+                    value={price}
+                    onChange={(e) =>
+                      setPrice(e.target.value.replace(/[^0-9.]/g, ""))
+                    }
+                    placeholder="(empty)"
+                    disabled={existingBarcodeActionLoading}
+                  />
+
+                  <div className="space-y-1">
+                    <div className="text-sm text-white/80">Quantity</div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        type="button"
+                        className="h-10 w-10 px-0"
+                        onClick={() => stepNewQty(-1)}
+                        aria-label="Decrease quantity"
+                        disabled={existingBarcodeActionLoading}
+                      >
+                        -
+                      </Button>
+                      <div className="flex-1">
+                        <Input
+                          value={qty}
+                          onChange={(e) =>
+                            setQty(e.target.value.replace(/[^0-9]/g, ""))
+                          }
+                          placeholder="(empty)"
+                          disabled={existingBarcodeActionLoading}
+                        />
+                      </div>
+                      <Button
+                        variant="ghost"
+                        type="button"
+                        className="h-10 w-10 px-0"
+                        onClick={() => stepNewQty(1)}
+                        aria-label="Increase quantity"
+                        disabled={existingBarcodeActionLoading}
+                      >
+                        +
+                      </Button>
+                    </div>
+                  </div>
+
+                  <Textarea
+                    label={
+                      condition === "with_issues"
+                        ? "Notes (required)"
+                        : "Notes (visible to customers)"
+                    }
+                    value={publicNotes}
+                    onChange={(e) => setPublicNotes(e.target.value)}
+                    className="md:col-span-2"
+                    disabled={existingBarcodeActionLoading}
+                  />
+                </div>
+
+                {condition === "with_issues" ? (
+                  <div className="text-xs text-white/60">
+                    Issue photos can be added after saving from the variant editor.
+                  </div>
+                ) : null}
+
+                <Button
+                  variant="secondary"
+                  onClick={createNewVariantFromBarcodePrompt}
+                  disabled={existingBarcodeActionLoading}
+                >
+                  {existingBarcodeActionLoading ? "Processing..." : "Save new variant"}
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-white/10 bg-bg-900/40 p-4 space-y-4">
+              <div className="font-semibold">Create New Product Card + Variant</div>
+              <div className="text-xs text-white/60">
+                Use this when you do not want to attach the scanned barcode to the
+                existing product card.
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <Input
+                  label="Product Title"
+                  value={newCardTitle}
+                  onChange={(e) => setNewCardTitle(e.target.value)}
+                  disabled={existingBarcodeActionLoading}
+                />
+                <Input
+                  label="Brand"
+                  value={newCardBrand}
+                  onChange={(e) => setNewCardBrand(e.target.value)}
+                  disabled={existingBarcodeActionLoading}
+                />
+                <Input
+                  label="Model"
+                  value={newCardModel}
+                  onChange={(e) => setNewCardModel(e.target.value)}
+                  disabled={existingBarcodeActionLoading}
+                />
+                <Input
+                  label="Variation"
+                  value={newCardVariation}
+                  onChange={(e) => setNewCardVariation(e.target.value)}
+                  disabled={existingBarcodeActionLoading}
+                />
+              </div>
+              <Button
+                variant="secondary"
+                onClick={createNewProductCardFromBarcodePrompt}
+                disabled={existingBarcodeActionLoading}
+              >
+                {existingBarcodeActionLoading
+                  ? "Processing..."
+                  : "Save as new product card"}
+              </Button>
+            </div>
+
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <Button
+                variant="ghost"
+                onClick={closeExistingBarcodePrompt}
+                disabled={existingBarcodeActionLoading}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {cropEditor ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
