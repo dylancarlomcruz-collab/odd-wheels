@@ -1089,19 +1089,9 @@ export function InventoryEditorDrawer({
                   e.currentTarget.value = "";
                 }}
               />
-              <div className="text-xs text-white/50">Take photos</div>
-              <input
-                type="file"
-                accept="image/*"
-                capture="environment"
-                multiple
-                onChange={(e) => {
-                  const list = Array.from(e.target.files ?? []);
-                  if (!list.length) return;
-                  void uploadImageFiles(list, productId);
-                  e.currentTarget.value = "";
-                }}
-              />
+              <div className="text-xs text-white/50">
+                Mobile opens your photo library.
+              </div>
             </div>
             {uploadingImages ? (
               <div className="text-xs text-white/60">Uploading...</div>
@@ -1436,19 +1426,9 @@ export function InventoryEditorDrawer({
                                   e.currentTarget.value = "";
                                 }}
                               />
-                              <div className="text-xs text-white/50">Take photos</div>
-                              <input
-                                type="file"
-                                accept="image/*"
-                                capture="environment"
-                                multiple
-                                onChange={(e) => {
-                                  const list = Array.from(e.target.files ?? []);
-                                  if (!list.length) return;
-                                  void uploadIssueFiles(v, list);
-                                  e.currentTarget.value = "";
-                                }}
-                              />
+                              <div className="text-xs text-white/50">
+                                Mobile opens your photo library.
+                              </div>
                               <div
                                 className="rounded-lg border border-dashed border-white/15 bg-bg-900/40 p-2 text-xs text-white/60"
                                 tabIndex={0}

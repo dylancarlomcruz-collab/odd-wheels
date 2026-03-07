@@ -4441,23 +4441,8 @@ export default function AdminInventoryPage() {
               <div className="text-xs text-white/50 mt-1">
                 Select multiple images from your gallery.
               </div>
-              <div className="mt-2">
-              <input
-                type="file"
-                accept="image/*"
-                capture="environment"
-                multiple
-                onChange={(e) => {
-                  const list = orderUploadedFilesTopToBottom(
-                    Array.from(e.target.files ?? [])
-                  );
-                  if (!list.length) return;
-                  const pid = selectedProduct?.id ?? crypto.randomUUID();
-                  void uploadImageFiles(list, pid);
-                  e.currentTarget.value = "";
-                }}
-                />
-                <div className="text-xs text-white/50 mt-1">Take photos</div>
+              <div className="text-xs text-white/50 mt-1">
+                Mobile opens your photo library.
               </div>
               {manualUploadLoading ? (
                 <div className="text-xs text-white/60 mt-1">Uploading...</div>
@@ -4783,19 +4768,9 @@ export default function AdminInventoryPage() {
                                 e.currentTarget.value = "";
                               }}
                             />
-                            <div className="text-xs text-white/50">Take photos</div>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              capture="environment"
-                              multiple
-                              onChange={(e) => {
-                                const list = Array.from(e.target.files ?? []);
-                                if (!list.length) return;
-                                void uploadVariantIssueFiles(v, list);
-                                e.currentTarget.value = "";
-                              }}
-                            />
+                            <div className="text-xs text-white/50">
+                              Mobile opens your photo library.
+                            </div>
                             <div
                               className="rounded-lg border border-dashed border-white/15 bg-bg-900/40 p-2 text-xs text-white/60"
                               tabIndex={0}
@@ -4987,20 +4962,9 @@ export default function AdminInventoryPage() {
                         e.currentTarget.value = "";
                       }}
                     />
-                    <div className="text-xs text-white/50">Take photos</div>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      multiple
-                      onChange={(e) => {
-                        const list = Array.from(e.target.files ?? []);
-                        if (!list.length) return;
-                        const folderId = `issue-${selectedProduct?.id ?? crypto.randomUUID()}`;
-                        void uploadIssueFiles(list, folderId);
-                        e.currentTarget.value = "";
-                      }}
-                    />
+                    <div className="text-xs text-white/50">
+                      Mobile opens your photo library.
+                    </div>
                     <div
                       className="rounded-lg border border-dashed border-white/15 bg-bg-900/40 p-2 text-xs text-white/60"
                       tabIndex={0}
