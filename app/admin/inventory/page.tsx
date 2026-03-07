@@ -2983,6 +2983,22 @@ export default function AdminInventoryPage() {
     }
   }
 
+  function orderUploadedFilesTopToBottom(files: File[]) {
+    return files
+      .map((file, index) => ({ file, index }))
+      .sort((a, b) => {
+        const aTs = Number.isFinite(a.file.lastModified)
+          ? a.file.lastModified
+          : 0;
+        const bTs = Number.isFinite(b.file.lastModified)
+          ? b.file.lastModified
+          : 0;
+        if (aTs !== bTs) return aTs - bTs;
+        return a.index - b.index;
+      })
+      .map((entry) => entry.file);
+  }
+
   function handleImagePaste(e: React.ClipboardEvent) {
     const items = Array.from(e.clipboardData?.items ?? []);
     const files = items
@@ -4412,7 +4428,9 @@ export default function AdminInventoryPage() {
                 accept="image/*"
                 multiple
                 onChange={(e) => {
-                  const list = Array.from(e.target.files ?? []);
+                  const list = orderUploadedFilesTopToBottom(
+                    Array.from(e.target.files ?? [])
+                  );
                   if (!list.length) return;
                   const pid = selectedProduct?.id ?? crypto.randomUUID();
                   void uploadImageFiles(list, pid);
@@ -4423,18 +4441,20 @@ export default function AdminInventoryPage() {
                 Select multiple images from your gallery.
               </div>
               <div className="mt-2">
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  multiple
-                  onChange={(e) => {
-                    const list = Array.from(e.target.files ?? []);
-                    if (!list.length) return;
-                    const pid = selectedProduct?.id ?? crypto.randomUUID();
-                    void uploadImageFiles(list, pid);
-                    e.currentTarget.value = "";
-                  }}
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                multiple
+                onChange={(e) => {
+                  const list = orderUploadedFilesTopToBottom(
+                    Array.from(e.target.files ?? [])
+                  );
+                  if (!list.length) return;
+                  const pid = selectedProduct?.id ?? crypto.randomUUID();
+                  void uploadImageFiles(list, pid);
+                  e.currentTarget.value = "";
+                }}
                 />
                 <div className="text-xs text-white/50 mt-1">Take photos</div>
               </div>
