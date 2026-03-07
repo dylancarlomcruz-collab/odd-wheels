@@ -191,31 +191,41 @@ export function InventoryEditorDrawer({
     return j.publicUrl as string;
   }
 
-  async function uploadImageFile(
-    file: File,
-    productIdForPath: string,
-    options?: { skipLoading?: boolean }
-  ) {
-    if (!options?.skipLoading) setUploadingImages(true);
-    try {
-      const url = await uploadImageFileRaw(file, productIdForPath);
-      setImages((prev) => Array.from(new Set([...prev, url])));
-      return url;
-    } finally {
-      if (!options?.skipLoading) setUploadingImages(false);
-    }
+  async function uploadImageFile(file: File, productIdForPath: string) {
+    return await uploadImageFileRaw(file, productIdForPath);
+  }
+
+  function orderUploadedFilesTopToBottom(files: File[]) {
+    return files
+      .map((file, index) => ({ file, index }))
+      .sort((a, b) => {
+        const aTs = Number.isFinite(a.file.lastModified)
+          ? a.file.lastModified
+          : 0;
+        const bTs = Number.isFinite(b.file.lastModified)
+          ? b.file.lastModified
+          : 0;
+        if (aTs !== bTs) return aTs - bTs;
+        return a.index - b.index;
+      })
+      .map((entry) => entry.file);
   }
 
   async function uploadImageFiles(files: File[], productIdForPath: string) {
     if (!files.length) return;
     setUploadingImages(true);
     try {
+      const uploaded: string[] = [];
       for (const file of files) {
         try {
-          await uploadImageFile(file, productIdForPath, { skipLoading: true });
+          const url = await uploadImageFile(file, productIdForPath);
+          uploaded.push(url);
         } catch (e) {
           console.error("Image upload failed", e);
         }
+      }
+      if (uploaded.length) {
+        setImages((prev) => Array.from(new Set([...uploaded, ...prev])));
       }
     } finally {
       setUploadingImages(false);
@@ -224,10 +234,12 @@ export function InventoryEditorDrawer({
 
   function handleImagePaste(e: React.ClipboardEvent) {
     const items = Array.from(e.clipboardData?.items ?? []);
-    const files = items
+    const files = orderUploadedFilesTopToBottom(
+      items
       .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
       .map((item) => item.getAsFile())
-      .filter(Boolean) as File[];
+      .filter(Boolean) as File[]
+    );
     if (!files.length) return;
     e.preventDefault();
     void uploadImageFiles(files, productId);
@@ -1073,7 +1085,9 @@ export function InventoryEditorDrawer({
                 accept="image/*"
                 multiple
                 onChange={(e) => {
-                  const list = Array.from(e.target.files ?? []);
+                  const list = orderUploadedFilesTopToBottom(
+                    Array.from(e.target.files ?? [])
+                  );
                   if (!list.length) return;
                   void uploadImageFiles(list, productId);
                   e.currentTarget.value = "";
@@ -1086,7 +1100,9 @@ export function InventoryEditorDrawer({
                 capture="environment"
                 multiple
                 onChange={(e) => {
-                  const list = Array.from(e.target.files ?? []);
+                  const list = orderUploadedFilesTopToBottom(
+                    Array.from(e.target.files ?? [])
+                  );
                   if (!list.length) return;
                   void uploadImageFiles(list, productId);
                   e.currentTarget.value = "";
