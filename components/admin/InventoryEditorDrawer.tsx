@@ -139,6 +139,14 @@ export function InventoryEditorDrawer({
     rect: DOMRect;
   } | null>(null);
   const quickThumbInputRef = React.useRef<HTMLInputElement | null>(null);
+  const mountedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     if (!product) return;
@@ -897,9 +905,23 @@ export function InventoryEditorDrawer({
     }
   }
 
+  async function saveProductImages(imagesToSave: string[]) {
+    const { error } = await supabase
+      .from("products")
+      .update({
+        image_urls: imagesToSave,
+        created_at: new Date().toISOString(),
+      })
+      .eq("id", productId);
+    if (error) throw error;
+  }
+
   async function handleQuickThumbUpload(files: File[]) {
     if (!files.length) return;
     setQuickThumbUploading(true);
+    if (mountedRef.current) {
+      onClose();
+    }
     try {
       const uploaded: string[] = [];
       for (const file of files) {
@@ -916,8 +938,11 @@ export function InventoryEditorDrawer({
       const nextImages = Array.from(
         new Set([...uploaded, ...images.filter((u) => !uploaded.includes(u))])
       );
-      setImages(nextImages);
-      await save({ imagesOverride: nextImages, closeAfter: true });
+      if (mountedRef.current) {
+        setImages(nextImages);
+      }
+      await saveProductImages(nextImages);
+      onSaved();
     } catch (e: any) {
       toast({
         intent: "error",
@@ -925,7 +950,9 @@ export function InventoryEditorDrawer({
         message: e?.message ?? "Unable to upload thumbnail.",
       });
     } finally {
-      setQuickThumbUploading(false);
+      if (mountedRef.current) {
+        setQuickThumbUploading(false);
+      }
     }
   }
 
@@ -1078,7 +1105,7 @@ export function InventoryEditorDrawer({
                   {quickThumbUploading ? "Uploading..." : "Upload thumbnail"}
                 </Button>
                 <div className="mt-2 text-xs text-white/60">
-                  Auto-saves and closes after upload.
+                  Closes immediately and uploads in background so you can edit the next item.
                 </div>
               </div>
             </div>
