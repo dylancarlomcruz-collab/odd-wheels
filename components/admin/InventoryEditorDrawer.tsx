@@ -929,6 +929,55 @@ export function InventoryEditorDrawer({
     }
   }
 
+  async function pickImageFilesFromLibrary(options?: { multiple?: boolean }) {
+    const picker = (window as any)?.showOpenFilePicker;
+    if (typeof picker !== "function") return null as File[] | null;
+    try {
+      const handles = await picker({
+        multiple: options?.multiple ?? true,
+        types: [
+          {
+            description: "Images",
+            accept: {
+              "image/*": [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"],
+            },
+          },
+        ],
+        excludeAcceptAllOption: false,
+        startIn: "pictures",
+      });
+      const files = await Promise.all(
+        (handles as Array<{ getFile: () => Promise<File> }>).map((handle) =>
+          handle.getFile()
+        )
+      );
+      return files.filter(Boolean);
+    } catch (e: any) {
+      if (e?.name === "AbortError") return [] as File[];
+      throw e;
+    }
+  }
+
+  async function openQuickThumbPicker() {
+    try {
+      const picked = await pickImageFilesFromLibrary({ multiple: true });
+      if (Array.isArray(picked)) {
+        if (picked.length) {
+          await handleQuickThumbUpload(picked);
+        }
+        return;
+      }
+      quickThumbInputRef.current?.click();
+    } catch (e: any) {
+      toast({
+        intent: "error",
+        title: "Picker unavailable",
+        message: e?.message ?? "Unable to open photo library.",
+      });
+      quickThumbInputRef.current?.click();
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex justify-end bg-black/60"
@@ -1022,7 +1071,9 @@ export function InventoryEditorDrawer({
                   variant="secondary"
                   className="w-full"
                   disabled={quickThumbUploading || saving}
-                  onClick={() => quickThumbInputRef.current?.click()}
+                  onClick={() => {
+                    void openQuickThumbPicker();
+                  }}
                 >
                   {quickThumbUploading ? "Uploading..." : "Upload thumbnail"}
                 </Button>
