@@ -181,6 +181,7 @@ export function InventoryEditorDrawer({
   if (!product) return null;
 
   const productId = product.id;
+  const editableVariants = variants.filter((v) => !v._delete);
 
   async function uploadImageFileRaw(
     file: File,
@@ -376,6 +377,12 @@ export function InventoryEditorDrawer({
     const current = Math.trunc(safeNumber(v.qty) ?? 0);
     const next = Math.max(0, current + delta);
     updateVariant(v.id, { qty: next });
+  }
+
+  function stepVariantPrice(v: VariantDraft, delta: number) {
+    const current = safeNumber(v.price) ?? 0;
+    const next = Math.max(0, current + delta);
+    updateVariant(v.id, { price: next });
   }
 
   function reorderImages(fromIndex: number, toIndex: number) {
@@ -1139,6 +1146,65 @@ export function InventoryEditorDrawer({
 
           <div className="rounded-2xl border border-white/10 bg-bg-900/50 p-4 space-y-3">
             <div className="flex items-center justify-between">
+              <div className="font-semibold">Quick price edit</div>
+              <Badge>{editableVariants.length}</Badge>
+            </div>
+            {!editableVariants.length ? (
+              <div className="text-sm text-white/60">No variants yet.</div>
+            ) : (
+              <div className="space-y-2">
+                {editableVariants.map((v) => (
+                  <div
+                    key={`quick-price-${v.id}`}
+                    className="rounded-xl border border-white/10 bg-bg-900/40 p-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_200px_auto]"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium truncate">
+                        {formatConditionLabel(v.condition)}{" "}
+                        <span className="text-white/50">({v.id.slice(0, 8)})</span>
+                      </div>
+                      <div className="text-xs text-white/50 truncate">
+                        Barcode: {v.barcode || "(empty)"}
+                      </div>
+                    </div>
+                    <Input
+                      label="Price"
+                      type="number"
+                      inputMode="decimal"
+                      value={v.price ?? ""}
+                      onChange={(e) =>
+                        updateVariant(v.id, { price: safeNumber(e.target.value) })
+                      }
+                    />
+                    <div className="flex items-end gap-2">
+                      <Button
+                        variant="ghost"
+                        type="button"
+                        onClick={() => stepVariantPrice(v, -50)}
+                        aria-label="Decrease price by 50"
+                      >
+                        -50
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        type="button"
+                        onClick={() => stepVariantPrice(v, 50)}
+                        aria-label="Increase price by 50"
+                      >
+                        +50
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                <div className="text-xs text-white/50">
+                  Full variant fields are still available below.
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-bg-900/50 p-4 space-y-3">
+            <div className="flex items-center justify-between">
               <div className="font-semibold">Images</div>
               <Badge>{images.length}</Badge>
             </div>
@@ -1262,13 +1328,11 @@ export function InventoryEditorDrawer({
               </Button>
             </div>
 
-            {!variants.filter((v) => !v._delete).length ? (
+            {!editableVariants.length ? (
               <div className="text-sm text-white/60">No variants yet.</div>
             ) : (
               <div className="space-y-3">
-                {variants
-                  .filter((v) => !v._delete)
-                  .map((v) => (
+                {editableVariants.map((v) => (
                     <div
                       key={v.id}
                       className="rounded-xl border border-white/10 bg-paper/5 p-3 space-y-3"
