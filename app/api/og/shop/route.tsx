@@ -92,17 +92,16 @@ function normalizeBrandKey(value: string | null | undefined) {
 }
 
 function normalizeImageUrl(raw: string | null | undefined, baseUrl: string) {
-  const toRenderableUrl = (url: string) => {
+  const toPublicObjectUrl = (url: string) => {
     try {
       const parsed = new URL(url);
-      if (!parsed.pathname.includes("/storage/v1/object/public/")) return url;
-      parsed.pathname = parsed.pathname.replace(
-        "/storage/v1/object/public/",
-        "/storage/v1/render/image/public/"
-      );
-      if (!parsed.searchParams.has("width")) parsed.searchParams.set("width", "720");
-      if (!parsed.searchParams.has("height")) parsed.searchParams.set("height", "480");
-      if (!parsed.searchParams.has("quality")) parsed.searchParams.set("quality", "60");
+      if (parsed.pathname.includes("/storage/v1/render/image/public/")) {
+        parsed.pathname = parsed.pathname.replace(
+          "/storage/v1/render/image/public/",
+          "/storage/v1/object/public/"
+        );
+      }
+      parsed.search = "";
       return parsed.toString();
     } catch {
       return url;
@@ -112,17 +111,17 @@ function normalizeImageUrl(raw: string | null | undefined, baseUrl: string) {
   const value = String(raw ?? "").trim();
   if (!value) return null;
   if (value.startsWith("data:")) return value;
-  if (/^https?:\/\//i.test(value)) return toRenderableUrl(value);
+  if (/^https?:\/\//i.test(value)) return toPublicObjectUrl(value);
 
   const base = baseUrl.replace(/\/$/, "");
   if (!base) return null;
 
   if (value.startsWith("/storage/") || value.startsWith("storage/")) {
     const path = value.startsWith("/") ? value : `/${value}`;
-    return toRenderableUrl(`${base}${path}`);
+    return toPublicObjectUrl(`${base}${path}`);
   }
 
-  if (value.startsWith("/")) return toRenderableUrl(`${base}${value}`);
+  if (value.startsWith("/")) return toPublicObjectUrl(`${base}${value}`);
   return null;
 }
 

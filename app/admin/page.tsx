@@ -21,6 +21,15 @@ import { Button } from "@/components/ui/Button";
 import { RequireAuth } from "@/components/auth/RequireAuth";
 import { supabase } from "@/lib/supabase/browser";
 
+const PREPARING_SHIPPING_STATUSES = [
+  "PREPARING",
+  "PREPARING_TO_SHIP",
+  "PREPARING TO SHIP",
+  "TO_SHIP",
+  "PENDING_SHIPMENT",
+  "NONE",
+];
+
 export default function AdminDashboard() {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -70,13 +79,7 @@ export default function AdminDashboard() {
           .select("id", { count: "exact", head: true })
           .eq("payment_status", "PAID")
           .not("status", "in", "(CANCELLED,VOIDED)")
-          .in("shipping_status", [
-            "PREPARING",
-            "PREPARING_TO_SHIP",
-            "TO_SHIP",
-            "PENDING_SHIPMENT",
-            "NONE",
-          ]),
+          .in("shipping_status", PREPARING_SHIPPING_STATUSES),
         supabase
           .from("orders")
           .select("id", { count: "exact", head: true })

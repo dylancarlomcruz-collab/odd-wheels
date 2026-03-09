@@ -550,7 +550,7 @@ export function InventoryEditorDrawer({
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ orderId }),
+        body: JSON.stringify({ orderId, markToShip: true }),
       });
 
       const payload = await res.json().catch(() => null);
@@ -574,7 +574,7 @@ export function InventoryEditorDrawer({
       toast({
         intent: "success",
         title: "Marked sold",
-        message: `1 qty sold via POS as Odd Wheels FB (${formatConditionLabel(target.condition, {
+        message: `1 qty sold as Odd Wheels FB and added to To Ship (${formatConditionLabel(target.condition, {
           upper: true,
         })}).`,
       });

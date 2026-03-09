@@ -141,10 +141,12 @@ function AdminProductCard({
   product,
   onClick,
   onAdjustQty,
+  onAdjustPrice,
 }: {
   product: AdminProduct;
   onClick: () => void;
   onAdjustQty: (productId: string, variantId: string, delta: number) => Promise<void>;
+  onAdjustPrice: (productId: string, variantId: string, nextPrice: number) => Promise<void>;
 }) {
   const { totalQty, minPrice, maxPrice, variantCount } = derivedTotals(product);
   const isSoldOut = totalQty <= 0 || !product.is_active;
@@ -162,12 +164,22 @@ function AdminProductCard({
   const [savingVariantId, setSavingVariantId] = React.useState<string | null>(
     null
   );
+  const [priceDraft, setPriceDraft] = React.useState("");
 
   React.useEffect(() => {
     setSelectedId(variants[0]?.id ?? "");
   }, [product.id, variants]);
 
   const selected = variants.find((v) => v.id === selectedId) ?? variants[0];
+
+  React.useEffect(() => {
+    setPriceDraft(
+      selected && Number.isFinite(Number(selected.price))
+        ? String(Number(selected.price ?? 0))
+        : "0"
+    );
+  }, [selected?.id, selected?.price]);
+
   const selectedPrice = selected ? formatPHP(Number(selected.price ?? 0)) : priceLabel;
   const selectedQty = Number(selected?.qty ?? 0);
   const canAdjust = Boolean(selected) && savingVariantId !== selected?.id;
@@ -177,6 +189,45 @@ function AdminProductCard({
     setSavingVariantId(selected.id);
     try {
       await onAdjustQty(product.id, selected.id, delta);
+    } finally {
+      setSavingVariantId(null);
+    }
+  }
+
+  async function handleAdjustPriceDelta(delta: number) {
+    if (!selected) return;
+    const current = Number.isFinite(Number(selected.price))
+      ? Number(selected.price ?? 0)
+      : 0;
+    const next = Math.max(0, current + delta);
+    setSavingVariantId(selected.id);
+    try {
+      await onAdjustPrice(product.id, selected.id, next);
+    } finally {
+      setSavingVariantId(null);
+    }
+  }
+
+  async function commitPriceDraft() {
+    if (!selected) return;
+    const parsed = Number(priceDraft);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setPriceDraft(String(Number(selected.price ?? 0)));
+      toast({
+        intent: "error",
+        title: "Invalid price",
+        message: "Price must be a valid non-negative number.",
+      });
+      return;
+    }
+    const rounded = Math.round(parsed);
+    const current = Number.isFinite(Number(selected.price))
+      ? Number(selected.price ?? 0)
+      : 0;
+    if (rounded === current) return;
+    setSavingVariantId(selected.id);
+    try {
+      await onAdjustPrice(product.id, selected.id, rounded);
     } finally {
       setSavingVariantId(null);
     }
@@ -299,6 +350,54 @@ function AdminProductCard({
                   }}
                 >
                   +
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+              <div className="text-xs text-white/60">Variant price</div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="h-8 rounded-lg border border-white/10 bg-paper/10 px-2 text-xs text-white/80 hover:bg-paper/20 disabled:opacity-40"
+                  disabled={!canAdjust}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleAdjustPriceDelta(-50);
+                  }}
+                >
+                  -50
+                </button>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  data-disable-scan-capture="true"
+                  value={priceDraft}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => setPriceDraft(e.target.value)}
+                  onBlur={() => {
+                    void commitPriceDraft();
+                  }}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void commitPriceDraft();
+                    }
+                  }}
+                  className="h-8 w-24 rounded-lg border border-white/10 bg-paper/10 px-2 text-right text-xs text-white outline-none focus:border-accent-500/60"
+                />
+                <button
+                  type="button"
+                  className="h-8 rounded-lg border border-white/10 bg-paper/10 px-2 text-xs text-white/80 hover:bg-paper/20 disabled:opacity-40"
+                  disabled={!canAdjust}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleAdjustPriceDelta(50);
+                  }}
+                >
+                  +50
                 </button>
               </div>
             </div>
@@ -650,6 +749,47 @@ export function InventoryBrowseGrid({
     [rows]
   );
 
+  const adjustVariantPrice = React.useCallback(
+    async (productId: string, variantId: string, nextPrice: number) => {
+      const product = rows.find((p) => p.id === productId);
+      const variant = product?.product_variants?.find((v) => v.id === variantId);
+      if (!variant) return;
+
+      const current = Number.isFinite(Number(variant.price))
+        ? Number(variant.price ?? 0)
+        : 0;
+      if (current === nextPrice) return;
+
+      const { error } = await supabase
+        .from("product_variants")
+        .update({ price: nextPrice })
+        .eq("id", variantId);
+
+      if (error) {
+        toast({
+          intent: "error",
+          title: "Price update failed",
+          message: error.message,
+        });
+        return;
+      }
+
+      setRows((prev) =>
+        prev.map((p) =>
+          p.id === productId
+            ? {
+                ...p,
+                product_variants: (p.product_variants ?? []).map((v) =>
+                  v.id === variantId ? { ...v, price: nextPrice } : v
+                ),
+              }
+            : p
+        )
+      );
+    },
+    [rows]
+  );
+
 
   function focusSearchInput() {
     requestAnimationFrame(() => {
@@ -706,6 +846,18 @@ export function InventoryBrowseGrid({
         tag === "select" ||
         Boolean(target?.isContentEditable);
       const isSearchInput = target === searchInputRef.current;
+      const suppressScanCapture = Boolean(
+        target?.closest?.('[data-disable-scan-capture="true"]')
+      );
+
+      if (suppressScanCapture || (isEditableTarget && !isSearchInput)) {
+        scanBufferRef.current = "";
+        scanActiveRef.current = false;
+        if (scanTimerRef.current) {
+          clearTimeout(scanTimerRef.current);
+        }
+        return;
+      }
 
       const key = event.key;
       const now = Date.now();
@@ -965,6 +1117,7 @@ export function InventoryBrowseGrid({
             product={p}
             onClick={() => onSelect(p)}
             onAdjustQty={adjustVariantQty}
+            onAdjustPrice={adjustVariantPrice}
           />
         ))}
       </div>

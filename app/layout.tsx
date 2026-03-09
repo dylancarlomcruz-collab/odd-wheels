@@ -47,8 +47,20 @@ const themeScript = `
 })();
 `;
 
+const pwaRegisterScript = `
+(() => {
+  if (typeof window === "undefined") return;
+  if (!("serviceWorker" in navigator)) return;
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+  });
+})();
+`;
+
 export const metadata: Metadata = {
   metadataBase,
+  manifest: "/manifest.webmanifest",
+  applicationName: siteName,
   title: {
     default: siteName,
     template: `%s | ${siteName}`,
@@ -80,9 +92,17 @@ export const metadata: Metadata = {
     images: [socialPreviewImage],
   },
   icons: {
-    icon: "/odd-wheels-logo.png",
-    shortcut: "/odd-wheels-logo.png",
-    apple: "/odd-wheels-logo.png",
+    icon: [
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    shortcut: "/icon-192.png",
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
+  },
+  appleWebApp: {
+    capable: true,
+    title: "Odd Wheels",
+    statusBarStyle: "black-translucent",
   },
 };
 
@@ -100,6 +120,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        <script dangerouslySetInnerHTML={{ __html: pwaRegisterScript }} />
       </head>
       <body className={inter.className}>
         <ThemeProvider>

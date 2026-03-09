@@ -4,7 +4,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ClipboardCopy, ScrollText } from "lucide-react";
+import { CheckCircle2, Circle, ClipboardCopy, ScrollText } from "lucide-react";
 import { useAllOrders } from "@/hooks/useAllOrders";
 import { useNotices } from "@/hooks/useNotices";
 import { useProfile } from "@/hooks/useProfile";
@@ -204,6 +204,19 @@ function normalizeShippingStatus(raw: string | null | undefined) {
   return status;
 }
 
+function isOddWheelsInternalOrder(order: any) {
+  const customer = String(order?.customer_name ?? "").trim().toLowerCase();
+  const shippingMethod = String(order?.shipping_method ?? "").trim().toUpperCase();
+  const details = parseJsonMaybe(order?.shipping_details) ?? {};
+  const detailsText = String(details?.text ?? "").trim().toLowerCase();
+  const channel = String(order?.channel ?? "").trim().toUpperCase();
+  return (
+    customer.includes("odd wheels") ||
+    detailsText.includes("auto-sold from inventory editor") ||
+    (shippingMethod === "PICKUP" && channel === "POS" && customer.includes("odd"))
+  );
+}
+
 function shippingStatusBadge(status: string) {
   switch (status) {
     case "SHIPPED":
@@ -352,6 +365,9 @@ export default function CashierShipmentsPage() {
   const [activeCourier, setActiveCourier] = React.useState<string>("ALL");
   const [scanOrderId, setScanOrderId] = React.useState<string | null>(null);
   const [scanCourier, setScanCourier] = React.useState<string>("");
+  const [oddWheelsView, setOddWheelsView] = React.useState<
+    "UNSHIPPED" | "SHIPPED" | "ALL"
+  >("UNSHIPPED");
   const isAdmin = profile?.role === "admin";
 
   const shippingDays = React.useMemo(
@@ -394,6 +410,16 @@ export default function CashierShipmentsPage() {
     [orders]
   );
 
+  const oddWheelsSourceOrders = React.useMemo(
+    () =>
+      orders.filter((o) => {
+        const status = String(o.status ?? "").toUpperCase();
+        if (status === "CANCELLED" || status === "VOIDED") return false;
+        return isOddWheelsInternalOrder(o);
+      }),
+    [orders]
+  );
+
   const tabCounts = React.useMemo(() => {
     return paidOrders.reduce(
       (acc, o) => {
@@ -416,6 +442,32 @@ export default function CashierShipmentsPage() {
       ),
     [paidOrders, activeTab]
   );
+
+  const oddWheelsOrders = oddWheelsSourceOrders;
+
+  const oddWheelsItems = React.useMemo(() => {
+    const rows: Array<{ order: any; item: any; key: string }> = [];
+    for (const order of oddWheelsOrders) {
+      const items = itemsByOrderId[order.id] ?? [];
+      if (!items.length) {
+        rows.push({
+          order,
+          item: {
+            item_name: "Sold item",
+            qty: 1,
+            condition: null,
+            line_total: Number(order.total ?? 0),
+          },
+          key: `${order.id}-fallback`,
+        });
+        continue;
+      }
+      items.forEach((item: any, idx: number) => {
+        rows.push({ order, item, key: `${order.id}-${idx}` });
+      });
+    }
+    return rows;
+  }, [oddWheelsOrders, itemsByOrderId]);
 
   const selectedOrder = React.useMemo(() => {
     if (!detailOrderId) return null;
@@ -452,6 +504,28 @@ export default function CashierShipmentsPage() {
         ? preparingOrders
         : courierGroups[activeCourier] ?? []
       : [];
+
+  const oddWheelsCounts = React.useMemo(() => {
+    let shipped = 0;
+    let unshipped = 0;
+    for (const row of oddWheelsItems) {
+      const status = normalizeShippingStatus(row.order?.shipping_status);
+      const done = status === "SHIPPED" || status === "COMPLETED";
+      if (done) shipped += 1;
+      else unshipped += 1;
+    }
+    return { shipped, unshipped };
+  }, [oddWheelsItems]);
+
+  const oddWheelsVisibleItems = React.useMemo(() => {
+    return oddWheelsItems.filter((row) => {
+      const status = normalizeShippingStatus(row.order?.shipping_status);
+      const isShipped = status === "SHIPPED" || status === "COMPLETED";
+      if (oddWheelsView === "SHIPPED") return isShipped;
+      if (oddWheelsView === "UNSHIPPED") return !isShipped;
+      return true;
+    });
+  }, [oddWheelsItems, oddWheelsView]);
 
   React.useEffect(() => {
     if (activeTab !== "PREPARING TO SHIP") return;
@@ -501,6 +575,41 @@ export default function CashierShipmentsPage() {
         ...cur,
         [orderId]: err?.message ?? "Action failed.",
       }));
+    } finally {
+      setBusyById((cur) => ({ ...cur, [orderId]: false }));
+    }
+  }
+
+  async function setOddWheelsShipment(orderId: string, markShipped: boolean) {
+    setBusyById((cur) => ({ ...cur, [orderId]: true }));
+    setErrorById((cur) => ({ ...cur, [orderId]: "" }));
+    try {
+      const payload = markShipped
+        ? {
+            shipping_status: "SHIPPED",
+            shipped_at: new Date().toISOString(),
+            completed_at: null,
+            courier: "PICKUP",
+          }
+        : {
+            shipping_status: "PREPARING TO SHIP",
+            shipped_at: null,
+            completed_at: null,
+            tracking_number: null,
+            courier: null,
+          };
+      const { error } = await supabase.from("orders").update(payload).eq("id", orderId);
+      if (error) throw error;
+      await reload();
+    } catch (err: any) {
+      setErrorById((cur) => ({
+        ...cur,
+        [orderId]: err?.message ?? "Update failed.",
+      }));
+      toast({
+        intent: "error",
+        message: err?.message ?? "Unable to update Odd Wheels shipment.",
+      });
     } finally {
       setBusyById((cur) => ({ ...cur, [orderId]: false }));
     }
@@ -993,6 +1102,108 @@ export default function CashierShipmentsPage() {
         </CardHeader>
 
         <CardBody className="space-y-4">
+          {activeTab === "PREPARING TO SHIP" && oddWheelsItems.length ? (
+            <details className="rounded-2xl border border-white/10 bg-bg-900/20 p-3" open>
+              <summary className="flex cursor-pointer items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold">Odd Wheels</div>
+                  <div className="text-xs text-white/60">
+                    Sold items from Inventory quick sell. Toggle check to mark shipped or unshipped.
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge>{oddWheelsItems.length} item{oddWheelsItems.length > 1 ? "s" : ""}</Badge>
+                  <Badge className="border-emerald-500/30 text-emerald-200">
+                    {oddWheelsCounts.shipped} shipped
+                  </Badge>
+                  <Badge className="border-yellow-500/30 text-yellow-200">
+                    {oddWheelsCounts.unshipped} unshipped
+                  </Badge>
+                </div>
+              </summary>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant={oddWheelsView === "UNSHIPPED" ? "primary" : "ghost"}
+                  onClick={() => setOddWheelsView("UNSHIPPED")}
+                >
+                  Unshipped ({oddWheelsCounts.unshipped})
+                </Button>
+                <Button
+                  size="sm"
+                  variant={oddWheelsView === "SHIPPED" ? "primary" : "ghost"}
+                  onClick={() => setOddWheelsView("SHIPPED")}
+                >
+                  Shipped ({oddWheelsCounts.shipped})
+                </Button>
+                <Button
+                  size="sm"
+                  variant={oddWheelsView === "ALL" ? "primary" : "ghost"}
+                  onClick={() => setOddWheelsView("ALL")}
+                >
+                  All ({oddWheelsItems.length})
+                </Button>
+              </div>
+              <div className="mt-3 max-h-[320px] space-y-2 overflow-y-auto pr-1">
+                {!oddWheelsVisibleItems.length ? (
+                  <div className="rounded-xl border border-white/10 bg-paper/5 p-3 text-sm text-white/60">
+                    No items in this view.
+                  </div>
+                ) : null}
+                {oddWheelsVisibleItems.map((row) => {
+                  const order = row.order;
+                  const item = row.item;
+                  const shippingStatus = normalizeShippingStatus(order?.shipping_status);
+                  const isShipped = shippingStatus === "SHIPPED" || shippingStatus === "COMPLETED";
+                  const busy = Boolean(busyById[order.id]);
+                  const title = getItemTitle(item);
+                  const condition = formatConditionLabel(
+                    item?.condition ?? item?.product_variant?.condition,
+                    { upper: true }
+                  );
+                  const qty = Number(item?.qty ?? 1);
+                  return (
+                    <div
+                      key={row.key}
+                      className="rounded-xl border border-white/10 bg-paper/5 p-2.5 flex items-center gap-2.5"
+                    >
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-9 w-9 p-0"
+                        aria-label={isShipped ? "Mark unshipped" : "Mark shipped"}
+                        title={isShipped ? "Mark unshipped" : "Mark shipped"}
+                        disabled={busy}
+                        onClick={() => setOddWheelsShipment(order.id, !isShipped)}
+                      >
+                        {isShipped ? (
+                          <CheckCircle2 className="h-5 w-5 text-emerald-300" />
+                        ) : (
+                          <Circle className="h-5 w-5 text-white/50" />
+                        )}
+                      </Button>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium truncate">{title}</div>
+                        <div className="text-xs text-white/60">
+                          #{String(order.id).slice(0, 8)}
+                          {condition ? ` - ${condition}` : ""}
+                          {qty ? ` - Qty ${qty}` : ""}
+                        </div>
+                        {errorById[order.id] ? (
+                          <div className="mt-1 text-xs text-red-200">{errorById[order.id]}</div>
+                        ) : null}
+                      </div>
+                      <Badge className={isShipped ? "border-emerald-500/30 text-emerald-200" : "border-yellow-500/30 text-yellow-200"}>
+                        {isShipped ? "Shipped" : "Unshipped"}
+                      </Badge>
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
+          ) : null}
+
           <div className="flex flex-wrap gap-2">
             {SHIPPING_TABS.map((tab) => {
               const active = activeTab === tab.key;
@@ -1121,6 +1332,7 @@ export default function CashierShipmentsPage() {
             {filtered.map((o: any) => {
               const details = parseJsonMaybe(o.shipping_details) ?? {};
               const method = String(details.method ?? o.shipping_method ?? "");
+              const shippingStatus = normalizeShippingStatus(o.shipping_status);
               const customerName = getCustomerName(o, details);
               const customerPhone =
                 details.receiver_phone ||
@@ -1128,6 +1340,7 @@ export default function CashierShipmentsPage() {
                 o.customer_phone ||
                 o.contact ||
                 "";
+              const busy = Boolean(busyById[o.id]);
               const addressOrBranch = getAddressOrBranch(method, details, o);
               const orderTotal = peso(Number(o.total ?? 0));
               const shippingContainer = formatShippingContainer(method, details);
@@ -1181,6 +1394,21 @@ export default function CashierShipmentsPage() {
                       >
                         <ScrollText className="h-6 w-6 text-white" />
                       </Button>
+                      {shippingStatus === "SHIPPED" ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() =>
+                            runRpc(o.id, "fn_mark_completed_staff", {
+                              p_order_id: o.id,
+                            })
+                          }
+                          disabled={busy}
+                          className="h-10 px-3 text-xs"
+                        >
+                          Mark completed
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
                 </div>

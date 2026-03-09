@@ -310,6 +310,9 @@ function formatDownloadCategory(row: SheetRow) {
 
 function formatDownloadTitle(category: string) {
   if (!category) return "Collection";
+  if (category.trim().toLowerCase() === NEW_ARRIVAL_CATEGORY.toLowerCase()) {
+    return category;
+  }
   return `${category} Collection`;
 }
 
@@ -3031,23 +3034,32 @@ export default function InventorySheetPage() {
             if (!row) {
               return `<div class="card empty"></div>`;
             }
-            const photoUrl = row.product?.image_urls?.[0] ?? "";
-            const fullUrl = photoUrl ? escapeHtml(photoUrl) : "";
-            const thumbUrl = photoUrl
-              ? getThumbUrl(photoUrl, {
-                  width: EXPORT_THUMB_WIDTH,
-                  height: EXPORT_THUMB_HEIGHT,
-                  quality: EXPORT_THUMB_QUALITY,
-                  format: "webp",
-                })
+            const rawUrls = (row.product?.image_urls ?? [])
+              .map((url) => String(url ?? "").trim())
+              .filter(Boolean);
+            const imageCandidates = Array.from(
+              new Set(
+                rawUrls.flatMap((url) => [
+                  getMaxQualityImageUrl(url),
+                  url,
+                  getThumbUrl(url, {
+                    width: EXPORT_THUMB_WIDTH,
+                    height: EXPORT_THUMB_HEIGHT,
+                    quality: EXPORT_THUMB_QUALITY,
+                    format: "webp",
+                  }),
+                ])
+              )
+            ).filter(Boolean);
+            const primaryUrl = imageCandidates[0] ? escapeHtml(imageCandidates[0]) : "";
+            const fallbackSources = escapeHtml(
+              JSON.stringify(imageCandidates.slice(1))
+            );
+            const fallbackAttr = primaryUrl
+              ? ` data-fallback-index="0" data-fallback-sources="${fallbackSources}" onerror="window.__owFallbackImage && window.__owFallbackImage(this)"`
               : "";
-            const fallbackAttr = thumbUrl
-              ? ` onerror="this.onerror=null;this.src=&quot;${escapeHtml(
-                  thumbUrl
-                )}&quot;;"`
-              : "";
-            const imageCell = fullUrl
-              ? `<img src="${fullUrl}" alt="" loading="lazy" decoding="async" width="${EXPORT_THUMB_WIDTH}" height="${EXPORT_THUMB_HEIGHT}"${fallbackAttr}/>`
+            const imageCell = primaryUrl
+              ? `<img src="${primaryUrl}" alt="" loading="lazy" decoding="async" width="${EXPORT_THUMB_WIDTH}" height="${EXPORT_THUMB_HEIGHT}"${fallbackAttr}/>`
               : `<div class="img-placeholder">No image</div>`;
             const cardBrand = escapeHtml(formatBrand(row).toUpperCase());
             const titleText = escapeHtml(formatName(row));
@@ -3289,6 +3301,66 @@ export default function InventorySheetPage() {
   </head>
   <body>
     ${pagesHtml}
+    <script>
+      (function () {
+        function addPlaceholder(img) {
+          if (!img || !img.closest) return;
+          var holder = img.closest(".card-image");
+          if (!holder) return;
+          if (holder.querySelector(".img-placeholder")) return;
+          var node = document.createElement("div");
+          node.className = "img-placeholder";
+          node.textContent = "No image";
+          holder.appendChild(node);
+        }
+
+        window.__owFallbackImage = function (img) {
+          if (!img) return;
+          var raw = img.getAttribute("data-fallback-sources") || "[]";
+          var list = [];
+          try {
+            var parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) list = parsed;
+          } catch (_err) {}
+
+          var index = Number(img.getAttribute("data-fallback-index") || "0");
+          while (index < list.length) {
+            var next = String(list[index] || "").trim();
+            index += 1;
+            img.setAttribute("data-fallback-index", String(index));
+            if (next) {
+              img.src = next;
+              return;
+            }
+          }
+
+          img.onerror = null;
+          addPlaceholder(img);
+          if (img.parentNode) img.parentNode.removeChild(img);
+        };
+
+        document.addEventListener("DOMContentLoaded", function () {
+          var images = document.querySelectorAll(".card-image img");
+          images.forEach(function (img) {
+            var settled = false;
+            var timeout = setTimeout(function () {
+              if (settled) return;
+              if (!img.complete || img.naturalWidth === 0) {
+                window.__owFallbackImage(img);
+              }
+            }, 7000);
+            img.addEventListener("load", function () {
+              settled = true;
+              clearTimeout(timeout);
+            });
+            img.addEventListener("error", function () {
+              settled = true;
+              clearTimeout(timeout);
+            });
+          });
+        });
+      })();
+    </script>
   </body>
 </html>`;
 
@@ -3346,23 +3418,24 @@ export default function InventorySheetPage() {
         const page = pages[index];
         const images = await Promise.all(
           page.rows.map(async (row) => {
-            const imageUrl = row.product?.image_urls?.[0] ?? "";
-            const maxQualityUrl = imageUrl
-              ? getMaxQualityImageUrl(imageUrl)
-              : "";
-            const thumbUrl = imageUrl
-              ? getThumbUrl(imageUrl, {
-                  width: EXPORT_THUMB_WIDTH,
-                  height: EXPORT_THUMB_HEIGHT,
-                  quality: EXPORT_THUMB_QUALITY,
-                  format: "webp",
-                })
-              : "";
-            return await loadImageFromCandidates([
-              maxQualityUrl,
-              imageUrl,
-              thumbUrl,
-            ]);
+            const rawUrls = (row.product?.image_urls ?? [])
+              .map((url) => String(url ?? "").trim())
+              .filter(Boolean);
+            const imageCandidates = Array.from(
+              new Set(
+                rawUrls.flatMap((url) => [
+                  getMaxQualityImageUrl(url),
+                  url,
+                  getThumbUrl(url, {
+                    width: EXPORT_THUMB_WIDTH,
+                    height: EXPORT_THUMB_HEIGHT,
+                    quality: EXPORT_THUMB_QUALITY,
+                    format: "webp",
+                  }),
+                ])
+              )
+            ).filter(Boolean);
+            return await loadImageFromCandidates(imageCandidates);
           })
         );
         while (images.length < GRID_PAGE_SIZE) images.push(null);

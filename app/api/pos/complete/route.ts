@@ -8,6 +8,7 @@ export async function POST(req: Request) {
 
     const payload = await req.json().catch(() => null);
     const orderId: string | undefined = payload?.orderId ?? payload?.order_id;
+    const forceToShip = payload?.markToShip === true;
     if (!orderId) {
       return NextResponse.json({ ok: false, error: "Missing orderId" }, { status: 400 });
     }
@@ -15,7 +16,9 @@ export async function POST(req: Request) {
     const sb = authResult.sb;
     let { data: order, error: orderError } = await sb
       .from("orders")
-      .select("id,user_id,payment_status,inventory_deducted")
+      .select(
+        "id,user_id,payment_status,inventory_deducted,customer_name,shipping_method,shipping_details,channel"
+      )
       .eq("id", orderId)
       .maybeSingle();
 
@@ -24,11 +27,15 @@ export async function POST(req: Request) {
     if (needsFallback) {
       const fallback = await sb
         .from("orders")
-        .select("id,payment_status")
+        .select("id,payment_status,customer_name,shipping_method,shipping_details,channel")
         .eq("id", orderId)
         .maybeSingle();
       order = fallback.data
-        ? { ...fallback.data, inventory_deducted: false, user_id: null }
+        ? {
+            ...fallback.data,
+            inventory_deducted: false,
+            user_id: null,
+          }
         : null;
       orderError = fallback.error;
     }
@@ -43,22 +50,33 @@ export async function POST(req: Request) {
     const paymentStatus = String(order.payment_status ?? "").toUpperCase();
     const inventoryDeducted = Boolean(order.inventory_deducted);
     const hasUserId = Boolean(order.user_id);
+    const shippingDetails =
+      order.shipping_details && typeof order.shipping_details === "object"
+        ? order.shipping_details
+        : {};
+    const shippingText = String(shippingDetails?.text ?? "").toLowerCase();
+    const customerName = String(order.customer_name ?? "").toLowerCase();
+    const shippingMethod = String(order.shipping_method ?? "").toUpperCase();
+    const channel = String(order.channel ?? "").toUpperCase();
+    const autoOddWheelsToShip =
+      customerName.includes("odd wheels") ||
+      shippingText.includes("auto-sold from inventory editor") ||
+      (shippingMethod === "PICKUP" && channel === "POS" && customerName.includes("odd"));
+    const markToShip = forceToShip || autoOddWheelsToShip;
 
     if (paymentStatus !== "PAID") {
       if (inventoryDeducted || !hasUserId) {
-        if (hasUserId) {
-          const { error: updateError } = await sb
-            .from("orders")
-            .update({
-              payment_status: "PAID",
-              status: "PAID",
-              paid_at: new Date().toISOString(),
-            })
-            .eq("id", orderId);
+        const { error: updateError } = await sb
+          .from("orders")
+          .update({
+            payment_status: "PAID",
+            status: "PAID",
+            paid_at: new Date().toISOString(),
+          })
+          .eq("id", orderId);
 
-          if (updateError) {
-            return NextResponse.json({ ok: false, error: updateError.message }, { status: 200 });
-          }
+        if (updateError) {
+          return NextResponse.json({ ok: false, error: updateError.message }, { status: 200 });
         }
       } else {
         const { error: rpcError } = await sb.rpc("fn_process_paid_order", {
@@ -73,10 +91,20 @@ export async function POST(req: Request) {
 
     const { error: completeError } = await sb
       .from("orders")
-      .update({
-        shipping_status: "COMPLETED",
-        completed_at: new Date().toISOString(),
-      })
+      .update(
+        markToShip
+          ? {
+              shipping_status: "PREPARING TO SHIP",
+              shipped_at: null,
+              completed_at: null,
+              tracking_number: null,
+              courier: null,
+            }
+          : {
+              shipping_status: "COMPLETED",
+              completed_at: new Date().toISOString(),
+            }
+      )
       .eq("id", orderId);
 
     if (completeError) {

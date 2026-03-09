@@ -64,6 +64,14 @@ const SHOP_SORT_OPTIONS: Array<{ value: "relevance" | "newest" | "popular"; labe
   { value: "newest", label: "Newest" },
   { value: "popular", label: "Most Popular" },
 ];
+const PREPARING_SHIPPING_STATUSES = [
+  "PREPARING",
+  "PREPARING_TO_SHIP",
+  "PREPARING TO SHIP",
+  "TO_SHIP",
+  "PENDING_SHIPMENT",
+  "NONE",
+];
 
 export function SiteHeader() {
   const { user } = useAuth();
@@ -432,13 +440,7 @@ export function SiteHeader() {
           .select("id", { count: "exact", head: true })
           .eq("payment_status", "PAID")
           .not("status", "in", "(CANCELLED,VOIDED)")
-          .in("shipping_status", [
-            "PREPARING",
-            "PREPARING_TO_SHIP",
-            "TO_SHIP",
-            "PENDING_SHIPMENT",
-            "NONE",
-          ]),
+          .in("shipping_status", PREPARING_SHIPPING_STATUSES),
         supabase
           .from("orders")
           .select("id", { count: "exact", head: true })
@@ -446,6 +448,16 @@ export function SiteHeader() {
           .not("status", "in", "(CANCELLED,VOIDED)")
           .is("shipping_status", null),
       ]);
+
+    const firstError =
+      pendingOrders.error ||
+      sellTrade.error ||
+      preparingShipA.error ||
+      preparingShipB.error;
+    if (firstError) {
+      console.error("Failed to load staff nav counts:", firstError);
+      return;
+    }
 
     setStaffCounts({
       pendingApproval: pendingOrders.count ?? 0,

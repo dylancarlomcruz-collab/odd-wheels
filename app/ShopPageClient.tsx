@@ -1273,7 +1273,7 @@ export default function ShopPageClient() {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ orderId }),
+      body: JSON.stringify({ orderId, markToShip: true }),
     });
     const payload = await res.json().catch(() => null);
     if (!res.ok || !payload?.ok) {
@@ -1298,7 +1298,7 @@ export default function ShopPageClient() {
     toast({
       intent: "success",
       title: "Marked sold",
-      message: `1 qty sold via POS as Odd Wheels FB (${formatConditionLabel(option.condition, {
+      message: `1 qty sold as Odd Wheels FB and added to To Ship (${formatConditionLabel(option.condition, {
         upper: true,
       })}).`,
       image_url: product.image_url,

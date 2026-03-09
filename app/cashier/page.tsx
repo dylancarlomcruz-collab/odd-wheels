@@ -18,6 +18,7 @@ function normalizeShippingStatus(raw: string | null | undefined) {
   const status = String(raw ?? "").trim().toUpperCase();
   if (!status || status === "NONE") return "PREPARING_TO_SHIP";
   if (status === "PREPARING") return "PREPARING_TO_SHIP";
+  if (status === "PREPARING TO SHIP") return "PREPARING_TO_SHIP";
   if (status === "TO_SHIP" || status === "PENDING_SHIPMENT") return "PREPARING_TO_SHIP";
   return status;
 }
