@@ -4,7 +4,16 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CheckCircle2, Circle, ClipboardCopy, ScrollText } from "lucide-react";
+import {
+  Bluetooth,
+  BluetoothConnected,
+  CheckCircle2,
+  Circle,
+  ClipboardCopy,
+  Loader2,
+  Printer,
+  ScrollText,
+} from "lucide-react";
 import { useAllOrders } from "@/hooks/useAllOrders";
 import { useNotices } from "@/hooks/useNotices";
 import { useProfile } from "@/hooks/useProfile";
@@ -19,12 +28,24 @@ import { formatConditionLabel } from "@/lib/conditions";
 import { toast } from "@/components/ui/toast";
 
 const SHIPPING_TABS = [
+  { key: "TO BOOK", label: "To Book" },
   { key: "PREPARING TO SHIP", label: "Preparing to ship" },
   { key: "SHIPPED", label: "Shipped" },
   { key: "COMPLETED", label: "Completed" },
 ] as const;
 
 type ShippingTabKey = (typeof SHIPPING_TABS)[number]["key"];
+type ScanMode = "tracking" | "booking_reference";
+type ShippingDraft = {
+  courier: string;
+  tracking: string;
+  bookingReference: string;
+};
+const EMPTY_SHIPPING_DRAFT: ShippingDraft = {
+  courier: "",
+  tracking: "",
+  bookingReference: "",
+};
 
 function parseJsonMaybe(v: any) {
   if (!v) return null;
@@ -204,6 +225,53 @@ function normalizeShippingStatus(raw: string | null | undefined) {
   return status;
 }
 
+function getOrderShippingMethod(order: any, details?: Record<string, any>) {
+  const data = details ?? (parseJsonMaybe(order?.shipping_details) ?? {});
+  return String(data?.method ?? order?.shipping_method ?? "").trim().toUpperCase();
+}
+
+function isLbcOrder(order: any, details?: Record<string, any>) {
+  return getOrderShippingMethod(order, details) === "LBC";
+}
+
+function isWebsiteOrder(order: any) {
+  const channel = String(order?.channel ?? "").trim().toUpperCase();
+  if (!channel) return true;
+  return channel !== "POS";
+}
+
+function getLbcBookingReference(order: any, details?: Record<string, any>) {
+  const data = details ?? (parseJsonMaybe(order?.shipping_details) ?? {});
+  const candidates = [
+    data?.lbc_booking_reference,
+    data?.booking_reference,
+    data?.bookingReference,
+    data?.reference_number,
+    data?.referenceNo,
+  ];
+  for (const value of candidates) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function resolveShippingStage(order: any, details?: Record<string, any>): ShippingTabKey {
+  const status = normalizeShippingStatus(order?.shipping_status);
+  if (status === "SHIPPED" || status === "COMPLETED") return status;
+
+  if (
+    status === "PREPARING TO SHIP" &&
+    isWebsiteOrder(order) &&
+    isLbcOrder(order, details) &&
+    !getLbcBookingReference(order, details)
+  ) {
+    return "TO BOOK";
+  }
+
+  return "PREPARING TO SHIP";
+}
+
 function isOddWheelsInternalOrder(order: any) {
   const customer = String(order?.customer_name ?? "").trim().toLowerCase();
   const shippingMethod = String(order?.shipping_method ?? "").trim().toUpperCase();
@@ -219,6 +287,8 @@ function isOddWheelsInternalOrder(order: any) {
 
 function shippingStatusBadge(status: string) {
   switch (status) {
+    case "TO BOOK":
+      return "border-fuchsia-500/30 text-fuchsia-200";
     case "SHIPPED":
       return "border-sky-500/30 text-sky-200";
     case "COMPLETED":
@@ -265,6 +335,7 @@ function buildShippingSummary(o: any, details: Record<string, any>) {
       .join(", ") || null;
   const notes = details.notes || details.note || null;
   const pack = details.package || details.package_size || null;
+  const bookingReference = getLbcBookingReference(o, details) || null;
 
   return [
     { label: "Method", value: o.shipping_method },
@@ -274,6 +345,7 @@ function buildShippingSummary(o: any, details: Record<string, any>) {
     { label: "Address", value: address || null },
     { label: "Branch", value: branch },
     { label: "Package", value: pack },
+    { label: "LBC Booking Ref", value: bookingReference },
     { label: "Notes", value: notes },
   ].filter((row) => row.value);
 }
@@ -303,6 +375,136 @@ function pickShippingDays(notices: { title: string; body: string }[]) {
   const fallback = String(candidate.body ?? candidate.title ?? "").trim();
   if (!fallback) return null;
   return fallback.split("\n")[0].trim();
+}
+
+const B1_LABEL_WIDTH_MM = 50;
+const B1_LABEL_HEIGHT_MM = 30;
+const B1_LABEL_DP_MM = 8;
+
+type ShippingLabelData = {
+  orderShortId: string;
+  createdDate: string;
+  customerName: string;
+  customerPhone: string;
+  address: string;
+  courier: string;
+  tracking: string;
+  itemSummary: string;
+  total: string;
+};
+
+function wrapCanvasText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  maxLines: number
+) {
+  const normalized = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+
+  const words = normalized.split(" ");
+  const lines: string[] = [];
+  let current = "";
+
+  const pushLine = (value: string) => {
+    if (!value) return;
+    if (lines.length >= maxLines) return;
+    lines.push(value);
+  };
+
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (ctx.measureText(candidate).width <= maxWidth) {
+      current = candidate;
+      continue;
+    }
+
+    if (current) {
+      pushLine(current);
+      current = "";
+      if (lines.length >= maxLines) break;
+    }
+
+    if (ctx.measureText(word).width <= maxWidth) {
+      current = word;
+      continue;
+    }
+
+    let chunk = "";
+    for (const char of word) {
+      const next = chunk + char;
+      if (ctx.measureText(next).width <= maxWidth) {
+        chunk = next;
+        continue;
+      }
+      pushLine(chunk);
+      if (lines.length >= maxLines) break;
+      chunk = char;
+    }
+    if (lines.length >= maxLines) break;
+    current = chunk;
+  }
+
+  if (lines.length < maxLines && current) {
+    lines.push(current);
+  }
+
+  if (lines.length > maxLines) {
+    return lines.slice(0, maxLines);
+  }
+
+  return lines;
+}
+
+function createShippingLabelCanvas(data: ShippingLabelData) {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(B1_LABEL_WIDTH_MM * B1_LABEL_DP_MM);
+  canvas.height = Math.round(B1_LABEL_HEIGHT_MM * B1_LABEL_DP_MM);
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Unable to render label canvas.");
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#000000";
+  ctx.textBaseline = "top";
+
+  const paddingX = 12;
+  const maxWidth = canvas.width - paddingX * 2;
+  let y = 8;
+
+  ctx.font = "bold 18px Arial";
+  const title = "ODD WHEELS TO SHIP";
+  ctx.fillText(title, paddingX, y);
+  y += 22;
+
+  ctx.font = "12px Arial";
+  ctx.fillText(`Order #${data.orderShortId}   ${data.createdDate}`, paddingX, y);
+  y += 16;
+
+  const addField = (label: string, value: string, maxLines: number) => {
+    ctx.font = "bold 12px Arial";
+    ctx.fillText(`${label}:`, paddingX, y);
+    y += 13;
+
+    ctx.font = "12px Arial";
+    const lines = wrapCanvasText(ctx, value || "-", maxWidth, maxLines);
+    for (const line of lines) {
+      ctx.fillText(line, paddingX, y);
+      y += 13;
+    }
+    y += 2;
+  };
+
+  addField("Name", data.customerName, 2);
+  addField("Phone", data.customerPhone, 1);
+  addField("Address", data.address, 3);
+  addField("Courier", data.courier, 1);
+  addField("Tracking", data.tracking || "-", 1);
+  addField("Items", data.itemSummary, 2);
+  addField("Total", data.total, 1);
+
+  return canvas;
 }
 
 type OrderDetailsModalProps = {
@@ -356,18 +558,24 @@ export default function CashierShipmentsPage() {
   const [detailOrderId, setDetailOrderId] = React.useState<string | null>(null);
   const [selectedItem, setSelectedItem] = React.useState<any | null>(null);
   const [activeTab, setActiveTab] =
-    React.useState<ShippingTabKey>("PREPARING TO SHIP");
-  const [drafts, setDrafts] = React.useState<
-    Record<string, { courier: string; tracking: string }>
-  >({});
+    React.useState<ShippingTabKey>("TO BOOK");
+  const [drafts, setDrafts] = React.useState<Record<string, ShippingDraft>>({});
   const [busyById, setBusyById] = React.useState<Record<string, boolean>>({});
   const [errorById, setErrorById] = React.useState<Record<string, string>>({});
   const [activeCourier, setActiveCourier] = React.useState<string>("ALL");
   const [scanOrderId, setScanOrderId] = React.useState<string | null>(null);
   const [scanCourier, setScanCourier] = React.useState<string>("");
+  const [scanMode, setScanMode] = React.useState<ScanMode>("tracking");
   const [oddWheelsView, setOddWheelsView] = React.useState<
     "UNSHIPPED" | "SHIPPED" | "ALL"
   >("UNSHIPPED");
+  const [niimbotState, setNiimbotState] = React.useState<
+    "disconnected" | "connecting" | "connected"
+  >("disconnected");
+  const [niimbotPrinterName, setNiimbotPrinterName] = React.useState<string>("");
+  const [printingOrderId, setPrintingOrderId] = React.useState<string | null>(null);
+  const niimbotLibRef = React.useRef<any>(null);
+  const niimbotClientRef = React.useRef<any>(null);
   const isAdmin = profile?.role === "admin";
 
   const shippingDays = React.useMemo(
@@ -376,21 +584,109 @@ export default function CashierShipmentsPage() {
   );
   const shippingDaysLabel = shippingDays || "the posted shipping days";
 
+  const loadNiimbotLib = React.useCallback(async () => {
+    if (niimbotLibRef.current) return niimbotLibRef.current;
+    const lib = await import("@mmote/niimbluelib");
+    niimbotLibRef.current = lib;
+    return lib;
+  }, []);
+
+  const ensureNiimbotClient = React.useCallback(async () => {
+    const lib = await loadNiimbotLib();
+    if (!niimbotClientRef.current) {
+      const client = lib.instantiateClient("bluetooth");
+      client.on("connect", (event: any) => {
+        const name = String(event?.info?.deviceName ?? "").trim();
+        setNiimbotPrinterName(name);
+        setNiimbotState("connected");
+      });
+      client.on("disconnect", () => {
+        setNiimbotState("disconnected");
+        setNiimbotPrinterName("");
+      });
+      niimbotClientRef.current = client;
+    }
+
+    return { lib, client: niimbotClientRef.current };
+  }, [loadNiimbotLib]);
+
+  const connectNiimbot = React.useCallback(async () => {
+    if (niimbotState === "connecting" || niimbotState === "connected") return;
+    if (typeof window === "undefined" || !window.isSecureContext) {
+      toast({
+        intent: "error",
+        message: "Niimbot requires HTTPS (secure context).",
+      });
+      return;
+    }
+    if (!("bluetooth" in navigator)) {
+      toast({
+        intent: "error",
+        message: "Web Bluetooth is not supported in this browser.",
+      });
+      return;
+    }
+
+    setNiimbotState("connecting");
+    try {
+      const { client } = await ensureNiimbotClient();
+      await client.connect();
+      if (typeof client.fetchPrinterInfo === "function") {
+        await client.fetchPrinterInfo();
+      }
+      if (typeof client.startHeartbeat === "function") {
+        client.startHeartbeat();
+      }
+      toast({ intent: "success", message: "Niimbot connected." });
+    } catch (error: any) {
+      setNiimbotState("disconnected");
+      const message = String(error?.message ?? error ?? "Unable to connect Niimbot.");
+      toast({ intent: "error", message });
+    }
+  }, [ensureNiimbotClient, niimbotState]);
+
+  const disconnectNiimbot = React.useCallback(() => {
+    try {
+      niimbotClientRef.current?.disconnect?.();
+    } catch {
+      // Ignore disconnect failures.
+    } finally {
+      setNiimbotState("disconnected");
+      setNiimbotPrinterName("");
+    }
+  }, []);
+
   React.useEffect(() => {
     if (!orders.length) return;
     setDrafts((cur) => {
       const next = { ...cur };
       for (const o of orders) {
-        if (!next[o.id]) {
-          next[o.id] = {
-            courier: String(o.courier ?? o.shipping_method ?? ""),
-            tracking: String(o.tracking_number ?? ""),
-          };
-        }
+        const details = parseJsonMaybe(o.shipping_details) ?? {};
+        const existing = next[o.id];
+        next[o.id] = {
+          courier: existing?.courier ?? String(o.courier ?? o.shipping_method ?? ""),
+          tracking: existing?.tracking ?? String(o.tracking_number ?? ""),
+          bookingReference: existing?.bookingReference ?? getLbcBookingReference(o, details),
+        };
       }
       return next;
     });
   }, [orders]);
+
+  React.useEffect(() => {
+    return () => {
+      try {
+        niimbotClientRef.current?.disconnect?.();
+      } catch {
+        // Ignore cleanup disconnect failures.
+      }
+    };
+  }, []);
+
+  const getDraft = React.useCallback(
+    (orderId: string): ShippingDraft => drafts[orderId] ?? EMPTY_SHIPPING_DRAFT,
+    [drafts]
+  );
 
 
   const paidOrders = React.useMemo(
@@ -423,11 +719,12 @@ export default function CashierShipmentsPage() {
   const tabCounts = React.useMemo(() => {
     return paidOrders.reduce(
       (acc, o) => {
-        const status = normalizeShippingStatus(o.shipping_status);
+        const status = resolveShippingStage(o);
         if (acc[status] !== undefined) acc[status] += 1;
         return acc;
       },
       {
+        "TO BOOK": 0,
         "PREPARING TO SHIP": 0,
         SHIPPED: 0,
         COMPLETED: 0,
@@ -436,10 +733,7 @@ export default function CashierShipmentsPage() {
   }, [paidOrders]);
 
   const filtered = React.useMemo(
-    () =>
-      paidOrders.filter(
-        (o) => normalizeShippingStatus(o.shipping_status) === activeTab
-      ),
+    () => paidOrders.filter((o) => resolveShippingStage(o) === activeTab),
     [paidOrders, activeTab]
   );
 
@@ -477,21 +771,27 @@ export default function CashierShipmentsPage() {
   const preparingOrders = React.useMemo(
     () =>
       paidOrders.filter(
-        (o) => normalizeShippingStatus(o.shipping_status) === "PREPARING TO SHIP"
+        (o) => resolveShippingStage(o) === "PREPARING TO SHIP"
       ),
+    [paidOrders]
+  );
+
+  const toBookOrders = React.useMemo(
+    () =>
+      paidOrders.filter((o) => resolveShippingStage(o) === "TO BOOK"),
     [paidOrders]
   );
 
   const courierGroups = React.useMemo(() => {
     const grouped: Record<string, any[]> = {};
     for (const o of preparingOrders) {
-      const draft = drafts[o.id] ?? { courier: "", tracking: "" };
+      const draft = getDraft(o.id);
       const key = String(draft.courier || o.shipping_method || "Other").trim() || "Other";
       if (!grouped[key]) grouped[key] = [];
       grouped[key].push(o);
     }
     return grouped;
-  }, [preparingOrders, drafts]);
+  }, [preparingOrders, getDraft]);
 
   const courierTabs = React.useMemo(
     () => ["ALL", ...Object.keys(courierGroups).sort()],
@@ -637,24 +937,183 @@ export default function CashierShipmentsPage() {
     toast({ intent: "success", message: "Phone copied." });
   }
 
-  function onDraftChange(orderId: string, key: "courier" | "tracking", value: string) {
+  function onDraftChange(
+    orderId: string,
+    key: keyof ShippingDraft,
+    value: string
+  ) {
     setDrafts((cur) => ({
       ...cur,
-      [orderId]: { ...(cur[orderId] ?? { courier: "", tracking: "" }), [key]: value },
+      [orderId]: { ...(cur[orderId] ?? EMPTY_SHIPPING_DRAFT), [key]: value },
     }));
   }
+
+  async function saveBookingReference(orderId: string, referenceRaw: string) {
+    const reference = String(referenceRaw ?? "").trim();
+    if (!reference) {
+      setErrorById((cur) => ({ ...cur, [orderId]: "Booking reference is required." }));
+      return;
+    }
+
+    setBusyById((cur) => ({ ...cur, [orderId]: true }));
+    setErrorById((cur) => ({ ...cur, [orderId]: "" }));
+    try {
+      const order = orders.find((entry) => String(entry.id) === String(orderId));
+      if (!order) throw new Error("Order not found.");
+
+      const details = parseJsonMaybe(order.shipping_details) ?? {};
+      const nextDetails = {
+        ...details,
+        lbc_booking_reference: reference,
+        booking_reference: reference,
+      };
+
+      const { error } = await supabase
+        .from("orders")
+        .update({
+          shipping_status: "PREPARING TO SHIP",
+          shipping_details: nextDetails,
+        })
+        .eq("id", orderId);
+      if (error) throw error;
+
+      setDrafts((cur) => ({
+        ...cur,
+        [orderId]: { ...(cur[orderId] ?? EMPTY_SHIPPING_DRAFT), bookingReference: reference },
+      }));
+      toast({
+        intent: "success",
+        message: "Booking reference saved. Order moved to To Ship.",
+      });
+      await reload();
+    } catch (err: any) {
+      setErrorById((cur) => ({
+        ...cur,
+        [orderId]: err?.message ?? "Unable to save booking reference.",
+      }));
+      toast({
+        intent: "error",
+        message: err?.message ?? "Unable to save booking reference.",
+      });
+    } finally {
+      setBusyById((cur) => ({ ...cur, [orderId]: false }));
+    }
+  }
+
+  const printShippingLabel = React.useCallback(
+    async (order: any) => {
+      const orderId = String(order?.id ?? "");
+      if (!orderId) return;
+
+      setPrintingOrderId(orderId);
+      let client: any = null;
+      try {
+        const details = parseJsonMaybe(order.shipping_details) ?? {};
+        const items = itemsByOrderId[orderId] ?? [];
+        const shippingMethod = String(details.method ?? order.shipping_method ?? "").trim();
+        const shippingContainer = formatShippingContainer(shippingMethod, details);
+        const courierText = [shippingMethod, shippingContainer]
+          .filter(Boolean)
+          .join(" | ")
+          .trim();
+        const tracking = String(getDraft(orderId).tracking || order.tracking_number || "").trim();
+
+        const primaryItems = items
+          .slice(0, 2)
+          .map((it: any) => {
+            const title = getItemTitle(it);
+            const qty = Number(it?.qty ?? 1);
+            return `${title} x${qty}`;
+          })
+          .filter(Boolean);
+        const extraCount = Math.max(0, items.length - primaryItems.length);
+        const itemSummary =
+          primaryItems.join("; ") + (extraCount > 0 ? ` (+${extraCount} more)` : "");
+
+        const payload: ShippingLabelData = {
+          orderShortId: orderId.slice(0, 8),
+          createdDate: new Date(order.created_at ?? Date.now()).toLocaleDateString("en-PH"),
+          customerName: getCustomerName(order, details),
+          customerPhone: String(
+            details.receiver_phone || details.phone || order.customer_phone || order.contact || "-"
+          ).trim(),
+          address: String(getAddressOrBranch(shippingMethod, details, order) || "-").trim(),
+          courier: courierText || "Not set",
+          tracking,
+          itemSummary: itemSummary || "Items not available",
+          total: peso(Number(order.total ?? 0)),
+        };
+
+        const canvas = createShippingLabelCanvas(payload);
+        const niimbot = await ensureNiimbotClient();
+        const lib = niimbot.lib;
+        client = niimbot.client;
+
+        if (niimbotState !== "connected") {
+          setNiimbotState("connecting");
+          await client.connect();
+          if (typeof client.fetchPrinterInfo === "function") {
+            await client.fetchPrinterInfo();
+          }
+        }
+
+        if (typeof client.stopHeartbeat === "function") {
+          client.stopHeartbeat();
+        }
+
+        const printTaskName =
+          (typeof client.getPrintTaskType === "function" && client.getPrintTaskType()) || "B1";
+        const printTask = client.abstraction.newPrintTask(printTaskName, {
+          totalPages: 1,
+          density: 3,
+          speed: 1,
+          labelType: lib.LabelType.WithGaps,
+          statusPollIntervalMs: 100,
+          statusTimeoutMs: 8000,
+        });
+        const encoded = lib.ImageEncoder.encodeCanvas(canvas, "top");
+
+        await printTask.printInit();
+        await printTask.printPage(encoded, 1);
+        await printTask.waitForFinished();
+        await printTask.printEnd();
+
+        toast({
+          intent: "success",
+          message: `Printed shipping label for #${payload.orderShortId}.`,
+        });
+      } catch (error: any) {
+        const message = String(error?.message ?? error ?? "Unable to print shipping label.");
+        toast({ intent: "error", message });
+      } finally {
+        try {
+          if (client && typeof client.startHeartbeat === "function") {
+            client.startHeartbeat();
+          }
+        } catch {
+          // Ignore heartbeat restart failures.
+        }
+        setPrintingOrderId((cur) => (cur === orderId ? null : cur));
+      }
+    },
+    [ensureNiimbotClient, getDraft, itemsByOrderId, niimbotState]
+  );
 
   const renderShippingDetails = (o: any) => {
       const details = parseJsonMaybe(o.shipping_details) ?? {};
       const method = String(details.method ?? o.shipping_method ?? "");
       const isCop = String(method).toUpperCase() === "LBC" && Boolean(details.cop);
       const items = itemsByOrderId[o.id] ?? [];
-      const shippingStatus = normalizeShippingStatus(o.shipping_status);
+      const shippingStage = resolveShippingStage(o, details);
       const rawStatus = String(o.shipping_status ?? "").trim().toUpperCase();
       const needsPreparing = !rawStatus || rawStatus === "NONE";
       const rushFee = Number(o.rush_fee ?? 0);
       const priorityFee = Number(o.priority_fee ?? 0);
-      const draft = drafts[o.id] ?? { courier: "", tracking: "" };
+      const draft = getDraft(o.id);
+      const bookingReference = String(
+        draft.bookingReference || getLbcBookingReference(o, details) || ""
+      ).trim();
+      const canSaveBookingReference = bookingReference.length > 0;
       const canMarkShipped = draft.tracking.trim().length > 0;
       const busy = Boolean(busyById[o.id]);
       const error = errorById[o.id];
@@ -686,8 +1145,8 @@ export default function CashierShipmentsPage() {
           </div>
 
           <div className="mt-2 flex flex-wrap gap-2 text-xs">
-            <Badge className={shippingStatusBadge(shippingStatus)}>
-              {shippingStatus}
+            <Badge className={shippingStatusBadge(shippingStage)}>
+              {shippingStage}
             </Badge>
             <Badge>Channel: {o.channel}</Badge>
             <Badge>Status: {o.status}</Badge>
@@ -741,13 +1200,19 @@ export default function CashierShipmentsPage() {
             </div>
           </div>
 
-          {shippingStatus === "PREPARING TO SHIP" ? (
+          {shippingStage === "TO BOOK" ? (
+            <div className="mt-3 rounded-xl border border-fuchsia-500/30 bg-fuchsia-500/10 p-3 text-xs text-white/80">
+              This LBC order is waiting for an LBC booking reference. Add the reference to move this order to To Ship.
+            </div>
+          ) : null}
+
+          {shippingStage === "PREPARING TO SHIP" ? (
             <div className="mt-3 rounded-xl border border-accent-500/30 bg-accent-500/10 p-3 text-xs text-white/80">
               Ships on or before {shippingDaysLabel}. Add +P50 rush fee if requested.
             </div>
           ) : null}
 
-          {shippingStatus === "SHIPPED" ? (
+          {shippingStage === "SHIPPED" ? (
             <div className="mt-3 rounded-xl border border-sky-500/30 bg-sky-500/10 p-3 text-xs text-white/80">
               Shipment is on the way. Track in the {o.shipping_method} app.
               <div className="mt-2 text-xs text-white/70">
@@ -756,13 +1221,48 @@ export default function CashierShipmentsPage() {
             </div>
           ) : null}
 
-          {shippingStatus === "COMPLETED" ? (
+          {shippingStage === "COMPLETED" ? (
             <div className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-white/80">
               Completed{ o.completed_at ? ` on ${new Date(o.completed_at).toLocaleString("en-PH")}` : "."}
             </div>
           ) : null}
 
-          {shippingStatus === "PREPARING TO SHIP" ? (
+          {shippingStage === "TO BOOK" ? (
+            <div className="mt-3 grid gap-2 md:grid-cols-[1.2fr_auto_auto]">
+              <Input
+                label="LBC booking reference"
+                value={draft.bookingReference}
+                placeholder="Enter or scan LBC reference"
+                onChange={(e) => onDraftChange(o.id, "bookingReference", e.target.value)}
+                className="h-9 text-sm"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="self-end"
+                onClick={() => {
+                  setScanMode("booking_reference");
+                  setScanOrderId(o.id);
+                  setScanCourier("");
+                }}
+                disabled={busy}
+              >
+                Scan reference
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="self-end"
+                onClick={() => saveBookingReference(o.id, draft.bookingReference)}
+                disabled={busy || !canSaveBookingReference}
+              >
+                Save + move to To Ship
+              </Button>
+            </div>
+          ) : null}
+
+          {shippingStage === "PREPARING TO SHIP" ? (
             <div className="mt-3 grid gap-2 md:grid-cols-[1fr_1.2fr]">
               {isAdmin ? (
                 <Select
@@ -917,8 +1417,33 @@ export default function CashierShipmentsPage() {
             <Button size="sm" variant="secondary" onClick={() => onCopy(o)}>
               {copiedId === o.id ? "Copied!" : "Copy details"}
             </Button>
+            {shippingStage === "TO BOOK" ? (
+              <Button
+                size="sm"
+                onClick={() => saveBookingReference(o.id, draft.bookingReference)}
+                disabled={busy || !canSaveBookingReference}
+              >
+                Save booking ref + move to To Ship
+              </Button>
+            ) : null}
+            {shippingStage === "PREPARING TO SHIP" ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => printShippingLabel(o)}
+                disabled={printingOrderId === o.id}
+                className="gap-1.5"
+              >
+                {printingOrderId === o.id ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Printer className="h-3.5 w-3.5" />
+                )}
+                {printingOrderId === o.id ? "Printing..." : "Print label"}
+              </Button>
+            ) : null}
 
-            {shippingStatus === "PREPARING TO SHIP" ? (
+            {shippingStage === "PREPARING TO SHIP" ? (
               <>
                 <Button
                   size="sm"
@@ -963,7 +1488,7 @@ export default function CashierShipmentsPage() {
               </>
             ) : null}
 
-            {shippingStatus === "SHIPPED" ? (
+            {shippingStage === "SHIPPED" ? (
               <>
                 <Button
                   size="sm"
@@ -1220,6 +1745,82 @@ export default function CashierShipmentsPage() {
             })}
           </div>
 
+          {activeTab === "TO BOOK" ? (
+            <div className="rounded-2xl border border-white/10 bg-bg-900/20 p-3 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold">LBC booking reference entry</div>
+                  <div className="text-xs text-white/60">
+                    Website LBC orders stay here until an LBC booking reference is added.
+                  </div>
+                </div>
+                <Badge>{toBookOrders.length}</Badge>
+              </div>
+              {toBookOrders.length === 0 ? (
+                <div className="text-sm text-white/60">No orders waiting for booking reference.</div>
+              ) : (
+                <div className="space-y-2">
+                  {toBookOrders.map((o: any) => {
+                    const details = parseJsonMaybe(o.shipping_details) ?? {};
+                    const customerName = getCustomerName(o, details);
+                    const draft = getDraft(o.id);
+                    const canSave = draft.bookingReference.trim().length > 0;
+                    const busy = Boolean(busyById[o.id]);
+
+                    return (
+                      <div key={o.id} className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium truncate">{customerName}</div>
+                            <div className="text-xs text-white/50">
+                              #{String(o.id).slice(0, 8)} - LBC
+                            </div>
+                          </div>
+                          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+                            <Input
+                              value={draft.bookingReference}
+                              placeholder="LBC booking reference"
+                              onChange={(e) =>
+                                onDraftChange(o.id, "bookingReference", e.target.value)
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && canSave && !busy) {
+                                  saveBookingReference(o.id, draft.bookingReference);
+                                }
+                              }}
+                              className="h-8 w-full px-3 text-xs sm:w-56"
+                            />
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setScanMode("booking_reference");
+                                setScanOrderId(o.id);
+                                setScanCourier("");
+                              }}
+                              disabled={busy}
+                            >
+                              Scan
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={() => saveBookingReference(o.id, draft.bookingReference)}
+                              disabled={busy || !canSave}
+                            >
+                              Save + move to To Ship
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : null}
+
           {activeTab === "PREPARING TO SHIP" ? (
             <div className="rounded-2xl border border-white/10 bg-bg-900/20 p-3 space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1229,7 +1830,35 @@ export default function CashierShipmentsPage() {
                     Type or scan a waybill number. Focus the field and scan with a barcode scanner, or use camera scan.
                   </div>
                 </div>
-                <Badge>{bulkOrders.length}</Badge>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge>{bulkOrders.length}</Badge>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={niimbotState === "connected" ? "secondary" : "ghost"}
+                    onClick={connectNiimbot}
+                    disabled={niimbotState === "connecting"}
+                    className="gap-1.5"
+                  >
+                    {niimbotState === "connecting" ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : niimbotState === "connected" ? (
+                      <BluetoothConnected className="h-3.5 w-3.5" />
+                    ) : (
+                      <Bluetooth className="h-3.5 w-3.5" />
+                    )}
+                    {niimbotState === "connected"
+                      ? `Niimbot ${niimbotPrinterName ? `(${niimbotPrinterName})` : "Connected"}`
+                      : niimbotState === "connecting"
+                        ? "Connecting Niimbot..."
+                        : "Connect Niimbot B1"}
+                  </Button>
+                  {niimbotState === "connected" ? (
+                    <Button type="button" size="sm" variant="ghost" onClick={disconnectNiimbot}>
+                      Disconnect
+                    </Button>
+                  ) : null}
+                </div>
               </div>
               <div className="flex flex-wrap gap-2">
                 {courierTabs.map((tab) => {
@@ -1256,7 +1885,7 @@ export default function CashierShipmentsPage() {
                   {bulkOrders.map((o: any) => {
                     const details = parseJsonMaybe(o.shipping_details) ?? {};
                     const customerName = getCustomerName(o, details);
-                    const draft = drafts[o.id] ?? { courier: "", tracking: "" };
+                    const draft = getDraft(o.id);
                     const courierLabel = String(draft.courier || o.shipping_method || "").trim();
                     const canMarkShipped = draft.tracking.trim().length > 0;
                     const busy = Boolean(busyById[o.id]);
@@ -1292,12 +1921,28 @@ export default function CashierShipmentsPage() {
                                 size="sm"
                                 variant="ghost"
                                 onClick={() => {
+                                  setScanMode("tracking");
                                   setScanCourier(draft.courier || o.shipping_method || "");
                                   setScanOrderId(o.id);
                                 }}
                                 disabled={busy}
                               >
                               Scan
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => printShippingLabel(o)}
+                              disabled={busy || printingOrderId === o.id}
+                              className="gap-1.5"
+                            >
+                              {printingOrderId === o.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Printer className="h-3.5 w-3.5" />
+                              )}
+                              {printingOrderId === o.id ? "Printing..." : "Print label"}
                             </Button>
                             <Button
                               type="button"
@@ -1332,7 +1977,7 @@ export default function CashierShipmentsPage() {
             {filtered.map((o: any) => {
               const details = parseJsonMaybe(o.shipping_details) ?? {};
               const method = String(details.method ?? o.shipping_method ?? "");
-              const shippingStatus = normalizeShippingStatus(o.shipping_status);
+              const shippingStage = resolveShippingStage(o, details);
               const customerName = getCustomerName(o, details);
               const customerPhone =
                 details.receiver_phone ||
@@ -1394,7 +2039,24 @@ export default function CashierShipmentsPage() {
                       >
                         <ScrollText className="h-6 w-6 text-white" />
                       </Button>
-                      {shippingStatus === "SHIPPED" ? (
+                      {shippingStage === "PREPARING TO SHIP" ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="h-10 px-3 text-xs gap-1.5"
+                          onClick={() => printShippingLabel(o)}
+                          disabled={busy || printingOrderId === o.id}
+                        >
+                          {printingOrderId === o.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Printer className="h-3.5 w-3.5" />
+                          )}
+                          {printingOrderId === o.id ? "Printing..." : "Print label"}
+                        </Button>
+                      ) : null}
+                      {shippingStage === "SHIPPED" ? (
                         <Button
                           type="button"
                           size="sm"
@@ -1456,21 +2118,36 @@ export default function CashierShipmentsPage() {
         onClose={() => {
           setScanOrderId(null);
           setScanCourier("");
+          setScanMode("tracking");
         }}
-        title="Scan tracking number"
-        description="Point the camera at the waybill barcode. The code will fill in automatically."
+        title={
+          scanMode === "booking_reference"
+            ? "Scan LBC booking reference"
+            : "Scan tracking number"
+        }
+        description={
+          scanMode === "booking_reference"
+            ? "Point the camera at the LBC reference barcode. The code will fill in automatically."
+            : "Point the camera at the waybill barcode. The code will fill in automatically."
+        }
         onScan={async (value) => {
           const orderId = scanOrderId;
-          const tracking = String(value ?? "").trim();
-          if (!orderId || !tracking) return;
-          onDraftChange(orderId, "tracking", tracking);
-          await runRpc(orderId, "fn_mark_shipped", {
-            p_order_id: orderId,
-            p_courier: scanCourier,
-            p_tracking_number: tracking,
-          });
+          const scannedValue = String(value ?? "").trim();
+          if (!orderId || !scannedValue) return;
+          if (scanMode === "booking_reference") {
+            onDraftChange(orderId, "bookingReference", scannedValue);
+            await saveBookingReference(orderId, scannedValue);
+          } else {
+            onDraftChange(orderId, "tracking", scannedValue);
+            await runRpc(orderId, "fn_mark_shipped", {
+              p_order_id: orderId,
+              p_courier: scanCourier,
+              p_tracking_number: scannedValue,
+            });
+          }
           setScanOrderId(null);
           setScanCourier("");
+          setScanMode("tracking");
         }}
       />
     </div>

@@ -226,8 +226,82 @@ function blobToDataUrl(blob: Blob) {
   });
 }
 
-async function loadImageDataUrl(url: string, cache: Map<string, string | null>) {
-  const existing = cache.get(url);
+type InvoicePdfRenderOptions = {
+  includeImages: boolean;
+  imageQuality: number;
+  maxImageDimension: number;
+  photoSize: number;
+};
+
+const MAX_PDF_DOWNLOAD_BYTES = 24 * 1024 * 1024;
+const INVOICE_PDF_RENDER_STAGES: InvoicePdfRenderOptions[] = [
+  { includeImages: true, imageQuality: 0.68, maxImageDimension: 900, photoSize: 42 },
+  { includeImages: true, imageQuality: 0.55, maxImageDimension: 720, photoSize: 40 },
+  { includeImages: true, imageQuality: 0.42, maxImageDimension: 560, photoSize: 38 },
+  { includeImages: true, imageQuality: 0.32, maxImageDimension: 420, photoSize: 36 },
+  { includeImages: false, imageQuality: 0.28, maxImageDimension: 360, photoSize: 34 },
+];
+
+function formatPdfSize(bytes: number) {
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function downloadBlobAsFile(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+async function imageBlobToPdfDataUrl(
+  blob: Blob,
+  options: InvoicePdfRenderOptions
+): Promise<string> {
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("Image decode failed"));
+      el.src = objectUrl;
+    });
+
+    const srcW = Math.max(1, img.naturalWidth || 1);
+    const srcH = Math.max(1, img.naturalHeight || 1);
+    const scale =
+      Math.max(srcW, srcH) > options.maxImageDimension
+        ? options.maxImageDimension / Math.max(srcW, srcH)
+        : 1;
+    const outW = Math.max(1, Math.round(srcW * scale));
+    const outH = Math.max(1, Math.round(srcH * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      return await blobToDataUrl(blob);
+    }
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, outW, outH);
+    ctx.drawImage(img, 0, 0, outW, outH);
+    return canvas.toDataURL("image/jpeg", options.imageQuality);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function loadImageDataUrl(
+  url: string,
+  cache: Map<string, string | null>,
+  options: InvoicePdfRenderOptions
+) {
+  if (!options.includeImages) return null;
+  const cacheKey = `${url}::${options.maxImageDimension}::${options.imageQuality.toFixed(2)}`;
+  const existing = cache.get(cacheKey);
   if (existing !== undefined) return existing;
 
   try {
@@ -235,11 +309,11 @@ async function loadImageDataUrl(url: string, cache: Map<string, string | null>) 
     if (!response.ok) throw new Error(`Failed to fetch image: ${response.status}`);
     const blob = await response.blob();
     if (!blob.type.startsWith("image/")) throw new Error("URL is not an image.");
-    const dataUrl = await blobToDataUrl(blob);
-    cache.set(url, dataUrl);
+    const dataUrl = await imageBlobToPdfDataUrl(blob, options);
+    cache.set(cacheKey, dataUrl);
     return dataUrl;
   } catch {
-    cache.set(url, null);
+    cache.set(cacheKey, null);
     return null;
   }
 }
@@ -248,11 +322,14 @@ function imageFormatForDataUrl(dataUrl: string): "PNG" | "JPEG" {
   return dataUrl.startsWith("data:image/png") ? "PNG" : "JPEG";
 }
 
-async function exportCustomerInvoicePdf(row: VisitorRow, imageCache: Map<string, string | null>) {
+async function buildCustomerInvoicePdfBlob(
+  row: VisitorRow,
+  imageCache: Map<string, string | null>,
+  now: Date,
+  options: InvoicePdfRenderOptions
+) {
   const { jsPDF } = await import("jspdf");
-
   const doc = new jsPDF({ unit: "pt", format: "a4" });
-  const now = new Date();
   const generatedAt = now.toLocaleString("en-PH");
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -261,7 +338,7 @@ async function exportCustomerInvoicePdf(row: VisitorRow, imageCache: Map<string,
   const marginBottom = 48;
 
   const photoLeft = marginX;
-  const photoSize = 42;
+  const photoSize = options.photoSize;
   const nameLeft = photoLeft + photoSize + 12;
   const qtyCenter = pageWidth - 120;
   const amountRight = pageWidth - marginX;
@@ -277,12 +354,18 @@ async function exportCustomerInvoicePdf(row: VisitorRow, imageCache: Map<string,
     doc.text("ODD WHEELS", marginX, marginTop);
 
     doc.setFontSize(12);
-    doc.text(continued ? "Customer Cart Invoice (Continued)" : "Customer Cart Invoice", marginX, marginTop + 20);
+    doc.text(
+      continued ? "Customer Cart Invoice (Continued)" : "Customer Cart Invoice",
+      marginX,
+      marginTop + 20
+    );
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(70, 70, 70);
-    doc.text(`Generated: ${generatedAt}`, pageWidth - marginX, marginTop, { align: "right" });
+    doc.text(`Generated: ${generatedAt}`, pageWidth - marginX, marginTop, {
+      align: "right",
+    });
     doc.text(`Customer ID: ${customerIdShort}`, pageWidth - marginX, marginTop + 14, {
       align: "right",
     });
@@ -290,7 +373,10 @@ async function exportCustomerInvoicePdf(row: VisitorRow, imageCache: Map<string,
     doc.setFont("helvetica", "bold");
     doc.setFontSize(10);
     doc.setTextColor(20, 20, 20);
-    const nameLines = doc.splitTextToSize(`Customer: ${customerName}`, pageWidth - marginX * 2);
+    const nameLines = doc.splitTextToSize(
+      `Customer: ${customerName}`,
+      pageWidth - marginX * 2
+    );
     doc.text(nameLines, marginX, marginTop + 42);
 
     doc.setFont("helvetica", "normal");
@@ -331,13 +417,11 @@ async function exportCustomerInvoicePdf(row: VisitorRow, imageCache: Map<string,
       const productName = item.name?.trim() || "Item";
       const nameLines = doc.splitTextToSize(productName, nameMaxWidth);
       const details: string[] = [];
-      if (item.condition) {
-        details.push(`Condition: ${item.condition}`);
-      }
-      if (item.notes) {
-        details.push(`Notes: ${item.notes}`);
-      }
-      const detailLines = details.flatMap((line) => doc.splitTextToSize(line, nameMaxWidth));
+      if (item.condition) details.push(`Condition: ${item.condition}`);
+      if (item.notes) details.push(`Notes: ${item.notes}`);
+      const detailLines = details.flatMap((line) =>
+        doc.splitTextToSize(line, nameMaxWidth)
+      );
       const nameHeight =
         nameLines.length * 11 + (detailLines.length ? detailLines.length * 10 + 4 : 0);
       const rowHeight = Math.max(photoSize + 10, nameHeight + 12);
@@ -351,8 +435,8 @@ async function exportCustomerInvoicePdf(row: VisitorRow, imageCache: Map<string,
       doc.setDrawColor(235, 235, 235);
       doc.line(marginX, y + rowHeight, pageWidth - marginX, y + rowHeight);
 
-      if (item.imageUrl) {
-        const dataUrl = await loadImageDataUrl(item.imageUrl, imageCache);
+      if (options.includeImages && item.imageUrl) {
+        const dataUrl = await loadImageDataUrl(item.imageUrl, imageCache, options);
         if (dataUrl) {
           doc.addImage(
             dataUrl,
@@ -360,7 +444,9 @@ async function exportCustomerInvoicePdf(row: VisitorRow, imageCache: Map<string,
             photoLeft,
             y + 4,
             photoSize,
-            photoSize
+            photoSize,
+            undefined,
+            "FAST"
           );
         } else {
           doc.setDrawColor(215, 215, 215);
@@ -410,18 +496,45 @@ async function exportCustomerInvoicePdf(row: VisitorRow, imageCache: Map<string,
   doc.setFontSize(10);
   doc.text(`Total qty: ${row.cartQty}`, marginX, y + 48);
   doc.text(`Total lines: ${row.cartLines}`, marginX, y + 64);
-
   doc.text(`Total amount: ${pdfMoney(row.price)}`, pageWidth - marginX, y + 30, {
     align: "right",
   });
 
   doc.setFontSize(8);
   doc.setTextColor(120, 120, 120);
-  doc.text("Generated from current cart data in Admin > Cart Insights.", marginX, pageHeight - 26);
+  doc.text(
+    "Generated from current cart data in Admin > Cart Insights.",
+    marginX,
+    pageHeight - 26
+  );
 
+  return doc.output("blob") as Blob;
+}
+
+async function exportCustomerInvoicePdf(
+  row: VisitorRow,
+  imageCache: Map<string, string | null>
+) {
+  const now = new Date();
+  const customerIdShort = shortId(row.id);
+  const customerName = row.label?.trim() || `User ${customerIdShort}`;
   const fileDate = now.toISOString().slice(0, 10);
   const fileName = `invoice-${sanitizeFileName(customerName)}-${customerIdShort}-${fileDate}.pdf`;
-  doc.save(fileName);
+
+  let lastBlob: Blob | null = null;
+  for (const stage of INVOICE_PDF_RENDER_STAGES) {
+    const blob = await buildCustomerInvoicePdfBlob(row, imageCache, now, stage);
+    lastBlob = blob;
+    if (blob.size <= MAX_PDF_DOWNLOAD_BYTES) {
+      downloadBlobAsFile(blob, fileName);
+      return;
+    }
+  }
+
+  const finalSize = lastBlob ? formatPdfSize(lastBlob.size) : "unknown size";
+  throw new Error(
+    `Invoice PDF exceeds 24MB (${finalSize}) even after compression. Please reduce cart items/images and try again.`
+  );
 }
 
 export default function AdminCartInsightsPage() {
@@ -809,15 +922,23 @@ export default function AdminCartInsightsPage() {
           itemMap: new Map<string, VisitorItem>(),
         } as VisitorRow & { itemMap: Map<string, VisitorItem> });
         const customerDetails = customerDetailsMap.get(userId);
+        const customerName = customerDetails?.name?.trim() ?? "";
+        const customerUsername = customerDetails?.username?.trim() ?? "";
+        const customerEmail = customerDetails?.email?.trim() ?? "";
+        const emailAlias =
+          customerEmail && customerEmail.includes("@")
+            ? customerEmail.split("@")[0]?.trim() ?? ""
+            : "";
         const displayName =
-          customerDetails?.name?.trim() ||
-          customerDetails?.username?.trim() ||
+          customerName ||
+          customerUsername ||
+          emailAlias ||
           `User ${shortId(userId)}`;
         const clickInfo = userClickMap.get(userId);
         base.label = displayName;
-        base.customerName = customerDetails?.name?.trim() || displayName;
-        base.customerUsername = customerDetails?.username?.trim() ?? "";
-        base.customerEmail = customerDetails?.email?.trim() ?? "";
+        base.customerName = customerName || displayName;
+        base.customerUsername = customerUsername;
+        base.customerEmail = customerEmail;
         base.customerPhone = customerDetails?.contact?.trim() ?? "";
         base.clicks = clickInfo?.clicks ?? 0;
         base.lastActivity = maxDate(base.lastActivity, clickInfo?.last ?? null);
@@ -1320,12 +1441,6 @@ export default function AdminCartInsightsPage() {
                 {customerRows.map((row) => {
                   const panelKey = `${row.kind}-${row.id}`;
                   const expanded = expandedCustomerPanel === panelKey;
-                  const accountMeta = [
-                    row.customerUsername ? `@${row.customerUsername}` : null,
-                    row.customerEmail || null,
-                    row.customerPhone || null,
-                    `ID: ${shortId(row.id)}`,
-                  ].filter(Boolean);
                   return (
                     <div
                       key={panelKey}
@@ -1352,21 +1467,6 @@ export default function AdminCartInsightsPage() {
                           </div>
                           <div className="text-xs text-white/60">
                             {row.cartLines} line(s) | {row.cartQty} total qty
-                          </div>
-                          {accountMeta.length ? (
-                            <div className="text-xs text-sky-100/80">
-                              {accountMeta.join(" | ")}
-                            </div>
-                          ) : null}
-                          <div className="text-xs text-white/60">
-                            Price {peso(row.price)} | COGS {peso(row.cogs)} | Expected profit{" "}
-                            <span
-                              className={
-                                row.expectedProfit >= 0 ? "text-emerald-300" : "text-red-300"
-                              }
-                            >
-                              {peso(row.expectedProfit)}
-                            </span>
                           </div>
                           <div className="mt-1 inline-flex items-center gap-1 text-xs text-sky-200">
                             {expanded ? (

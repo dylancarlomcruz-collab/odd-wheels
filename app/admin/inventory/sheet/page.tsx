@@ -5,6 +5,8 @@ import { supabase } from "@/lib/supabase/browser";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { InventoryEditorDrawer } from "@/components/admin/InventoryEditorDrawer";
+import type { AdminProduct } from "@/components/admin/InventoryBrowseGrid";
 import { formatPHP } from "@/lib/money";
 import { getOptimizedImageUrl } from "@/lib/imageUrl";
 import {
@@ -37,6 +39,27 @@ type ExportRow = SheetRow & {
   price_max: number | null;
   qty_total: number | null;
   variant_count: number;
+};
+
+type GridPage = {
+  group: string;
+  rows: ExportRow[];
+};
+
+type ZipPageTask = GridPage & {
+  folderName: string;
+  fileName: string;
+};
+
+type PendingZipSession = {
+  zip: any;
+  totalPages: number;
+  renderedPages: number;
+  skippedNoImage: number;
+  pendingPages: ZipPageTask[];
+  unresolvedRenderedCount: number;
+  downloadName: string;
+  singleFolder: boolean;
 };
 
 const PAGE_SIZE = 200;
@@ -247,9 +270,7 @@ function isNewArrivalRow(row: SheetRow) {
   return Date.now() - addedTs <= cutoffMs;
 }
 
-function formatDownloadCategory(row: SheetRow) {
-  if (isNewArrivalRow(row)) return NEW_ARRIVAL_CATEGORY;
-
+function formatBaseDownloadCategory(row: SheetRow) {
   const shipClass = String(row.ship_class ?? "").toUpperCase().trim();
   const brandKey = normalizeCategoryBrand(formatBrand(row));
 
@@ -308,6 +329,42 @@ function formatDownloadCategory(row: SheetRow) {
   return baseCategory;
 }
 
+function formatBrandDownloadCategory(row: SheetRow) {
+  const brandKey = normalizeCategoryBrand(formatBrand(row));
+  if (INNO64_BRANDS.has(brandKey)) return "Inno64";
+  if (KAIDO_HOUSE_BRANDS.has(brandKey)) return "Kaido House";
+  if (POP_RACE_BRANDS.has(brandKey)) return "Pop Race";
+  if (TOMICA_BRANDS.has(brandKey)) return "Tomica";
+  if (HOT_WHEELS_BRANDS.has(brandKey)) return "Hot Wheels";
+  if (MINI_GT_BRANDS.has(brandKey)) {
+    return `Mini GT ${isJdmMarket(row) ? "JDM" : "EUR/US"}`;
+  }
+  return null;
+}
+
+function formatDownloadCategory(row: SheetRow) {
+  if (isNewArrivalRow(row)) return NEW_ARRIVAL_CATEGORY;
+  return formatBaseDownloadCategory(row);
+}
+
+function getRowDownloadCategories(row: SheetRow) {
+  const baseCategory = formatBaseDownloadCategory(row) || "Others";
+  if (isNewArrivalRow(row)) {
+    const brandCategory = formatBrandDownloadCategory(row);
+    return Array.from(
+      new Set(
+        [NEW_ARRIVAL_CATEGORY, baseCategory, brandCategory].filter(Boolean) as string[]
+      )
+    );
+  }
+  return [baseCategory];
+}
+
+function rowHasDownloadCategory(row: SheetRow, category: string) {
+  if (!category || category === ALL_CATEGORY) return true;
+  return getRowDownloadCategories(row).includes(category);
+}
+
 function formatDownloadTitle(category: string) {
   if (!category) return "Collection";
   if (category.trim().toLowerCase() === NEW_ARRIVAL_CATEGORY.toLowerCase()) {
@@ -318,9 +375,7 @@ function formatDownloadTitle(category: string) {
 
 function applyCategoryFilter(rows: SheetRow[], category: string) {
   if (!category || category === ALL_CATEGORY) return rows;
-  return rows.filter(
-    (row) => (formatDownloadCategory(row) || "Others") === category
-  );
+  return rows.filter((row) => rowHasDownloadCategory(row, category));
 }
 
 function isInStockRow(row: SheetRow) {
@@ -1132,7 +1187,7 @@ function buildRowSearchText(row: SheetRow) {
     row.product?.variation ?? "",
     formatCondition(row.condition),
     formatCompactCondition(row.condition),
-    formatDownloadCategory(row),
+    ...getRowDownloadCategories(row),
     formatShipClassSearch(row),
     ...getMarketSearchTags(row),
   ];
@@ -1215,6 +1270,17 @@ function getMaxQualityImageUrl(rawUrl: string) {
   } catch {
     return rawUrl;
   }
+}
+
+function getPrimaryImageCandidates(row: SheetRow) {
+  const firstUrl = String(row.product?.image_urls?.[0] ?? "").trim();
+  if (!firstUrl) return [] as string[];
+  // Export must always use only the product's first photo / thumbnail source.
+  return [firstUrl];
+}
+
+function hasPrimaryImage(row: SheetRow) {
+  return getPrimaryImageCandidates(row).length > 0;
 }
 
 function drawRoundedRect(
@@ -1382,26 +1448,54 @@ function canvasToBlob(canvas: HTMLCanvasElement, type = "image/png", quality = 0
 }
 
 async function loadImageBitmap(url: string) {
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    if ("createImageBitmap" in window) {
-      return await createImageBitmap(blob);
+  const MAX_ATTEMPTS = 2; // first try + one retry
+  const RETRY_DELAY_MS = 200;
+  const REQUEST_TIMEOUT_MS = 8_000;
+  const withRetryParam = (raw: string, attempt: number) => {
+    if (attempt <= 1) return raw;
+    const value = `${Date.now()}-${attempt}`;
+    try {
+      const parsed = new URL(raw, window.location.href);
+      parsed.searchParams.set("__ow_retry", value);
+      return parsed.toString();
+    } catch {
+      return `${raw}${raw.includes("?") ? "&" : "?"}__ow_retry=${value}`;
     }
-    const img = new Image();
-    const objectUrl = URL.createObjectURL(blob);
-    const imagePromise = new Promise<HTMLImageElement>((resolve, reject) => {
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error("Image failed to load"));
-    });
-    img.src = objectUrl;
-    const imageEl = await imagePromise;
-    URL.revokeObjectURL(objectUrl);
-    return imageEl;
-  } catch {
-    return null;
+  };
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    let objectUrl = "";
+    try {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      const response = await fetch(withRetryParam(url, attempt), {
+        signal: controller.signal,
+        cache: attempt > 1 ? "no-store" : "default",
+      });
+      window.clearTimeout(timer);
+      if (!response.ok) throw new Error(`Image request failed (${response.status})`);
+      const blob = await response.blob();
+      if ("createImageBitmap" in window) {
+        return await createImageBitmap(blob);
+      }
+      const img = new Image();
+      objectUrl = URL.createObjectURL(blob);
+      const imagePromise = new Promise<HTMLImageElement>((resolve, reject) => {
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("Image failed to load"));
+      });
+      img.src = objectUrl;
+      return await imagePromise;
+    } catch {
+      if (attempt >= MAX_ATTEMPTS) return null;
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, RETRY_DELAY_MS * attempt)
+      );
+    } finally {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    }
   }
+  return null;
 }
 
 async function loadImageFromCandidates(
@@ -1849,6 +1943,18 @@ export default function InventorySheetPage() {
   const [exportingCards, setExportingCards] = React.useState(false);
   const [exportingTenUp, setExportingTenUp] = React.useState(false);
   const [exportingEightUpZip, setExportingEightUpZip] = React.useState(false);
+  const [pendingZipPagesCount, setPendingZipPagesCount] = React.useState(0);
+  const [showZipRetryModal, setShowZipRetryModal] = React.useState(false);
+  const [zipRetryRows, setZipRetryRows] = React.useState<ExportRow[]>([]);
+  const [copiedZipRetryCode, setCopiedZipRetryCode] = React.useState<string | null>(
+    null
+  );
+  const [zipEditorProduct, setZipEditorProduct] = React.useState<AdminProduct | null>(
+    null
+  );
+  const [zipEditorOpeningId, setZipEditorOpeningId] = React.useState<string | null>(
+    null
+  );
   const [previewingCard, setPreviewingCard] = React.useState(false);
   const [exportMsg, setExportMsg] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState(false);
@@ -1862,6 +1968,7 @@ export default function InventorySheetPage() {
   >("download_category");
   const [syncingModel, setSyncingModel] = React.useState(false);
   const [brandSyncTick, setBrandSyncTick] = React.useState(0);
+  const pendingZipSessionRef = React.useRef<PendingZipSession | null>(null);
 
   const normalizedSearch = React.useMemo(
     () => normalizeSearchText(searchTerm),
@@ -1875,8 +1982,10 @@ export default function InventorySheetPage() {
   const availableCategories = React.useMemo(() => {
     const seen = new Set<string>();
     for (const row of rows) {
-      const category = formatDownloadCategory(row);
-      if (category) seen.add(category);
+      const categories = getRowDownloadCategories(row);
+      for (const category of categories) {
+        if (category) seen.add(category);
+      }
     }
     for (const category of DOWNLOAD_CATEGORY_ORDER) {
       if (category) seen.add(category);
@@ -1906,9 +2015,7 @@ export default function InventorySheetPage() {
       next = next.filter((row) => rowMatchesSearch(row, searchTokens));
     }
     if (categoryFilter !== ALL_CATEGORY) {
-      next = next.filter(
-        (row) => (formatDownloadCategory(row) || "Others") === categoryFilter
-      );
+      next = next.filter((row) => rowHasDownloadCategory(row, categoryFilter));
     }
     return next;
   }, [rows, searchTokens, categoryFilter, brandSyncTick]);
@@ -2105,6 +2212,259 @@ export default function InventorySheetPage() {
       rows: applyCategoryFilter(inStockRows, categoryFilter),
       scope: "category" as const,
     };
+  }
+
+  const hasPendingZipResume = pendingZipPagesCount > 0;
+
+  function setPendingZipSession(next: PendingZipSession | null) {
+    pendingZipSessionRef.current = next;
+    setPendingZipPagesCount(next?.pendingPages.length ?? 0);
+  }
+
+  function uniqueRowsById(source: ExportRow[]) {
+    const seen = new Set<string>();
+    const list: ExportRow[] = [];
+    for (const row of source) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      list.push(row);
+    }
+    return list;
+  }
+
+  function closeCanvasImages(images: Array<ImageBitmap | HTMLImageElement | null>) {
+    for (const image of images) {
+      if (image && "close" in image) {
+        try {
+          (image as ImageBitmap).close();
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  function mergeExportRowWithLatest(row: ExportRow, latest: SheetRow | undefined) {
+    if (!latest) return row;
+    return {
+      ...row,
+      ...latest,
+      product: latest.product,
+    } as ExportRow;
+  }
+
+  function buildZipPageTasks(
+    pages: GridPage[],
+    options?: { singleFolder?: boolean }
+  ) {
+    const singleFolder = Boolean(options?.singleFolder);
+    const perGroupCount = new Map<string, number>();
+    return pages.map((page) => {
+      const folderName = fileSafe(page.group || "Unassigned", 60) || "Unassigned";
+      const next = (perGroupCount.get(folderName) ?? 0) + 1;
+      perGroupCount.set(folderName, next);
+      const fileName = singleFolder
+        ? `${folderName}_page_${next}.png`
+        : `page_${String(next).padStart(3, "0")}.png`;
+      return {
+        ...page,
+        folderName: singleFolder ? "" : folderName,
+        fileName,
+      } as ZipPageTask;
+    });
+  }
+
+  async function processZipPagesPass(params: {
+    pages: ZipPageTask[];
+    zip: any;
+    totalPages: number;
+    renderedSoFar: number;
+    deferFailedPages: boolean;
+  }) {
+    const canvas = document.createElement("canvas");
+    canvas.width = EIGHT_UP_WIDTH;
+    canvas.height = EIGHT_UP_HEIGHT;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas not available.");
+
+    const deferredPages: ZipPageTask[] = [];
+    const failedRows: ExportRow[] = [];
+    let renderedPages = 0;
+    let unresolvedRenderedCount = 0;
+
+    for (let index = 0; index < params.pages.length; index += 1) {
+      const page = params.pages[index];
+      const pageImages = await Promise.all(
+        page.rows.map(async (row) => {
+          const imageCandidates = getPrimaryImageCandidates(row);
+          const image = await loadImageFromCandidates(imageCandidates);
+          return { row, image, imageCandidates };
+        })
+      );
+
+      const unresolvedRows = pageImages.filter((item) => !item.image).map((item) => item.row);
+      if (unresolvedRows.length && params.deferFailedPages) {
+        deferredPages.push(page);
+        failedRows.push(...unresolvedRows);
+        closeCanvasImages(pageImages.map((item) => item.image));
+      } else {
+        const images = pageImages.map((item) => item.image) as Array<
+          ImageBitmap | HTMLImageElement | null
+        >;
+        unresolvedRenderedCount += unresolvedRows.length;
+        while (images.length < GRID_PAGE_SIZE) images.push(null);
+        renderEightUpCanvas(ctx, page.rows, images, page.group);
+        const blob = await canvasToBlob(canvas, "image/png");
+        const groupFolder = page.folderName
+          ? params.zip.folder(page.folderName) ?? params.zip
+          : params.zip;
+        groupFolder.file(page.fileName, blob);
+        closeCanvasImages(images);
+        renderedPages += 1;
+      }
+
+      const inspected = index + 1;
+      if (inspected % 3 === 0 || inspected === params.pages.length) {
+        const done = params.renderedSoFar + renderedPages;
+        const deferred = deferredPages.length;
+        setExportMsg(
+          `Rendering ${done} of ${params.totalPages} pages${
+            deferred ? ` | deferred ${deferred}` : ""
+          }...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
+
+    return {
+      deferredPages,
+      failedRows,
+      renderedPages,
+      unresolvedRenderedCount,
+    };
+  }
+
+  async function finalizeZipDownload(session: PendingZipSession) {
+    const zipBlob = await session.zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(zipBlob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = session.downloadName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    const summary = [`4-up ZIP downloaded (${session.totalPages} pages).`];
+    if (session.singleFolder) {
+      summary.push("All pages were saved in one folder (flat ZIP).");
+    }
+    if (session.skippedNoImage > 0) {
+      summary.push(`Skipped ${session.skippedNoImage} item(s) without thumbnail.`);
+    }
+    if (session.unresolvedRenderedCount > 0) {
+      summary.push(
+        `${session.unresolvedRenderedCount} image(s) still failed after retries and were rendered as "No image".`
+      );
+    }
+    setExportMsg(summary.join(" "));
+    setZipRetryRows([]);
+    setShowZipRetryModal(false);
+    setCopiedZipRetryCode(null);
+    setPendingZipSession(null);
+  }
+
+  async function resumeEightUpZipGeneration(forceFinish = false) {
+    if (exportingEightUpZip) return;
+    const existing = pendingZipSessionRef.current;
+    if (!existing) return;
+
+    setShowZipRetryModal(false);
+    setExportingEightUpZip(true);
+    setError(null);
+    setExportMsg(
+      forceFinish
+        ? "Finishing ZIP with unresolved items included..."
+        : "Refreshing deferred items and retrying..."
+    );
+
+    try {
+      let pagesForRetry = existing.pendingPages;
+      if (!forceFinish) {
+        const latestRows = await fetchAllRows();
+        const latestMap = new Map(latestRows.map((row) => [row.id, row]));
+        pagesForRetry = existing.pendingPages.map((page) => ({
+          folderName: page.folderName,
+          fileName: page.fileName,
+          group: page.group,
+          rows: page.rows.map((row) =>
+            mergeExportRowWithLatest(row, latestMap.get(row.id))
+          ),
+        }));
+      }
+
+      const pass = await processZipPagesPass({
+        pages: pagesForRetry,
+        zip: existing.zip,
+        totalPages: existing.totalPages,
+        renderedSoFar: existing.renderedPages,
+        deferFailedPages: !forceFinish,
+      });
+
+      const nextSession: PendingZipSession = {
+        ...existing,
+        renderedPages: existing.renderedPages + pass.renderedPages,
+        pendingPages: pass.deferredPages,
+        unresolvedRenderedCount:
+          existing.unresolvedRenderedCount + pass.unresolvedRenderedCount,
+      };
+
+      if (nextSession.pendingPages.length > 0) {
+        setPendingZipSession(nextSession);
+        const issueRows = uniqueRowsById(pass.failedRows);
+        setZipRetryRows(issueRows);
+        setShowZipRetryModal(true);
+        setExportMsg(
+          `ZIP paused: ${nextSession.pendingPages.length} page(s) still need first-photo download. Edit those product photos and click Retry & Resume ZIP.`
+        );
+        return;
+      }
+
+      await finalizeZipDownload(nextSession);
+    } catch (err: any) {
+      setError(err?.message ?? "Export failed.");
+    } finally {
+      setExportingEightUpZip(false);
+    }
+  }
+
+  async function openZipRetryEditor(productId: string) {
+    const id = String(productId ?? "").trim();
+    if (!id) return;
+    if (zipEditorOpeningId) return;
+    setZipEditorOpeningId(id);
+    setError(null);
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("products")
+        .select(
+          "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)"
+        )
+        .eq("id", id)
+        .maybeSingle();
+      if (fetchError) {
+        throw new Error(fetchError.message || "Failed to open product editor.");
+      }
+      if (!data) {
+        throw new Error("Product not found.");
+      }
+      setShowZipRetryModal(false);
+      setZipEditorProduct(data as AdminProduct);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to open product editor.");
+    } finally {
+      setZipEditorOpeningId(null);
+    }
   }
 
   async function downloadCsv() {
@@ -2947,37 +3307,44 @@ export default function InventorySheetPage() {
   function buildGridPages(source: ExportRow[]) {
     const isTrueScaleGroup = (value: string) =>
       value === "Truescales" || value.startsWith("Truescales ");
-    const sorted = [...source].sort((a, b) => {
-      const catA = formatDownloadCategory(a);
-      const catB = formatDownloadCategory(b);
+    const expanded = source.flatMap((row) => {
+      if (categoryFilter && categoryFilter !== ALL_CATEGORY) {
+        if (!rowHasDownloadCategory(row, categoryFilter)) return [];
+        return [{ group: categoryFilter, row }];
+      }
+      return getRowDownloadCategories(row).map((group) => ({ group, row }));
+    });
+    const sorted = [...expanded].sort((a, b) => {
+      const catA = a.group || "Others";
+      const catB = b.group || "Others";
       const orderA = DOWNLOAD_CATEGORY_ORDER.indexOf(catA);
       const orderB = DOWNLOAD_CATEGORY_ORDER.indexOf(catB);
       if (orderA !== orderB) {
         return (orderA === -1 ? 999 : orderA) - (orderB === -1 ? 999 : orderB);
       }
       if (isTrueScaleGroup(catA) && isTrueScaleGroup(catB)) {
-        const modelA = vehicleSortKey(formatVehicleDisplayModel(a));
-        const modelB = vehicleSortKey(formatVehicleDisplayModel(b));
+        const modelA = vehicleSortKey(formatVehicleDisplayModel(a.row));
+        const modelB = vehicleSortKey(formatVehicleDisplayModel(b.row));
         const modelCmp = modelA.localeCompare(modelB);
         if (modelCmp !== 0) return modelCmp;
-        const nameA = formatName(a).toLowerCase();
-        const nameB = formatName(b).toLowerCase();
+        const nameA = formatName(a.row).toLowerCase();
+        const nameB = formatName(b.row).toLowerCase();
         return nameA.localeCompare(nameB);
       }
-      const brandA = normalizeCategoryBrand(formatBrand(a));
-      const brandB = normalizeCategoryBrand(formatBrand(b));
+      const brandA = normalizeCategoryBrand(formatBrand(a.row));
+      const brandB = normalizeCategoryBrand(formatBrand(b.row));
       const brandCmp = brandA.localeCompare(brandB);
       if (brandCmp !== 0) return brandCmp;
-      const modelA = vehicleSortKey(formatVehicleDisplayModel(a));
-      const modelB = vehicleSortKey(formatVehicleDisplayModel(b));
+      const modelA = vehicleSortKey(formatVehicleDisplayModel(a.row));
+      const modelB = vehicleSortKey(formatVehicleDisplayModel(b.row));
       const modelCmp = modelA.localeCompare(modelB);
       if (modelCmp !== 0) return modelCmp;
-      const nameA = formatName(a).toLowerCase();
-      const nameB = formatName(b).toLowerCase();
+      const nameA = formatName(a.row).toLowerCase();
+      const nameB = formatName(b.row).toLowerCase();
       return nameA.localeCompare(nameB);
     });
 
-    const pages: Array<{ group: string; rows: ExportRow[] }> = [];
+    const pages: GridPage[] = [];
     let currentGroup = "";
     let bucket: ExportRow[] = [];
 
@@ -2992,8 +3359,8 @@ export default function InventorySheetPage() {
       bucket = [];
     };
 
-    for (const row of sorted) {
-      const group = formatDownloadCategory(row) || "Others";
+    for (const item of sorted) {
+      const group = item.group || "Others";
       if (!currentGroup) {
         currentGroup = group;
       }
@@ -3001,7 +3368,7 @@ export default function InventorySheetPage() {
         flush();
         currentGroup = group;
       }
-      bucket.push(row);
+      bucket.push(item.row);
     }
 
     flush();
@@ -3025,7 +3392,15 @@ export default function InventorySheetPage() {
         return;
       }
       const exportRows = buildExportRowsForDownload(filteredRows);
-      const pages = buildGridPages(exportRows);
+      const imageRows = exportRows.filter(hasPrimaryImage);
+      const skippedNoImage = exportRows.length - imageRows.length;
+      if (!imageRows.length) {
+        setExportMsg(
+          "No rows with thumbnail/first photo for 4-up export. Add a first photo to each item."
+        );
+        return;
+      }
+      const pages = buildGridPages(imageRows);
 
       const pagesHtml = pages
         .map((page, pageIndex) => {
@@ -3034,23 +3409,7 @@ export default function InventorySheetPage() {
             if (!row) {
               return `<div class="card empty"></div>`;
             }
-            const rawUrls = (row.product?.image_urls ?? [])
-              .map((url) => String(url ?? "").trim())
-              .filter(Boolean);
-            const imageCandidates = Array.from(
-              new Set(
-                rawUrls.flatMap((url) => [
-                  getMaxQualityImageUrl(url),
-                  url,
-                  getThumbUrl(url, {
-                    width: EXPORT_THUMB_WIDTH,
-                    height: EXPORT_THUMB_HEIGHT,
-                    quality: EXPORT_THUMB_QUALITY,
-                    format: "webp",
-                  }),
-                ])
-              )
-            ).filter(Boolean);
+            const imageCandidates = getPrimaryImageCandidates(row);
             const primaryUrl = imageCandidates[0] ? escapeHtml(imageCandidates[0]) : "";
             const fallbackSources = escapeHtml(
               JSON.stringify(imageCandidates.slice(1))
@@ -3059,7 +3418,7 @@ export default function InventorySheetPage() {
               ? ` data-fallback-index="0" data-fallback-sources="${fallbackSources}" onerror="window.__owFallbackImage && window.__owFallbackImage(this)"`
               : "";
             const imageCell = primaryUrl
-              ? `<img src="${primaryUrl}" alt="" loading="lazy" decoding="async" width="${EXPORT_THUMB_WIDTH}" height="${EXPORT_THUMB_HEIGHT}"${fallbackAttr}/>`
+              ? `<img src="${primaryUrl}" alt="" loading="lazy" decoding="async" width="${EXPORT_THUMB_WIDTH}" height="${EXPORT_THUMB_HEIGHT}" data-load-retries="0" data-load-max-retries="3"${fallbackAttr}/>`
               : `<div class="img-placeholder">No image</div>`;
             const cardBrand = escapeHtml(formatBrand(row).toUpperCase());
             const titleText = escapeHtml(formatName(row));
@@ -3303,6 +3662,31 @@ export default function InventorySheetPage() {
     ${pagesHtml}
     <script>
       (function () {
+        function normalizeSource(src) {
+          var raw = String(src || "").trim();
+          if (!raw) return "";
+          try {
+            var url = new URL(raw, window.location.href);
+            url.searchParams.delete("__ow_retry");
+            return url.toString();
+          } catch (_err) {
+            return raw.replace(/([?&])__ow_retry=[^&#]*&?/g, "$1").replace(/[?&]$/, "");
+          }
+        }
+
+        function withRetrySource(src, attempt) {
+          var raw = String(src || "").trim();
+          if (!raw) return "";
+          var value = String(Date.now()) + "-" + String(attempt || 0);
+          try {
+            var url = new URL(raw, window.location.href);
+            url.searchParams.set("__ow_retry", value);
+            return url.toString();
+          } catch (_err) {
+            return raw + (raw.indexOf("?") >= 0 ? "&" : "?") + "__ow_retry=" + value;
+          }
+        }
+
         function addPlaceholder(img) {
           if (!img || !img.closest) return;
           var holder = img.closest(".card-image");
@@ -3316,6 +3700,19 @@ export default function InventorySheetPage() {
 
         window.__owFallbackImage = function (img) {
           if (!img) return;
+          var maxRetries = Number(img.getAttribute("data-load-max-retries") || "3");
+          var retries = Number(img.getAttribute("data-load-retries") || "0");
+          var currentSrc = String(img.currentSrc || img.src || "").trim();
+          if (currentSrc && retries < maxRetries) {
+            var nextRetry = retries + 1;
+            img.setAttribute("data-load-retries", String(nextRetry));
+            var retrySrc = withRetrySource(currentSrc, nextRetry);
+            window.setTimeout(function () {
+              if (retrySrc) img.src = retrySrc;
+            }, nextRetry * 300);
+            return;
+          }
+
           var raw = img.getAttribute("data-fallback-sources") || "[]";
           var list = [];
           try {
@@ -3324,11 +3721,14 @@ export default function InventorySheetPage() {
           } catch (_err) {}
 
           var index = Number(img.getAttribute("data-fallback-index") || "0");
+          var normalizedCurrent = normalizeSource(currentSrc);
           while (index < list.length) {
             var next = String(list[index] || "").trim();
             index += 1;
             img.setAttribute("data-fallback-index", String(index));
             if (next) {
+              if (normalizeSource(next) === normalizedCurrent) continue;
+              img.setAttribute("data-load-retries", "0");
               img.src = next;
               return;
             }
@@ -3338,27 +3738,6 @@ export default function InventorySheetPage() {
           addPlaceholder(img);
           if (img.parentNode) img.parentNode.removeChild(img);
         };
-
-        document.addEventListener("DOMContentLoaded", function () {
-          var images = document.querySelectorAll(".card-image img");
-          images.forEach(function (img) {
-            var settled = false;
-            var timeout = setTimeout(function () {
-              if (settled) return;
-              if (!img.complete || img.naturalWidth === 0) {
-                window.__owFallbackImage(img);
-              }
-            }, 7000);
-            img.addEventListener("load", function () {
-              settled = true;
-              clearTimeout(timeout);
-            });
-            img.addEventListener("error", function () {
-              settled = true;
-              clearTimeout(timeout);
-            });
-          });
-        });
       })();
     </script>
   </body>
@@ -3374,7 +3753,11 @@ export default function InventorySheetPage() {
       link.remove();
       URL.revokeObjectURL(url);
 
-      setExportMsg(`4-up pages downloaded (${pages.length} pages).`);
+      const summary = [`4-up pages downloaded (${pages.length} pages).`];
+      if (skippedNoImage > 0) {
+        summary.push(`Skipped ${skippedNoImage} item(s) without thumbnail.`);
+      }
+      setExportMsg(summary.join(" "));
     } catch (err: any) {
       setError(err?.message ?? "Export failed.");
     } finally {
@@ -3382,8 +3765,13 @@ export default function InventorySheetPage() {
     }
   }
 
-  async function downloadEightUpZip() {
+  async function startEightUpZipDownload(options?: { singleFolder?: boolean }) {
+    const singleFolder = Boolean(options?.singleFolder);
     if (exportingEightUpZip) return;
+    setPendingZipSession(null);
+    setShowZipRetryModal(false);
+    setZipRetryRows([]);
+    setCopiedZipRetryCode(null);
     setExportingEightUpZip(true);
     setExportMsg(null);
     setError(null);
@@ -3399,89 +3787,65 @@ export default function InventorySheetPage() {
         return;
       }
       const exportRows = buildExportRowsForDownload(filteredRows);
-      const pages = buildGridPages(exportRows);
+      const imageRows = exportRows.filter(hasPrimaryImage);
+      const skippedNoImage = exportRows.length - imageRows.length;
+      if (!imageRows.length) {
+        setExportMsg(
+          "No rows with thumbnail/first photo for 4-up ZIP export. Add a first photo to each item."
+        );
+        return;
+      }
+      const pages = buildGridPages(imageRows);
+      const pageTasks = buildZipPageTasks(pages, { singleFolder });
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
-
-      const canvas = document.createElement("canvas");
-      canvas.width = EIGHT_UP_WIDTH;
-      canvas.height = EIGHT_UP_HEIGHT;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("Canvas not available.");
-
-      let processed = 0;
       setExportMsg(`Rendering 0 of ${pages.length} pages...`);
 
-      const pageCounts = new Map<string, number>();
+      const pass = await processZipPagesPass({
+        pages: pageTasks,
+        zip,
+        totalPages: pages.length,
+        renderedSoFar: 0,
+        deferFailedPages: true,
+      });
 
-      for (let index = 0; index < pages.length; index += 1) {
-        const page = pages[index];
-        const images = await Promise.all(
-          page.rows.map(async (row) => {
-            const rawUrls = (row.product?.image_urls ?? [])
-              .map((url) => String(url ?? "").trim())
-              .filter(Boolean);
-            const imageCandidates = Array.from(
-              new Set(
-                rawUrls.flatMap((url) => [
-                  getMaxQualityImageUrl(url),
-                  url,
-                  getThumbUrl(url, {
-                    width: EXPORT_THUMB_WIDTH,
-                    height: EXPORT_THUMB_HEIGHT,
-                    quality: EXPORT_THUMB_QUALITY,
-                    format: "webp",
-                  }),
-                ])
-              )
-            ).filter(Boolean);
-            return await loadImageFromCandidates(imageCandidates);
-          })
+      const nextSession: PendingZipSession = {
+        zip,
+        totalPages: pages.length,
+        renderedPages: pass.renderedPages,
+        skippedNoImage,
+        pendingPages: pass.deferredPages,
+        unresolvedRenderedCount: 0,
+        downloadName: singleFolder
+          ? "inventory-4up-pages-flat.zip"
+          : "inventory-9up-pages.zip",
+        singleFolder,
+      };
+
+      if (nextSession.pendingPages.length > 0) {
+        setPendingZipSession(nextSession);
+        setZipRetryRows(uniqueRowsById(pass.failedRows));
+        setShowZipRetryModal(true);
+        setExportMsg(
+          `ZIP paused: ${nextSession.pendingPages.length} page(s) need first-photo download. Edit the listed product cards, then click Retry & Resume ZIP.`
         );
-        while (images.length < GRID_PAGE_SIZE) images.push(null);
-
-        renderEightUpCanvas(ctx, page.rows, images, page.group);
-        const blob = await canvasToBlob(canvas, "image/png");
-        const safeGroup = fileSafe(page.group || "Unassigned", 60) || "Unassigned";
-        const groupFolder = zip.folder(safeGroup) ?? zip;
-        const nextCount = (pageCounts.get(safeGroup) ?? 0) + 1;
-        pageCounts.set(safeGroup, nextCount);
-        const name = `page_${String(nextCount).padStart(3, "0")}.png`;
-        groupFolder.file(name, blob);
-
-        for (const image of images) {
-          if (image && "close" in image) {
-            try {
-              (image as ImageBitmap).close();
-            } catch {
-              // ignore
-            }
-          }
-        }
-
-        processed += 1;
-        if (processed % 5 === 0) {
-          setExportMsg(`Rendering ${processed} of ${pages.length} pages...`);
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
+        return;
       }
 
-      const zipBlob = await zip.generateAsync({ type: "blob" });
-      const url = URL.createObjectURL(zipBlob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "inventory-9up-pages.zip";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-
-      setExportMsg(`4-up ZIP downloaded (${pages.length} pages).`);
+      await finalizeZipDownload(nextSession);
     } catch (err: any) {
       setError(err?.message ?? "Export failed.");
     } finally {
       setExportingEightUpZip(false);
     }
+  }
+
+  async function downloadEightUpZip() {
+    await startEightUpZipDownload({ singleFolder: false });
+  }
+
+  async function downloadEightUpZipSingleFolder() {
+    await startEightUpZipDownload({ singleFolder: true });
   }
 
   React.useEffect(() => {
@@ -3634,10 +3998,38 @@ export default function InventorySheetPage() {
             <Button
               variant="secondary"
               size="sm"
-              onClick={downloadEightUpZip}
+              onClick={() => {
+                if (hasPendingZipResume) {
+                  setShowZipRetryModal(true);
+                  return;
+                }
+                void downloadEightUpZip();
+              }}
               disabled={exportingEightUpZip}
             >
-              {exportingEightUpZip ? "Preparing..." : "Download 4-up ZIP"}
+              {exportingEightUpZip
+                ? "Preparing..."
+                : hasPendingZipResume
+                  ? `Resume 4-up ZIP (${pendingZipPagesCount})`
+                  : "Download 4-up ZIP"}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                if (hasPendingZipResume) {
+                  setShowZipRetryModal(true);
+                  return;
+                }
+                void downloadEightUpZipSingleFolder();
+              }}
+              disabled={exportingEightUpZip}
+            >
+              {exportingEightUpZip
+                ? "Preparing..."
+                : hasPendingZipResume
+                  ? `Resume 4-up ZIP (${pendingZipPagesCount})`
+                  : "Download 4-up ZIP (One Folder)"}
             </Button>
             <Button
               variant="secondary"
@@ -3809,6 +4201,138 @@ export default function InventorySheetPage() {
         {loading ? <div className="text-sm text-white/60">Loading...</div> : null}
 
       </CardBody>
+      {showZipRetryModal ? (
+        <div className="fixed inset-0 z-[90] bg-black/70 backdrop-blur-sm p-4">
+          <div className="mx-auto flex h-full max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl border border-white/10 bg-bg-950/95 shadow-2xl">
+            <div className="border-b border-white/10 px-5 py-4">
+              <div className="text-lg font-semibold">4-up ZIP Paused</div>
+              <div className="mt-1 text-sm text-white/70">
+                {zipRetryRows.length} product card(s) failed first-photo download. Edit
+                those photos, then retry and resume.
+              </div>
+            </div>
+            <div className="flex-1 space-y-3 overflow-auto px-4 py-4">
+              {zipRetryRows.map((row) => {
+                const productCode = row.product?.id ?? row.id;
+                const productId = String(row.product?.id ?? "").trim();
+                const firstPhoto = String(row.product?.image_urls?.[0] ?? "").trim();
+                const copied = copiedZipRetryCode === productCode;
+                return (
+                  <div
+                    key={row.id}
+                    className="flex items-start gap-3 rounded-xl border border-white/10 bg-bg-900/40 p-3"
+                  >
+                    <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-bg-900/70">
+                      {firstPhoto ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={getThumbUrl(firstPhoto, { width: 128, height: 128, quality: 60 })}
+                          alt=""
+                          className="h-full w-full object-cover bg-neutral-50"
+                          loading="lazy"
+                          decoding="async"
+                        />
+                      ) : (
+                        <div className="grid h-full w-full place-items-center text-[10px] text-white/40">
+                          No image
+                        </div>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold text-white">
+                        {formatName(row)}
+                      </div>
+                      <button
+                        type="button"
+                        className="mt-1 font-mono text-xs text-orange-300 underline underline-offset-2"
+                        onClick={() => {
+                          navigator.clipboard
+                            .writeText(productCode)
+                            .then(() => {
+                              setCopiedZipRetryCode(productCode);
+                              window.setTimeout(
+                                () =>
+                                  setCopiedZipRetryCode((current) =>
+                                    current === productCode ? null : current
+                                  ),
+                                1200
+                              );
+                            })
+                            .catch(() => undefined);
+                        }}
+                      >
+                        Product code: {productCode} {copied ? "(Copied)" : ""}
+                      </button>
+                      <div className="mt-1 text-xs text-white/60">
+                        Category: {formatBaseDownloadCategory(row)}
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={!productId || Boolean(zipEditorOpeningId)}
+                      onClick={() => void openZipRetryEditor(productId)}
+                    >
+                      {zipEditorOpeningId === productId ? "Opening..." : "Open editor"}
+                    </Button>
+                  </div>
+                );
+              })}
+              {!zipRetryRows.length ? (
+                <div className="rounded-lg border border-white/10 bg-bg-900/40 p-4 text-sm text-white/60">
+                  No failed rows queued.
+                </div>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-white/10 px-4 py-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowZipRetryModal(false)}
+              >
+                Close
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() =>
+                  window.open("/admin/inventory", "_blank", "noopener,noreferrer")
+                }
+              >
+                Open Inventory
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={exportingEightUpZip}
+                onClick={() => void resumeEightUpZipGeneration(true)}
+              >
+                Finish ZIP Now
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={exportingEightUpZip}
+                onClick={() => void resumeEightUpZipGeneration(false)}
+              >
+                Retry & Resume ZIP
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      <InventoryEditorDrawer
+        product={zipEditorProduct}
+        onClose={() => {
+          setZipEditorProduct(null);
+          if (hasPendingZipResume) {
+            setShowZipRetryModal(true);
+          }
+        }}
+        onSaved={() => {
+          void loadAllRows();
+        }}
+      />
     </Card>
   );
 }
