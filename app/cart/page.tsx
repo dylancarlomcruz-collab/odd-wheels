@@ -8,6 +8,7 @@ import ProductCard, { type ShopProduct } from "@/components/ProductCard";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { Select } from "@/components/ui/Select";
 import { formatPHP } from "@/lib/money";
 import { useBuyerProducts } from "@/hooks/useBuyerProducts";
 import { useBuyerShopProducts } from "@/hooks/useBuyerShopProducts";
@@ -24,6 +25,10 @@ import {
   protectorKindFromShipClass,
   protectorUnitFee,
 } from "@/lib/addons";
+import { supabase } from "@/lib/supabase/browser";
+import { useProfile } from "@/hooks/useProfile";
+import { useAdminViewMode } from "@/hooks/useAdminViewMode";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 function normalizeValue(value: string | null | undefined) {
   const normalized = String(value ?? "").trim().toUpperCase();
@@ -51,10 +56,383 @@ function formatCourierLabel(value: string) {
   }
 }
 
+type CartInvoiceItem = {
+  name: string;
+  qty: number;
+  amount: number;
+  condition: string | null;
+  notes: string | null;
+  imageUrl: string | null;
+};
+
+type CartInvoicePayload = {
+  customerName: string;
+  shippingMethod: string;
+  shippingDetails: string;
+  items: CartInvoiceItem[];
+  totalQty: number;
+  totalLines: number;
+  totalAmount: number;
+};
+
+type InvoicePdfRenderOptions = {
+  includeImages: boolean;
+  imageQuality: number;
+  maxImageDimension: number;
+  photoSize: number;
+};
+
+const MAX_PDF_DOWNLOAD_BYTES = 24 * 1024 * 1024;
+const CART_INVOICE_RENDER_STAGES: InvoicePdfRenderOptions[] = [
+  { includeImages: true, imageQuality: 0.68, maxImageDimension: 900, photoSize: 42 },
+  { includeImages: true, imageQuality: 0.55, maxImageDimension: 720, photoSize: 40 },
+  { includeImages: true, imageQuality: 0.42, maxImageDimension: 560, photoSize: 38 },
+  { includeImages: true, imageQuality: 0.32, maxImageDimension: 420, photoSize: 36 },
+  { includeImages: false, imageQuality: 0.28, maxImageDimension: 360, photoSize: 34 },
+];
+
+function sanitizeFileName(value: string) {
+  const cleaned = value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "").trim();
+  return cleaned || "customer";
+}
+
+function pdfMoney(value: number) {
+  const rounded = Number.isFinite(value) ? Math.round(value) : 0;
+  try {
+    return `PHP ${new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(rounded)}`;
+  } catch {
+    return `PHP ${rounded}`;
+  }
+}
+
+function formatPdfSize(bytes: number) {
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function downloadBlobAsFile(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read image data."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function imageBlobToPdfDataUrl(
+  blob: Blob,
+  options: InvoicePdfRenderOptions
+): Promise<string> {
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("Image decode failed"));
+      el.src = objectUrl;
+    });
+
+    const srcW = Math.max(1, img.naturalWidth || 1);
+    const srcH = Math.max(1, img.naturalHeight || 1);
+    const scale =
+      Math.max(srcW, srcH) > options.maxImageDimension
+        ? options.maxImageDimension / Math.max(srcW, srcH)
+        : 1;
+    const outW = Math.max(1, Math.round(srcW * scale));
+    const outH = Math.max(1, Math.round(srcH * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      return await blobToDataUrl(blob);
+    }
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, outW, outH);
+    ctx.drawImage(img, 0, 0, outW, outH);
+    return canvas.toDataURL("image/jpeg", options.imageQuality);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function loadImageDataUrl(
+  url: string,
+  cache: Map<string, string | null>,
+  options: InvoicePdfRenderOptions
+) {
+  if (!options.includeImages) return null;
+  const cacheKey = `${url}::${options.maxImageDimension}::${options.imageQuality.toFixed(2)}`;
+  const existing = cache.get(cacheKey);
+  if (existing !== undefined) return existing;
+
+  try {
+    const response = await fetch(url, { cache: "force-cache" });
+    if (!response.ok) throw new Error(`Failed to fetch image: ${response.status}`);
+    const blob = await response.blob();
+    if (!blob.type.startsWith("image/")) throw new Error("URL is not an image.");
+    const dataUrl = await imageBlobToPdfDataUrl(blob, options);
+    cache.set(cacheKey, dataUrl);
+    return dataUrl;
+  } catch {
+    cache.set(cacheKey, null);
+    return null;
+  }
+}
+
+function imageFormatForDataUrl(dataUrl: string): "PNG" | "JPEG" {
+  return dataUrl.startsWith("data:image/png") ? "PNG" : "JPEG";
+}
+
+async function buildAdminCartInvoicePdfBlob(
+  payload: CartInvoicePayload,
+  imageCache: Map<string, string | null>,
+  now: Date,
+  options: InvoicePdfRenderOptions
+) {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const generatedAt = now.toLocaleString("en-PH");
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const marginX = 42;
+  const marginTop = 42;
+  const marginBottom = 48;
+
+  const photoLeft = marginX;
+  const photoSize = options.photoSize;
+  const nameLeft = photoLeft + photoSize + 12;
+  const qtyCenter = pageWidth - 120;
+  const amountRight = pageWidth - marginX;
+  const nameMaxWidth = qtyCenter - 24 - nameLeft;
+
+  const drawMeta = (continued: boolean) => {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(17);
+    doc.setTextColor(20, 20, 20);
+    doc.text("ODD WHEELS", marginX, marginTop);
+
+    doc.setFontSize(12);
+    doc.text(
+      continued ? "FB Cart Invoice (Continued)" : "FB Cart Invoice",
+      marginX,
+      marginTop + 20
+    );
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(70, 70, 70);
+    doc.text(`Generated: ${generatedAt}`, pageWidth - marginX, marginTop, {
+      align: "right",
+    });
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(20, 20, 20);
+    const nameLines = doc.splitTextToSize(
+      `Customer: ${payload.customerName}`,
+      pageWidth - marginX * 2
+    );
+    doc.text(nameLines, marginX, marginTop + 42);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(70, 70, 70);
+    doc.text(`Courier: ${formatCourierLabel(payload.shippingMethod)}`, marginX, marginTop + 66);
+    if (payload.shippingDetails) {
+      const detailsLines = doc.splitTextToSize(
+        `Shipping details: ${payload.shippingDetails}`,
+        pageWidth - marginX * 2
+      );
+      doc.text(detailsLines, marginX, marginTop + 79);
+    }
+    doc.text("Source: Admin > Cart (FB checkout)", marginX, marginTop + 92);
+  };
+
+  const drawTableHeader = (topY: number) => {
+    doc.setDrawColor(220, 220, 220);
+    doc.line(marginX, topY, pageWidth - marginX, topY);
+
+    const textY = topY + 14;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(35, 35, 35);
+    doc.text("Photo", photoLeft, textY);
+    doc.text("Product", nameLeft, textY);
+    doc.text("Qty", qtyCenter, textY, { align: "center" });
+    doc.text("Amount", amountRight, textY, { align: "right" });
+    doc.line(marginX, textY + 6, pageWidth - marginX, textY + 6);
+    return textY + 6;
+  };
+
+  drawMeta(false);
+  let y = drawTableHeader(148) + 8;
+
+  if (payload.items.length === 0) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.setTextColor(70, 70, 70);
+    doc.text("No selected cart items.", marginX, y + 18);
+    y += 36;
+  } else {
+    for (const item of payload.items) {
+      const productName = item.name?.trim() || "Item";
+      const nameLines = doc.splitTextToSize(productName, nameMaxWidth);
+      const details: string[] = [];
+      if (item.condition) details.push(`Condition: ${item.condition}`);
+      if (item.notes) details.push(`Notes: ${item.notes}`);
+      const detailLines = details.flatMap((line) =>
+        doc.splitTextToSize(line, nameMaxWidth)
+      );
+      const nameHeight =
+        nameLines.length * 11 + (detailLines.length ? detailLines.length * 10 + 4 : 0);
+      const rowHeight = Math.max(photoSize + 10, nameHeight + 12);
+
+      if (y + rowHeight + 90 > pageHeight - marginBottom) {
+        doc.addPage();
+        drawMeta(true);
+        y = drawTableHeader(148) + 8;
+      }
+
+      doc.setDrawColor(235, 235, 235);
+      doc.line(marginX, y + rowHeight, pageWidth - marginX, y + rowHeight);
+
+      if (options.includeImages && item.imageUrl) {
+        const dataUrl = await loadImageDataUrl(item.imageUrl, imageCache, options);
+        if (dataUrl) {
+          doc.addImage(
+            dataUrl,
+            imageFormatForDataUrl(dataUrl),
+            photoLeft,
+            y + 4,
+            photoSize,
+            photoSize,
+            undefined,
+            "FAST"
+          );
+        } else {
+          doc.setDrawColor(215, 215, 215);
+          doc.rect(photoLeft, y + 4, photoSize, photoSize);
+        }
+      } else {
+        doc.setDrawColor(215, 215, 215);
+        doc.rect(photoLeft, y + 4, photoSize, photoSize);
+      }
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.setTextColor(15, 15, 15);
+      doc.text(nameLines, nameLeft, y + 14);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(90, 90, 90);
+      doc.text(detailLines, nameLeft, y + 14 + nameLines.length * 11 + 1);
+
+      const numbersY = y + rowHeight / 2 + 3;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(20, 20, 20);
+      doc.text(String(item.qty), qtyCenter, numbersY, { align: "center" });
+      doc.text(pdfMoney(item.amount), amountRight, numbersY, { align: "right" });
+
+      y += rowHeight;
+    }
+  }
+
+  if (y + 88 > pageHeight - marginBottom) {
+    doc.addPage();
+    drawMeta(true);
+    y = 158;
+  }
+
+  doc.setDrawColor(220, 220, 220);
+  doc.line(marginX, y + 10, pageWidth - marginX, y + 10);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.setTextColor(20, 20, 20);
+  doc.text("Totals", marginX, y + 30);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.text(`Total qty: ${payload.totalQty}`, marginX, y + 48);
+  doc.text(`Total lines: ${payload.totalLines}`, marginX, y + 64);
+  doc.text(`Total amount: ${pdfMoney(payload.totalAmount)}`, pageWidth - marginX, y + 30, {
+    align: "right",
+  });
+
+  doc.setFontSize(8);
+  doc.setTextColor(120, 120, 120);
+  doc.text(
+    "Generated from current selected cart items in Admin mode.",
+    marginX,
+    pageHeight - 26
+  );
+
+  return doc.output("blob") as Blob;
+}
+
+async function exportAdminCartInvoicePdf(
+  payload: CartInvoicePayload,
+  imageCache: Map<string, string | null>
+) {
+  const now = new Date();
+  const fileDate = now.toISOString().slice(0, 10);
+  const fileName = `invoice-${sanitizeFileName(payload.customerName)}-${fileDate}.pdf`;
+
+  let lastBlob: Blob | null = null;
+  for (const stage of CART_INVOICE_RENDER_STAGES) {
+    const blob = await buildAdminCartInvoicePdfBlob(payload, imageCache, now, stage);
+    lastBlob = blob;
+    if (blob.size <= MAX_PDF_DOWNLOAD_BYTES) {
+      downloadBlobAsFile(blob, fileName);
+      return;
+    }
+  }
+
+  const finalSize = lastBlob ? formatPdfSize(lastBlob.size) : "unknown size";
+  throw new Error(
+    `Invoice PDF exceeds 24MB (${finalSize}) even after compression. Please reduce cart items/images and try again.`
+  );
+}
+
+function resolveOrderId(data: any): string | null {
+  if (!data) return null;
+  if (typeof data === "string" || typeof data === "number") return String(data);
+  if (typeof data === "object") {
+    return (
+      data.order_id ??
+      data.orderId ??
+      data.id ??
+      data.order?.id ??
+      data.data?.id ??
+      null
+    );
+  }
+  return null;
+}
+
 function CartContent() {
-  const { lines, loading, updateQty, updateProtector, remove, add } = useCart();
+  const { lines, loading, updateQty, updateProtector, remove, add, reload, isLoggedIn } =
+    useCart();
+  const { user } = useAuth();
+  const { profile, loading: profileLoading } = useProfile();
+  const isAdminUser = profile?.role === "admin";
+  const { isAdminMode } = useAdminViewMode(isAdminUser);
   const { settings } = useSettings();
   const selectAllRef = React.useRef<HTMLInputElement>(null);
+  const invoiceImageCacheRef = React.useRef(new Map<string, string | null>());
 
   const { products: allProducts } = useBuyerProducts({ brand: "all" });
   const { products: shopProducts } = useBuyerShopProducts({ brand: "all" });
@@ -63,6 +441,12 @@ function CartContent() {
   const [previewLine, setPreviewLine] = React.useState<CartLine | null>(null);
   const [activeImage, setActiveImage] = React.useState("");
   const [unsealedAck, setUnsealedAck] = React.useState(false);
+  const [fbCustomerName, setFbCustomerName] = React.useState("");
+  const [fbShippingMethod, setFbShippingMethod] = React.useState("LBC");
+  const [fbShippingDetails, setFbShippingDetails] = React.useState("");
+  const [sellingAsPos, setSellingAsPos] = React.useState(false);
+  const [generatingInvoice, setGeneratingInvoice] = React.useState(false);
+  const [clearingCart, setClearingCart] = React.useState(false);
 
   const selectedLines = React.useMemo(
     () => lines.filter((line) => selectedIds.includes(line.id)),
@@ -148,6 +532,32 @@ function CartContent() {
     );
     return acc + (lineUnitPrice(l) + addOn) * l.qty;
   }, 0);
+  const selectedInvoiceItems = React.useMemo<CartInvoiceItem[]>(
+    () =>
+      selectedLines.map((line) => {
+        const condition = formatConditionLabel(line.variant.condition, {
+          upper: true,
+          shipClass: line.variant.ship_class,
+        });
+        const notesRaw = String(
+          line.variant.public_notes ?? line.variant.issue_notes ?? ""
+        ).trim();
+        const addOn = protectorUnitFee(
+          line.variant.ship_class,
+          Boolean(line.protector_selected)
+        );
+        const amount = (lineUnitPrice(line) + addOn) * line.qty;
+        return {
+          name: line.variant.product.title,
+          qty: Math.max(1, Math.trunc(Number(line.qty ?? 0))),
+          amount,
+          condition: condition || null,
+          notes: notesRaw || null,
+          imageUrl: line.variant.product.image_urls?.[0] ?? null,
+        };
+      }),
+    [selectedLines, lineUnitPrice]
+  );
   const allSelected = lines.length > 0 && selectedIds.length === lines.length;
   const someSelected =
     selectedIds.length > 0 && selectedIds.length < lines.length;
@@ -156,6 +566,12 @@ function CartContent() {
     : "/checkout";
   const checkoutDisabled =
     selectedLines.length === 0 || (hasNonSealedSelected && !unsealedAck);
+  const adminSoldDisabled =
+    checkoutDisabled ||
+    !fbCustomerName.trim() ||
+    !fbShippingMethod.trim() ||
+    sellingAsPos ||
+    profileLoading;
   const freeShippingThreshold = Number(settings?.free_shipping_threshold ?? 0);
   const freeShippingGap =
     freeShippingThreshold > 0 ? freeShippingThreshold - selectedSubtotal : 0;
@@ -253,6 +669,36 @@ function CartContent() {
     if (!hasNonSealedSelected) setUnsealedAck(false);
   }, [hasNonSealedSelected]);
 
+  React.useEffect(() => {
+    if (!isAdminMode || typeof window === "undefined") return;
+    const raw = window.localStorage.getItem("oddwheels:admin-fb-cart");
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as {
+        customerName?: string;
+        shippingMethod?: string;
+        shippingDetails?: string;
+      };
+      setFbCustomerName(String(parsed.customerName ?? "").trim());
+      setFbShippingMethod(String(parsed.shippingMethod ?? "LBC").trim() || "LBC");
+      setFbShippingDetails(String(parsed.shippingDetails ?? "").trim());
+    } catch {
+      // ignore bad local state
+    }
+  }, [isAdminMode]);
+
+  React.useEffect(() => {
+    if (!isAdminMode || typeof window === "undefined") return;
+    window.localStorage.setItem(
+      "oddwheels:admin-fb-cart",
+      JSON.stringify({
+        customerName: fbCustomerName,
+        shippingMethod: fbShippingMethod,
+        shippingDetails: fbShippingDetails,
+      })
+    );
+  }, [isAdminMode, fbCustomerName, fbShippingMethod, fbShippingDetails]);
+
   function openPreview(line: CartLine) {
     setPreviewLine(line);
     setActiveImage(line.variant.product.image_urls?.[0] ?? "");
@@ -299,6 +745,201 @@ function CartContent() {
     }
   }
 
+  async function onGenerateAdminInvoice() {
+    if (!selectedLines.length) {
+      alert("Select at least one cart item first.");
+      return;
+    }
+    if (!fbCustomerName.trim()) {
+      alert("Customer name is required.");
+      return;
+    }
+
+    setGeneratingInvoice(true);
+    try {
+      const payload: CartInvoicePayload = {
+        customerName: fbCustomerName.trim(),
+        shippingMethod: fbShippingMethod.trim() || "LBC",
+        shippingDetails: fbShippingDetails.trim(),
+        items: selectedInvoiceItems,
+        totalQty: selectedLines.reduce((sum, line) => sum + Math.max(1, Number(line.qty ?? 0)), 0),
+        totalLines: selectedLines.length,
+        totalAmount: selectedSubtotal,
+      };
+      await exportAdminCartInvoicePdf(payload, invoiceImageCacheRef.current);
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message ?? "Failed to generate invoice PDF.");
+    } finally {
+      setGeneratingInvoice(false);
+    }
+  }
+
+  async function onClearCart() {
+    if (!lines.length || clearingCart) return;
+    const confirmed = window.confirm(
+      `Clear all ${lines.length} item(s) from your cart?`
+    );
+    if (!confirmed) return;
+
+    setClearingCart(true);
+    try {
+      if (isLoggedIn && user?.id) {
+        const lineIds = lines.map((line) => line.id).filter(Boolean);
+        if (lineIds.length) {
+          const { error } = await supabase
+            .from("cart_items")
+            .delete()
+            .in("id", lineIds)
+            .eq("user_id", user.id);
+          if (error) throw error;
+        }
+        await reload();
+      } else {
+        for (const line of lines) {
+          await remove(line.id);
+        }
+      }
+
+      setSelectedIds([]);
+      setUnsealedAck(false);
+      toast({
+        intent: "success",
+        title: "Cart cleared",
+        message: "All cart items have been removed.",
+      });
+    } catch (e: any) {
+      console.error(e);
+      toast({
+        intent: "error",
+        title: "Clear cart failed",
+        message: e?.message ?? "Unable to clear cart.",
+      });
+    } finally {
+      setClearingCart(false);
+    }
+  }
+
+  async function onSoldAsPos() {
+    if (adminSoldDisabled) return;
+    if (!selectedLines.length) {
+      alert("Select at least one cart item first.");
+      return;
+    }
+    const customerName = fbCustomerName.trim();
+    if (!customerName) {
+      alert("Customer name is required.");
+      return;
+    }
+    if (!user?.id) {
+      alert("User ID needed. Please sign in again.");
+      return;
+    }
+
+    setSellingAsPos(true);
+    try {
+      const shippingMethod = fbShippingMethod.trim() || "LBC";
+      const shippingDetails = {
+        method: shippingMethod,
+        text: fbShippingDetails.trim() || "FB checkout from admin cart",
+        discount: null,
+      };
+      const items = selectedLines.map((line) => ({
+        variant_id: line.variant_id,
+        qty: Math.max(1, Math.trunc(Number(line.qty ?? 0))),
+      }));
+
+      const basePayload = {
+        p_customer_name: customerName,
+        p_customer_phone: "N/A",
+        p_shipping_method: shippingMethod,
+        p_shipping_details: shippingDetails,
+        p_payment_method: "CASH",
+        p_save_customer: false,
+        p_items: items,
+      };
+
+      // Some deployments require p_user_id, others do not.
+      let { data, error } = await supabase.rpc("pos_create_order", {
+        ...basePayload,
+        p_user_id: user.id,
+      } as any);
+
+      if (error) {
+        const message = String(error.message ?? "").toLowerCase();
+        const missingParam =
+          message.includes("p_user_id") ||
+          message.includes("function") ||
+          message.includes("schema cache") ||
+          message.includes("named argument");
+        if (missingParam) {
+          const retry = await supabase.rpc("pos_create_order", basePayload as any);
+          data = retry.data;
+          error = retry.error;
+        }
+      }
+      if (error) throw error;
+
+      const orderId = resolveOrderId(data);
+      if (!orderId) {
+        throw new Error("POS order created, but order id is missing.");
+      }
+
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) {
+        throw new Error("Staff session not found. Please sign in again.");
+      }
+
+      const shouldMarkToShip = shippingMethod.toUpperCase() !== "PICKUP";
+      const res = await fetch("/api/pos/complete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ orderId, markToShip: shouldMarkToShip }),
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(payload?.error ?? "POS completion failed.");
+      }
+
+      const selectedLineIds = selectedLines.map((line) => line.id);
+      if (isLoggedIn) {
+        const { error: removeError } = await supabase
+          .from("cart_items")
+          .delete()
+          .in("id", selectedLineIds);
+        if (removeError) throw removeError;
+        await reload();
+      } else {
+        for (const line of selectedLines) {
+          await remove(line.id);
+        }
+      }
+      setSelectedIds((prev) => prev.filter((id) => !selectedLineIds.includes(id)));
+      setUnsealedAck(false);
+
+      toast({
+        intent: "success",
+        title: "Marked sold",
+        message: `${selectedLines.length} line(s) sold as POS${
+          shouldMarkToShip ? " and added to To Ship." : "."
+        }`,
+      });
+    } catch (e: any) {
+      console.error(e);
+      toast({
+        intent: "error",
+        title: "Sold failed",
+        message: e?.message ?? "Unable to mark selected items as sold.",
+      });
+    } finally {
+      setSellingAsPos(false);
+    }
+  }
+
   const previewImages = (previewLine?.variant.product.image_urls ?? []).filter(
     (img) => Boolean(img),
   );
@@ -342,12 +983,62 @@ function CartContent() {
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Cart</h1>
-        <div className="text-sm text-white/60">
-          Review items before checkout.
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Cart</h1>
+          <div className="text-sm text-white/60">
+            Review items before checkout.
+          </div>
         </div>
+        <Button
+          variant="ghost"
+          onClick={() => void onClearCart()}
+          disabled={loading || clearingCart || lines.length === 0}
+        >
+          {clearingCart ? "Clearing..." : "Clear cart"}
+        </Button>
       </div>
+
+      {isAdminMode ? (
+        <Card>
+          <CardHeader className="flex flex-wrap items-center justify-between gap-2">
+            <div className="font-semibold">FB Odd Wheels Checkout</div>
+            <div className="text-xs text-white/60">
+              Admin mode: selected cart items will be sold directly as POS.
+            </div>
+          </CardHeader>
+          <CardBody>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Input
+                label="Customer name"
+                placeholder="Enter customer name"
+                value={fbCustomerName}
+                onChange={(e) => setFbCustomerName(e.target.value)}
+                required
+              />
+              <Select
+                label="Shipping courier"
+                value={fbShippingMethod}
+                onChange={(e) => setFbShippingMethod(e.target.value)}
+                required
+              >
+                <option value="LBC">LBC</option>
+                <option value="J&T">J&amp;T</option>
+                <option value="LALAMOVE">Lalamove</option>
+                <option value="PICKUP">Pickup</option>
+              </Select>
+            </div>
+            <div className="mt-3">
+              <Input
+                label="Shipping details (optional)"
+                placeholder="Address, branch, booking ref, or notes"
+                value={fbShippingDetails}
+                onChange={(e) => setFbShippingDetails(e.target.value)}
+              />
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
 
       {freeShippingThreshold > 0 ? (
         <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4 text-sm text-white/70">
@@ -780,7 +1471,27 @@ function CartContent() {
               {formatPHP(selectedSubtotal)}
             </div>
           </div>
-          {checkoutDisabled ? (
+          {isAdminMode ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => void onGenerateAdminInvoice()}
+                disabled={
+                  selectedLines.length === 0 ||
+                  generatingInvoice ||
+                  !fbCustomerName.trim()
+                }
+              >
+                {generatingInvoice ? "Generating..." : "Generate invoice PDF"}
+              </Button>
+              <Button
+                onClick={() => void onSoldAsPos()}
+                disabled={adminSoldDisabled}
+              >
+                {sellingAsPos ? "Selling..." : "Sold"}
+              </Button>
+            </div>
+          ) : checkoutDisabled ? (
             <Button disabled>Proceed to checkout</Button>
           ) : (
             <Link href={checkoutHref}>
