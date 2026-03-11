@@ -4,6 +4,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import JsBarcode from "jsbarcode";
 import {
   Bluetooth,
   BluetoothConnected,
@@ -28,13 +29,13 @@ import { formatConditionLabel } from "@/lib/conditions";
 import { toast } from "@/components/ui/toast";
 
 const SHIPPING_TABS = [
-  { key: "TO BOOK", label: "To Book" },
   { key: "PREPARING TO SHIP", label: "Preparing to ship" },
   { key: "SHIPPED", label: "Shipped" },
   { key: "COMPLETED", label: "Completed" },
 ] as const;
 
 type ShippingTabKey = (typeof SHIPPING_TABS)[number]["key"];
+type ShippingStageKey = ShippingTabKey | "TO BOOK";
 type ScanMode = "tracking" | "booking_reference";
 type ShippingDraft = {
   courier: string;
@@ -172,7 +173,10 @@ function getAddressOrBranch(method: string, details: any, order: any) {
   const addr = String(
     details?.full_address ?? details?.address ?? order?.address ?? ""
   ).trim();
-  return addr;
+  if (addr) return addr;
+
+  const textDetails = String(details?.text ?? details?.notes ?? details?.note ?? "").trim();
+  return textDetails;
 }
 
 function cleanAddress(raw: any) {
@@ -214,15 +218,19 @@ function getItemPrice(it: any): number {
 }
 
 function normalizeShippingStatus(raw: string | null | undefined) {
-  const status = String(raw ?? "").trim().toUpperCase();
-  if (!status || status === "NONE") return "PREPARING TO SHIP";
-  if (status === "PREPARING" || status === "PREPARING_TO_SHIP") {
+  const statusRaw = String(raw ?? "").trim().toUpperCase();
+  const normalized = statusRaw.replace(/[-\s]+/g, "_");
+  if (!normalized || normalized === "NONE") return "PREPARING TO SHIP";
+  if (normalized === "PREPARING" || normalized === "PREPARING_TO_SHIP") {
     return "PREPARING TO SHIP";
   }
-  if (status === "TO_SHIP" || status === "PENDING_SHIPMENT") {
+  if (normalized === "TO_SHIP" || normalized === "PENDING_SHIPMENT") {
     return "PREPARING TO SHIP";
   }
-  return status;
+  if (normalized === "DELIVERED") return "COMPLETED";
+  if (normalized === "SHIPPED") return "SHIPPED";
+  if (normalized === "COMPLETED") return "COMPLETED";
+  return statusRaw;
 }
 
 function getOrderShippingMethod(order: any, details?: Record<string, any>) {
@@ -232,12 +240,6 @@ function getOrderShippingMethod(order: any, details?: Record<string, any>) {
 
 function isLbcOrder(order: any, details?: Record<string, any>) {
   return getOrderShippingMethod(order, details) === "LBC";
-}
-
-function isWebsiteOrder(order: any) {
-  const channel = String(order?.channel ?? "").trim().toUpperCase();
-  if (!channel) return true;
-  return channel !== "POS";
 }
 
 function getLbcBookingReference(order: any, details?: Record<string, any>) {
@@ -256,13 +258,12 @@ function getLbcBookingReference(order: any, details?: Record<string, any>) {
   return "";
 }
 
-function resolveShippingStage(order: any, details?: Record<string, any>): ShippingTabKey {
+function resolveShippingStage(order: any, details?: Record<string, any>): ShippingStageKey {
   const status = normalizeShippingStatus(order?.shipping_status);
   if (status === "SHIPPED" || status === "COMPLETED") return status;
 
   if (
     status === "PREPARING TO SHIP" &&
-    isWebsiteOrder(order) &&
     isLbcOrder(order, details) &&
     !getLbcBookingReference(order, details)
   ) {
@@ -333,7 +334,7 @@ function buildShippingSummary(o: any, details: Record<string, any>) {
     [details.branch_name || details.branch, details.branch_city]
       .filter(Boolean)
       .join(", ") || null;
-  const notes = details.notes || details.note || null;
+  const notes = details.notes || details.note || details.text || null;
   const pack = details.package || details.package_size || null;
   const bookingReference = getLbcBookingReference(o, details) || null;
 
@@ -382,15 +383,9 @@ const B1_LABEL_HEIGHT_MM = 30;
 const B1_LABEL_DP_MM = 8;
 
 type ShippingLabelData = {
-  orderShortId: string;
-  createdDate: string;
   customerName: string;
-  customerPhone: string;
-  address: string;
-  courier: string;
-  tracking: string;
-  itemSummary: string;
-  total: string;
+  packaging: string;
+  barcodeValue: string;
 };
 
 function wrapCanvasText(
@@ -469,40 +464,54 @@ function createShippingLabelCanvas(data: ShippingLabelData) {
   ctx.fillStyle = "#000000";
   ctx.textBaseline = "top";
 
-  const paddingX = 12;
+  const paddingX = 36;
   const maxWidth = canvas.width - paddingX * 2;
-  let y = 8;
+  const barcodeValue = String(data.barcodeValue ?? "").trim();
+  let y = 16;
 
-  ctx.font = "bold 18px Arial";
-  const title = "ODD WHEELS TO SHIP";
-  ctx.fillText(title, paddingX, y);
-  y += 22;
-
-  ctx.font = "12px Arial";
-  ctx.fillText(`Order #${data.orderShortId}   ${data.createdDate}`, paddingX, y);
-  y += 16;
-
-  const addField = (label: string, value: string, maxLines: number) => {
-    ctx.font = "bold 12px Arial";
-    ctx.fillText(`${label}:`, paddingX, y);
-    y += 13;
-
-    ctx.font = "12px Arial";
-    const lines = wrapCanvasText(ctx, value || "-", maxWidth, maxLines);
-    for (const line of lines) {
-      ctx.fillText(line, paddingX, y);
-      y += 13;
-    }
-    y += 2;
+  const drawSingleLineField = (label: string, value: string) => {
+    ctx.font = "bold 24px Arial";
+    const lines = wrapCanvasText(ctx, `${label}: ${String(value || "-").trim()}`, maxWidth, 1);
+    ctx.fillText(lines[0] ?? `${label}: -`, paddingX, y);
+    y += 32;
   };
 
-  addField("Name", data.customerName, 2);
-  addField("Phone", data.customerPhone, 1);
-  addField("Address", data.address, 3);
-  addField("Courier", data.courier, 1);
-  addField("Tracking", data.tracking || "-", 1);
-  addField("Items", data.itemSummary, 2);
-  addField("Total", data.total, 1);
+  drawSingleLineField("Name", data.customerName);
+  drawSingleLineField("Packaging", data.packaging);
+
+  const barcodeCanvas = document.createElement("canvas");
+  const fallbackBarcode = String(data.barcodeValue || "").replace(/[^0-9A-Z\-. $/+%]/gi, "").trim();
+
+  try {
+    JsBarcode(barcodeCanvas, barcodeValue || fallbackBarcode || "000000000000", {
+      format: "CODE128",
+      displayValue: false,
+      margin: 0,
+      background: "#ffffff",
+      lineColor: "#000000",
+      width: 2,
+      height: 68,
+    });
+  } catch {
+    JsBarcode(barcodeCanvas, fallbackBarcode || "000000000000", {
+      format: "CODE39",
+      displayValue: false,
+      margin: 0,
+      background: "#ffffff",
+      lineColor: "#000000",
+      width: 2,
+      height: 68,
+    });
+  }
+
+  const targetHeight = 68;
+  ctx.drawImage(barcodeCanvas, paddingX, y, maxWidth, targetHeight);
+  y += targetHeight + 2;
+
+  ctx.font = "16px Arial";
+  ctx.textAlign = "center";
+  ctx.fillText(barcodeValue || fallbackBarcode || "000000000000", canvas.width / 2, y);
+  ctx.textAlign = "left";
 
   return canvas;
 }
@@ -558,7 +567,7 @@ export default function CashierShipmentsPage() {
   const [detailOrderId, setDetailOrderId] = React.useState<string | null>(null);
   const [selectedItem, setSelectedItem] = React.useState<any | null>(null);
   const [activeTab, setActiveTab] =
-    React.useState<ShippingTabKey>("TO BOOK");
+    React.useState<ShippingTabKey>("PREPARING TO SHIP");
   const [drafts, setDrafts] = React.useState<Record<string, ShippingDraft>>({});
   const [busyById, setBusyById] = React.useState<Record<string, boolean>>({});
   const [errorById, setErrorById] = React.useState<Record<string, string>>({});
@@ -566,6 +575,17 @@ export default function CashierShipmentsPage() {
   const [scanOrderId, setScanOrderId] = React.useState<string | null>(null);
   const [scanCourier, setScanCourier] = React.useState<string>("");
   const [scanMode, setScanMode] = React.useState<ScanMode>("tracking");
+  const [manualCustomerName, setManualCustomerName] = React.useState<string>("");
+  const [manualContact, setManualContact] = React.useState<string>("");
+  const [manualShippingMethod, setManualShippingMethod] =
+    React.useState<string>("LBC");
+  const [manualShippingDetails, setManualShippingDetails] =
+    React.useState<string>("");
+  const [manualBookingReference, setManualBookingReference] =
+    React.useState<string>("");
+  const [manualTotalRaw, setManualTotalRaw] = React.useState<string>("0");
+  const [creatingManualOrder, setCreatingManualOrder] =
+    React.useState<boolean>(false);
   const [oddWheelsView, setOddWheelsView] = React.useState<
     "UNSHIPPED" | "SHIPPED" | "ALL"
   >("UNSHIPPED");
@@ -694,9 +714,23 @@ export default function CashierShipmentsPage() {
       orders.filter((o) => {
         const payment = String(o.payment_status ?? "").toUpperCase();
         const status = String(o.status ?? "").toUpperCase();
-        if (payment !== "PAID") return false;
+        const channel = String(o.channel ?? "").toUpperCase();
+        const details = parseJsonMaybe(o.shipping_details) ?? {};
+        const shippingText = String(details?.text ?? "").toLowerCase();
+        const shippingStageHint = normalizeShippingStatus(o.shipping_status);
+        const isAdminCartCheckout =
+          channel === "POS" &&
+          (details?.admin_cart_checkout === true ||
+            String(details?.source ?? "").toLowerCase() === "admin_cart_checkout" ||
+            shippingText.includes("fb checkout from admin cart"));
+        const isLegacyPosToShip =
+          channel === "POS" &&
+          status === "TO_SHIP" &&
+          shippingStageHint === "PREPARING TO SHIP";
+        const allowUnpaid = isAdminCartCheckout || isLegacyPosToShip;
+        if (payment !== "PAID" && !allowUnpaid) return false;
         if (status === "CANCELLED" || status === "VOIDED") return false;
-        const shipping = normalizeShippingStatus(o.shipping_status);
+        const shipping = shippingStageHint;
         return (
           shipping === "PREPARING TO SHIP" ||
           shipping === "SHIPPED" ||
@@ -720,11 +754,14 @@ export default function CashierShipmentsPage() {
     return paidOrders.reduce(
       (acc, o) => {
         const status = resolveShippingStage(o);
+        if (status === "TO BOOK") {
+          acc["PREPARING TO SHIP"] += 1;
+          return acc;
+        }
         if (acc[status] !== undefined) acc[status] += 1;
         return acc;
       },
       {
-        "TO BOOK": 0,
         "PREPARING TO SHIP": 0,
         SHIPPED: 0,
         COMPLETED: 0,
@@ -855,6 +892,69 @@ export default function CashierShipmentsPage() {
     }
   }
 
+  async function markShippedAndComplete(
+    orderId: string,
+    courierRaw: string,
+    trackingRaw: string
+  ) {
+    const tracking = String(trackingRaw ?? "").trim();
+    if (!tracking) {
+      setErrorById((cur) => ({ ...cur, [orderId]: "Tracking number is required." }));
+      return;
+    }
+
+    setBusyById((cur) => ({ ...cur, [orderId]: true }));
+    setErrorById((cur) => ({ ...cur, [orderId]: "" }));
+    try {
+      const courier = String(courierRaw ?? "").trim();
+      let { error: shipError } = await supabase.rpc("fn_mark_shipped", {
+        p_order_id: orderId,
+        p_courier: courier,
+        p_tracking_number: tracking,
+      });
+
+      if (shipError) {
+        const message = String(shipError.message ?? "").toLowerCase();
+        const needsPaidFallback =
+          message.includes("not paid") ||
+          (message.includes("payment") && message.includes("paid"));
+        if (needsPaidFallback) {
+          const { error: payError } = await supabase
+            .from("orders")
+            .update({
+              payment_status: "PAID",
+              status: "PAID",
+              paid_at: new Date().toISOString(),
+            })
+            .eq("id", orderId);
+          if (payError) throw payError;
+
+          const retry = await supabase.rpc("fn_mark_shipped", {
+            p_order_id: orderId,
+            p_courier: courier,
+            p_tracking_number: tracking,
+          });
+          shipError = retry.error;
+        }
+      }
+      if (shipError) throw shipError;
+
+      const { error: completeError } = await supabase.rpc("fn_mark_completed_staff", {
+        p_order_id: orderId,
+      });
+      if (completeError) throw completeError;
+
+      toast({ intent: "success", message: "Order marked shipped and completed." });
+      await reload();
+    } catch (err: any) {
+      const message = err?.message ?? "Unable to mark order as shipped.";
+      setErrorById((cur) => ({ ...cur, [orderId]: message }));
+      toast({ intent: "error", message });
+    } finally {
+      setBusyById((cur) => ({ ...cur, [orderId]: false }));
+    }
+  }
+
   async function undoShipped(orderId: string) {
     setBusyById((cur) => ({ ...cur, [orderId]: true }));
     setErrorById((cur) => ({ ...cur, [orderId]: "" }));
@@ -948,6 +1048,140 @@ export default function CashierShipmentsPage() {
     }));
   }
 
+  async function saveShippingMethod(orderId: string, methodRaw: string) {
+    const method = String(methodRaw ?? "").trim();
+    if (!method) return;
+
+    setBusyById((cur) => ({ ...cur, [orderId]: true }));
+    setErrorById((cur) => ({ ...cur, [orderId]: "" }));
+    try {
+      const order = orders.find((entry) => String(entry.id) === String(orderId));
+      if (!order) throw new Error("Order not found.");
+
+      const details = parseJsonMaybe(order.shipping_details) ?? {};
+      const nextDetails = {
+        ...details,
+        method,
+      };
+
+      const { error } = await supabase
+        .from("orders")
+        .update({
+          shipping_method: method,
+          shipping_details: nextDetails,
+          shipping_status: "PREPARING TO SHIP",
+          shipped_at: null,
+          completed_at: null,
+        })
+        .eq("id", orderId);
+      if (error) throw error;
+
+      setDrafts((cur) => ({
+        ...cur,
+        [orderId]: {
+          ...(cur[orderId] ?? EMPTY_SHIPPING_DRAFT),
+          courier: method,
+        },
+      }));
+      toast({ intent: "success", message: `Shipping method updated to ${method}.` });
+      await reload();
+    } catch (err: any) {
+      const message = err?.message ?? "Unable to update shipping method.";
+      setErrorById((cur) => ({ ...cur, [orderId]: message }));
+      toast({ intent: "error", message });
+    } finally {
+      setBusyById((cur) => ({ ...cur, [orderId]: false }));
+    }
+  }
+
+  async function createManualShipmentOrder() {
+    const customerName = manualCustomerName.trim();
+    if (!customerName) {
+      toast({ intent: "error", message: "Customer name is required." });
+      return;
+    }
+
+    const shippingMethod = String(manualShippingMethod ?? "").trim().toUpperCase();
+    if (!shippingMethod) {
+      toast({ intent: "error", message: "Shipping method is required." });
+      return;
+    }
+
+    setCreatingManualOrder(true);
+    try {
+      const sessionResult = await supabase.auth.getSession();
+      const userId = String(sessionResult.data.session?.user?.id ?? "").trim();
+      if (!userId) throw new Error("Staff session not found. Please sign in again.");
+
+      const detailsText = manualShippingDetails.trim();
+      const contact = manualContact.trim();
+      const bookingReference = manualBookingReference.trim();
+      const parsedTotal = Number(String(manualTotalRaw ?? "0").replace(/,/g, "").trim());
+      const total = Number.isFinite(parsedTotal) && parsedTotal > 0 ? parsedTotal : 0;
+
+      const shippingDetails: Record<string, any> = {
+        method: shippingMethod,
+        source: "shipments_manual_create",
+        receiver_name: customerName,
+        receiver_phone: contact || null,
+      };
+      if (detailsText) {
+        shippingDetails.text = detailsText;
+        shippingDetails.full_address = detailsText;
+      }
+      if (shippingMethod === "LBC" && bookingReference) {
+        shippingDetails.lbc_booking_reference = bookingReference;
+        shippingDetails.booking_reference = bookingReference;
+      }
+
+      const insertPayload = {
+        user_id: userId,
+        status: "PAID",
+        payment_method: "MANUAL",
+        payment_status: "PAID",
+        subtotal: total,
+        total,
+        shipping_method: shippingMethod,
+        shipping_details: shippingDetails,
+        shipping_status: "PREPARING TO SHIP",
+        paid_at: new Date().toISOString(),
+        channel: "POS",
+      };
+
+      const { data, error } = await supabase
+        .from("orders")
+        .insert(insertPayload as any)
+        .select("id")
+        .single();
+      if (error) throw error;
+
+      setManualCustomerName("");
+      setManualContact("");
+      setManualShippingDetails("");
+      setManualBookingReference("");
+      setManualTotalRaw("0");
+
+      const createdId = String(data?.id ?? "").slice(0, 8);
+      const movedToUnbooked = shippingMethod === "LBC" && !bookingReference;
+      toast({
+        intent: "success",
+        message: movedToUnbooked
+          ? `Order #${createdId} created and added to Unbooked LBC.`
+          : `Order #${createdId} created and added to To Ship.`,
+      });
+
+      setActiveTab("PREPARING TO SHIP");
+      await reload();
+    } catch (err: any) {
+      toast({
+        intent: "error",
+        message: err?.message ?? "Unable to create shipment order.",
+      });
+    } finally {
+      setCreatingManualOrder(false);
+    }
+  }
+
   async function saveBookingReference(orderId: string, referenceRaw: string) {
     const reference = String(referenceRaw ?? "").trim();
     if (!reference) {
@@ -1009,39 +1243,21 @@ export default function CashierShipmentsPage() {
       let client: any = null;
       try {
         const details = parseJsonMaybe(order.shipping_details) ?? {};
-        const items = itemsByOrderId[orderId] ?? [];
         const shippingMethod = String(details.method ?? order.shipping_method ?? "").trim();
         const shippingContainer = formatShippingContainer(shippingMethod, details);
-        const courierText = [shippingMethod, shippingContainer]
-          .filter(Boolean)
-          .join(" | ")
-          .trim();
-        const tracking = String(getDraft(orderId).tracking || order.tracking_number || "").trim();
-
-        const primaryItems = items
-          .slice(0, 2)
-          .map((it: any) => {
-            const title = getItemTitle(it);
-            const qty = Number(it?.qty ?? 1);
-            return `${title} x${qty}`;
-          })
-          .filter(Boolean);
-        const extraCount = Math.max(0, items.length - primaryItems.length);
-        const itemSummary =
-          primaryItems.join("; ") + (extraCount > 0 ? ` (+${extraCount} more)` : "");
+        const draft = getDraft(orderId);
+        const barcodeValue = String(
+          draft.tracking ||
+            order.tracking_number ||
+            draft.bookingReference ||
+            getLbcBookingReference(order, details) ||
+            orderId.slice(0, 12)
+        ).trim();
 
         const payload: ShippingLabelData = {
-          orderShortId: orderId.slice(0, 8),
-          createdDate: new Date(order.created_at ?? Date.now()).toLocaleDateString("en-PH"),
           customerName: getCustomerName(order, details),
-          customerPhone: String(
-            details.receiver_phone || details.phone || order.customer_phone || order.contact || "-"
-          ).trim(),
-          address: String(getAddressOrBranch(shippingMethod, details, order) || "-").trim(),
-          courier: courierText || "Not set",
-          tracking,
-          itemSummary: itemSummary || "Items not available",
-          total: peso(Number(order.total ?? 0)),
+          packaging: shippingContainer || shippingMethod || "Not set",
+          barcodeValue,
         };
 
         const canvas = createShippingLabelCanvas(payload);
@@ -1080,7 +1296,7 @@ export default function CashierShipmentsPage() {
 
         toast({
           intent: "success",
-          message: `Printed shipping label for #${payload.orderShortId}.`,
+          message: `Printed shipping label for #${orderId.slice(0, 8)}.`,
         });
       } catch (error: any) {
         const message = String(error?.message ?? error ?? "Unable to print shipping label.");
@@ -1096,7 +1312,7 @@ export default function CashierShipmentsPage() {
         setPrintingOrderId((cur) => (cur === orderId ? null : cur));
       }
     },
-    [ensureNiimbotClient, getDraft, itemsByOrderId, niimbotState]
+    [ensureNiimbotClient, getDraft, niimbotState]
   );
 
   const renderShippingDetails = (o: any) => {
@@ -1267,8 +1483,12 @@ export default function CashierShipmentsPage() {
               {isAdmin ? (
                 <Select
                   label="Courier"
-                  value={draft.courier}
-                  onChange={(e) => onDraftChange(o.id, "courier", e.target.value)}
+                  value={draft.courier || o.shipping_method || "LBC"}
+                  onChange={(e) => {
+                    const nextMethod = e.target.value;
+                    onDraftChange(o.id, "courier", nextMethod);
+                    void saveShippingMethod(o.id, nextMethod);
+                  }}
                   className="h-9 text-sm"
                 >
                   {buildCourierOptions(o.shipping_method).map((opt) => (
@@ -1461,11 +1681,11 @@ export default function CashierShipmentsPage() {
                 <Button
                   size="sm"
                   onClick={() =>
-                    runRpc(o.id, "fn_mark_shipped", {
-                      p_order_id: o.id,
-                      p_courier: draft.courier || o.shipping_method,
-                      p_tracking_number: draft.tracking.trim(),
-                    })
+                    markShippedAndComplete(
+                      o.id,
+                      draft.courier || o.shipping_method || "",
+                      draft.tracking
+                    )
                   }
                   disabled={busy || !canMarkShipped}
                 >
@@ -1729,6 +1949,92 @@ export default function CashierShipmentsPage() {
             </details>
           ) : null}
 
+          {activeTab === "PREPARING TO SHIP" ? (
+            <div className="rounded-2xl border border-white/10 bg-bg-900/20 p-3 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold">Create shipment order</div>
+                  <div className="text-xs text-white/60">
+                    LBC without booking reference goes to Unbooked first. Other couriers go directly to To Ship.
+                  </div>
+                </div>
+              </div>
+              <div className="grid gap-2 md:grid-cols-2">
+                <Input
+                  label="Customer name"
+                  value={manualCustomerName}
+                  onChange={(e) => setManualCustomerName(e.target.value)}
+                  placeholder="Enter customer name"
+                  className="h-9 text-sm"
+                />
+                <Input
+                  label="Contact (optional)"
+                  value={manualContact}
+                  onChange={(e) => setManualContact(e.target.value)}
+                  placeholder="09xxxxxxxxx"
+                  className="h-9 text-sm"
+                />
+              </div>
+              <div className="grid gap-2 md:grid-cols-3">
+                <Select
+                  label="Shipping method"
+                  value={manualShippingMethod}
+                  onChange={(e) => setManualShippingMethod(e.target.value)}
+                  className="h-9 text-sm"
+                >
+                  <option value="LBC">LBC</option>
+                  <option value="J&T">J&T</option>
+                  <option value="LALAMOVE">Lalamove</option>
+                  <option value="PICKUP">Pickup</option>
+                  <option value="JRS">JRS</option>
+                  <option value="NINJA VAN">Ninja Van</option>
+                  <option value="GRAB">Grab</option>
+                </Select>
+                <Input
+                  label="Order total (optional)"
+                  value={manualTotalRaw}
+                  onChange={(e) => setManualTotalRaw(e.target.value)}
+                  placeholder="0"
+                  className="h-9 text-sm"
+                />
+                {manualShippingMethod.toUpperCase() === "LBC" ? (
+                  <Input
+                    label="LBC booking ref (optional)"
+                    value={manualBookingReference}
+                    onChange={(e) => setManualBookingReference(e.target.value)}
+                    placeholder="Leave blank to send to Unbooked"
+                    className="h-9 text-sm"
+                  />
+                ) : (
+                  <Input
+                    label="LBC booking ref"
+                    value=""
+                    disabled
+                    placeholder="Only for LBC"
+                    className="h-9 text-sm opacity-60"
+                  />
+                )}
+              </div>
+              <Input
+                label="Shipping details / address (optional)"
+                value={manualShippingDetails}
+                onChange={(e) => setManualShippingDetails(e.target.value)}
+                placeholder="Address, branch, notes"
+                className="h-9 text-sm"
+              />
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void createManualShipmentOrder()}
+                  disabled={creatingManualOrder}
+                >
+                  {creatingManualOrder ? "Creating..." : "Create order"}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
           <div className="flex flex-wrap gap-2">
             {SHIPPING_TABS.map((tab) => {
               const active = activeTab === tab.key;
@@ -1745,232 +2051,279 @@ export default function CashierShipmentsPage() {
             })}
           </div>
 
-          {activeTab === "TO BOOK" ? (
-            <div className="rounded-2xl border border-white/10 bg-bg-900/20 p-3 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold">LBC booking reference entry</div>
-                  <div className="text-xs text-white/60">
-                    Website LBC orders stay here until an LBC booking reference is added.
-                  </div>
-                </div>
-                <Badge>{toBookOrders.length}</Badge>
-              </div>
-              {toBookOrders.length === 0 ? (
-                <div className="text-sm text-white/60">No orders waiting for booking reference.</div>
-              ) : (
-                <div className="space-y-2">
-                  {toBookOrders.map((o: any) => {
-                    const details = parseJsonMaybe(o.shipping_details) ?? {};
-                    const customerName = getCustomerName(o, details);
-                    const draft = getDraft(o.id);
-                    const canSave = draft.bookingReference.trim().length > 0;
-                    const busy = Boolean(busyById[o.id]);
-
-                    return (
-                      <div key={o.id} className="rounded-xl border border-white/10 bg-paper/5 p-3">
-                        <div className="flex flex-wrap items-center gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium truncate">{customerName}</div>
-                            <div className="text-xs text-white/50">
-                              #{String(o.id).slice(0, 8)} - LBC
-                            </div>
-                          </div>
-                          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-                            <Input
-                              value={draft.bookingReference}
-                              placeholder="LBC booking reference"
-                              onChange={(e) =>
-                                onDraftChange(o.id, "bookingReference", e.target.value)
-                              }
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" && canSave && !busy) {
-                                  saveBookingReference(o.id, draft.bookingReference);
-                                }
-                              }}
-                              className="h-8 w-full px-3 text-xs sm:w-56"
-                            />
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => {
-                                setScanMode("booking_reference");
-                                setScanOrderId(o.id);
-                                setScanCourier("");
-                              }}
-                              disabled={busy}
-                            >
-                              Scan
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              onClick={() => saveBookingReference(o.id, draft.bookingReference)}
-                              disabled={busy || !canSave}
-                            >
-                              Save + move to To Ship
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          ) : null}
-
           {activeTab === "PREPARING TO SHIP" ? (
-            <div className="rounded-2xl border border-white/10 bg-bg-900/20 p-3 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold">Bulk tracking entry</div>
-                  <div className="text-xs text-white/60">
-                    Type or scan a waybill number. Focus the field and scan with a barcode scanner, or use camera scan.
+            <div className="space-y-3">
+              {toBookOrders.length > 0 ? (
+                <div className="rounded-2xl border border-white/10 bg-bg-900/20 p-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold">Unbooked LBC orders</div>
+                      <div className="text-xs text-white/60">
+                        Add LBC booking reference first, then the order moves into tracking entry below.
+                      </div>
+                    </div>
+                    <Badge>{toBookOrders.length}</Badge>
                   </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge>{bulkOrders.length}</Badge>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={niimbotState === "connected" ? "secondary" : "ghost"}
-                    onClick={connectNiimbot}
-                    disabled={niimbotState === "connecting"}
-                    className="gap-1.5"
-                  >
-                    {niimbotState === "connecting" ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : niimbotState === "connected" ? (
-                      <BluetoothConnected className="h-3.5 w-3.5" />
-                    ) : (
-                      <Bluetooth className="h-3.5 w-3.5" />
-                    )}
-                    {niimbotState === "connected"
-                      ? `Niimbot ${niimbotPrinterName ? `(${niimbotPrinterName})` : "Connected"}`
-                      : niimbotState === "connecting"
-                        ? "Connecting Niimbot..."
-                        : "Connect Niimbot B1"}
-                  </Button>
-                  {niimbotState === "connected" ? (
-                    <Button type="button" size="sm" variant="ghost" onClick={disconnectNiimbot}>
-                      Disconnect
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {courierTabs.map((tab) => {
-                  const active = activeCourier === tab;
-                  return (
-                    <Button
-                      key={tab}
-                      size="sm"
-                      variant={active ? "primary" : "ghost"}
-                      onClick={() => setActiveCourier(tab)}
-                    >
-                      {tab === "ALL" ? "All couriers" : tab}
-                      {tab === "ALL"
-                        ? ` (${preparingOrders.length})`
-                        : ` (${courierGroups[tab]?.length ?? 0})`}
-                    </Button>
-                  );
-                })}
-              </div>
-              {bulkOrders.length === 0 ? (
-                <div className="text-sm text-white/60">No orders ready for tracking.</div>
-              ) : (
-                <div className="space-y-2">
-                  {bulkOrders.map((o: any) => {
-                    const details = parseJsonMaybe(o.shipping_details) ?? {};
-                    const customerName = getCustomerName(o, details);
-                    const draft = getDraft(o.id);
-                    const courierLabel = String(draft.courier || o.shipping_method || "").trim();
-                    const canMarkShipped = draft.tracking.trim().length > 0;
-                    const busy = Boolean(busyById[o.id]);
+                  <div className="space-y-2">
+                    {toBookOrders.map((o: any) => {
+                      const details = parseJsonMaybe(o.shipping_details) ?? {};
+                      const customerName = getCustomerName(o, details);
+                      const contact = String(
+                        details.receiver_phone || details.phone || o.customer_phone || o.contact || ""
+                      ).trim();
+                      const addressOrBranch = getAddressOrBranch("LBC", details, o);
+                      const draft = getDraft(o.id);
+                      const canSave = draft.bookingReference.trim().length > 0;
+                      const busy = Boolean(busyById[o.id]);
 
-                    return (
-                      <div key={o.id} className="rounded-xl border border-white/10 bg-paper/5 p-3">
-                        <div className="flex flex-wrap items-center gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium truncate">{customerName}</div>
-                            <div className="text-xs text-white/50">
-                              #{String(o.id).slice(0, 8)}
-                              {courierLabel ? ` - ${courierLabel}` : ""}
+                      return (
+                        <div key={o.id} className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-medium truncate">{customerName}</div>
+                              <div className="text-xs text-white/50">
+                                #{String(o.id).slice(0, 8)} - LBC
+                                {contact ? ` - ${contact}` : ""}
+                              </div>
+                              {addressOrBranch ? (
+                                <div className="mt-0.5 text-xs text-white/60 truncate">
+                                  {addressOrBranch}
+                                </div>
+                              ) : null}
                             </div>
-                          </div>
-                          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-                            <Input
-                              value={draft.tracking}
-                              placeholder="Waybill / tracking"
-                              onChange={(e) => onDraftChange(o.id, "tracking", e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" && canMarkShipped && !busy) {
-                                  runRpc(o.id, "fn_mark_shipped", {
-                                    p_order_id: o.id,
-                                    p_courier: draft.courier || o.shipping_method,
-                                    p_tracking_number: draft.tracking.trim(),
-                                  });
+                            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+                              <Select
+                                value={draft.courier || o.shipping_method || "LBC"}
+                                onChange={(e) => {
+                                  const nextMethod = e.target.value;
+                                  onDraftChange(o.id, "courier", nextMethod);
+                                  void saveShippingMethod(o.id, nextMethod);
+                                }}
+                                className="h-8 w-full px-2 text-xs sm:w-40"
+                                disabled={busy}
+                              >
+                                {buildCourierOptions(o.shipping_method).map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                              </Select>
+                              <Input
+                                value={draft.bookingReference}
+                                placeholder="LBC booking reference"
+                                onChange={(e) =>
+                                  onDraftChange(o.id, "bookingReference", e.target.value)
                                 }
-                              }}
-                              className="h-8 w-full px-3 text-xs sm:w-56"
-                            />
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" && canSave && !busy) {
+                                    saveBookingReference(o.id, draft.bookingReference);
+                                  }
+                                }}
+                                className="h-8 w-full px-3 text-xs sm:w-56"
+                              />
                               <Button
                                 type="button"
                                 size="sm"
                                 variant="ghost"
                                 onClick={() => {
-                                  setScanMode("tracking");
-                                  setScanCourier(draft.courier || o.shipping_method || "");
+                                  setScanMode("booking_reference");
                                   setScanOrderId(o.id);
+                                  setScanCourier("");
                                 }}
                                 disabled={busy}
                               >
-                              Scan
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => printShippingLabel(o)}
-                              disabled={busy || printingOrderId === o.id}
-                              className="gap-1.5"
-                            >
-                              {printingOrderId === o.id ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <Printer className="h-3.5 w-3.5" />
-                              )}
-                              {printingOrderId === o.id ? "Printing..." : "Print label"}
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              onClick={() =>
-                                runRpc(o.id, "fn_mark_shipped", {
-                                  p_order_id: o.id,
-                                  p_courier: draft.courier || o.shipping_method,
-                                  p_tracking_number: draft.tracking.trim(),
-                                })
-                              }
-                              disabled={busy || !canMarkShipped}
-                            >
-                              Mark shipped
-                            </Button>
+                                Scan
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                onClick={() => saveBookingReference(o.id, draft.bookingReference)}
+                                disabled={busy || !canSave}
+                              >
+                                Save booking ref
+                              </Button>
+                            </div>
                           </div>
                         </div>
-                      </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="rounded-2xl border border-white/10 bg-bg-900/20 p-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">Bulk tracking entry</div>
+                    <div className="text-xs text-white/60">
+                      Type or scan a waybill number. Focus the field and scan with a barcode scanner, or use camera scan.
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge>{bulkOrders.length}</Badge>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={niimbotState === "connected" ? "secondary" : "ghost"}
+                      onClick={connectNiimbot}
+                      disabled={niimbotState === "connecting"}
+                      className="gap-1.5"
+                    >
+                      {niimbotState === "connecting" ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : niimbotState === "connected" ? (
+                        <BluetoothConnected className="h-3.5 w-3.5" />
+                      ) : (
+                        <Bluetooth className="h-3.5 w-3.5" />
+                      )}
+                      {niimbotState === "connected"
+                        ? `Niimbot ${niimbotPrinterName ? `(${niimbotPrinterName})` : "Connected"}`
+                        : niimbotState === "connecting"
+                          ? "Connecting Niimbot..."
+                          : "Connect Niimbot B1"}
+                    </Button>
+                    {niimbotState === "connected" ? (
+                      <Button type="button" size="sm" variant="ghost" onClick={disconnectNiimbot}>
+                        Disconnect
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {courierTabs.map((tab) => {
+                    const active = activeCourier === tab;
+                    return (
+                      <Button
+                        key={tab}
+                        size="sm"
+                        variant={active ? "primary" : "ghost"}
+                        onClick={() => setActiveCourier(tab)}
+                      >
+                        {tab === "ALL" ? "All couriers" : tab}
+                        {tab === "ALL"
+                          ? ` (${preparingOrders.length})`
+                          : ` (${courierGroups[tab]?.length ?? 0})`}
+                      </Button>
                     );
                   })}
                 </div>
-              )}
+                {bulkOrders.length === 0 ? (
+                  <div className="text-sm text-white/60">No orders ready for tracking.</div>
+                ) : (
+                  <div className="space-y-2">
+                    {bulkOrders.map((o: any) => {
+                      const details = parseJsonMaybe(o.shipping_details) ?? {};
+                      const customerName = getCustomerName(o, details);
+                      const draft = getDraft(o.id);
+                      const courierLabel = String(draft.courier || o.shipping_method || "").trim();
+                      const canMarkShipped = draft.tracking.trim().length > 0;
+                      const busy = Boolean(busyById[o.id]);
+
+                      return (
+                        <div key={o.id} className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-medium truncate">{customerName}</div>
+                              <div className="text-xs text-white/50">
+                                #{String(o.id).slice(0, 8)}
+                                {courierLabel ? ` - ${courierLabel}` : ""}
+                              </div>
+                            </div>
+                            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+                              <Select
+                                value={draft.courier || o.shipping_method || "LBC"}
+                                onChange={(e) => {
+                                  const nextMethod = e.target.value;
+                                  onDraftChange(o.id, "courier", nextMethod);
+                                  void saveShippingMethod(o.id, nextMethod);
+                                }}
+                                className="h-8 w-full px-2 text-xs sm:w-36"
+                                disabled={busy}
+                              >
+                                {buildCourierOptions(o.shipping_method).map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                              </Select>
+                              <Input
+                                value={draft.tracking}
+                                placeholder="Waybill / tracking"
+                                onChange={(e) => onDraftChange(o.id, "tracking", e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" && !busy) {
+                                    const scanned = String(
+                                      (e.currentTarget as HTMLInputElement).value ?? ""
+                                    ).trim();
+                                    if (!scanned) return;
+                                    e.preventDefault();
+                                    onDraftChange(o.id, "tracking", scanned);
+                                    void markShippedAndComplete(
+                                      o.id,
+                                      draft.courier || o.shipping_method || "",
+                                      scanned
+                                    );
+                                  }
+                                }}
+                                className="h-8 w-full px-3 text-xs sm:w-56"
+                              />
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => {
+                                    setScanMode("tracking");
+                                    setScanCourier(draft.courier || o.shipping_method || "");
+                                    setScanOrderId(o.id);
+                                  }}
+                                  disabled={busy}
+                                >
+                                Scan
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => printShippingLabel(o)}
+                                disabled={busy || printingOrderId === o.id}
+                                className="gap-1.5"
+                              >
+                                {printingOrderId === o.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Printer className="h-3.5 w-3.5" />
+                                )}
+                                {printingOrderId === o.id ? "Printing..." : "Print label"}
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                onClick={() =>
+                                  markShippedAndComplete(
+                                    o.id,
+                                    draft.courier || o.shipping_method || "",
+                                    draft.tracking
+                                  )
+                                }
+                                disabled={busy || !canMarkShipped}
+                              >
+                                Mark shipped
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           ) : null}
 
           {loading ? (
             <div className="text-white/60">Loading...</div>
-          ) : filtered.length === 0 ? (
+          ) : filtered.length === 0 &&
+            !(activeTab === "PREPARING TO SHIP" && toBookOrders.length > 0) ? (
             <div className="text-white/60">No orders in this stage.</div>
           ) : (
             <div className="space-y-3">
@@ -2139,11 +2492,7 @@ export default function CashierShipmentsPage() {
             await saveBookingReference(orderId, scannedValue);
           } else {
             onDraftChange(orderId, "tracking", scannedValue);
-            await runRpc(orderId, "fn_mark_shipped", {
-              p_order_id: orderId,
-              p_courier: scanCourier,
-              p_tracking_number: scannedValue,
-            });
+            await markShippedAndComplete(orderId, scanCourier, scannedValue);
           }
           setScanOrderId(null);
           setScanCourier("");

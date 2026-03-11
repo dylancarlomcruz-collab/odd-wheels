@@ -58,6 +58,7 @@ export async function POST(req: Request) {
     const customerName = String(order.customer_name ?? "").toLowerCase();
     const shippingMethod = String(order.shipping_method ?? "").toUpperCase();
     const channel = String(order.channel ?? "").toUpperCase();
+    const isPosOrder = channel === "POS";
     const autoOddWheelsToShip =
       customerName.includes("odd wheels") ||
       shippingText.includes("auto-sold from inventory editor") ||
@@ -65,7 +66,7 @@ export async function POST(req: Request) {
     const markToShip = forceToShip || autoOddWheelsToShip;
 
     if (paymentStatus !== "PAID") {
-      if (inventoryDeducted || !hasUserId) {
+      if (isPosOrder || inventoryDeducted || !hasUserId) {
         const { error: updateError } = await sb
           .from("orders")
           .update({

@@ -831,17 +831,25 @@ function CartContent() {
       alert("Customer name is required.");
       return;
     }
-    if (!user?.id) {
-      alert("User ID needed. Please sign in again.");
-      return;
-    }
 
     setSellingAsPos(true);
     try {
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      const sessionUserId = session.data.session?.user?.id;
+      const staffUserId = String(user?.id ?? sessionUserId ?? "").trim();
+      if (!token) {
+        throw new Error("Staff session not found. Please sign in again.");
+      }
+
       const shippingMethod = fbShippingMethod.trim() || "LBC";
+      const shippingText = fbShippingDetails.trim();
       const shippingDetails = {
         method: shippingMethod,
-        text: fbShippingDetails.trim() || "FB checkout from admin cart",
+        text: shippingText || "FB checkout from admin cart",
+        shipping_notes: shippingText || null,
+        source: "admin_cart_checkout",
+        admin_cart_checkout: true,
         discount: null,
       };
       const items = selectedLines.map((line) => ({
@@ -859,23 +867,41 @@ function CartContent() {
         p_items: items,
       };
 
-      // Some deployments require p_user_id, others do not.
-      let { data, error } = await supabase.rpc("pos_create_order", {
-        ...basePayload,
-        p_user_id: user.id,
-      } as any);
+      // Some deployments require p_user_id, others reject extra named args.
+      let data: any = null;
+      let error: any = null;
+      if (staffUserId) {
+        const firstAttempt = await supabase.rpc("pos_create_order", {
+          ...basePayload,
+          p_user_id: staffUserId,
+        } as any);
+        data = firstAttempt.data;
+        error = firstAttempt.error;
+      } else {
+        const firstAttempt = await supabase.rpc("pos_create_order", basePayload as any);
+        data = firstAttempt.data;
+        error = firstAttempt.error;
+      }
 
       if (error) {
         const message = String(error.message ?? "").toLowerCase();
-        const missingParam =
-          message.includes("p_user_id") ||
-          message.includes("function") ||
-          message.includes("schema cache") ||
-          message.includes("named argument");
-        if (missingParam) {
+        const supportsNoUserId =
+          staffUserId &&
+          (message.includes("named argument") ||
+            message.includes("schema cache") ||
+            (message.includes("pos_create_order") && message.includes("p_user_id")));
+        const requiresUserId =
+          !staffUserId &&
+          ((message.includes("user id") && message.includes("required")) ||
+            (message.includes("user_id") && message.includes("required")) ||
+            (message.includes("p_user_id") && message.includes("required")));
+
+        if (supportsNoUserId) {
           const retry = await supabase.rpc("pos_create_order", basePayload as any);
           data = retry.data;
           error = retry.error;
+        } else if (requiresUserId) {
+          throw new Error("Staff session missing user id. Please refresh and sign in again.");
         }
       }
       if (error) throw error;
@@ -883,12 +909,6 @@ function CartContent() {
       const orderId = resolveOrderId(data);
       if (!orderId) {
         throw new Error("POS order created, but order id is missing.");
-      }
-
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) {
-        throw new Error("Staff session not found. Please sign in again.");
       }
 
       const shouldMarkToShip = shippingMethod.toUpperCase() !== "PICKUP";
