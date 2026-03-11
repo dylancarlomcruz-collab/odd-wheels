@@ -27,7 +27,6 @@ import {
 } from "@/lib/addons";
 import { supabase } from "@/lib/supabase/browser";
 import { useProfile } from "@/hooks/useProfile";
-import { useAdminViewMode } from "@/hooks/useAdminViewMode";
 import { useAuth } from "@/components/auth/AuthProvider";
 
 function normalizeValue(value: string | null | undefined) {
@@ -429,7 +428,7 @@ function CartContent() {
   const { user } = useAuth();
   const { profile, loading: profileLoading } = useProfile();
   const isAdminUser = profile?.role === "admin";
-  const { isAdminMode } = useAdminViewMode(isAdminUser);
+  const isAdminMode = isAdminUser;
   const { settings } = useSettings();
   const selectAllRef = React.useRef<HTMLInputElement>(null);
   const invoiceImageCacheRef = React.useRef(new Map<string, string | null>());
@@ -836,8 +835,6 @@ function CartContent() {
     try {
       const session = await supabase.auth.getSession();
       const token = session.data.session?.access_token;
-      const sessionUserId = session.data.session?.user?.id;
-      const staffUserId = String(user?.id ?? sessionUserId ?? "").trim();
       if (!token) {
         throw new Error("Staff session not found. Please sign in again.");
       }
@@ -867,43 +864,10 @@ function CartContent() {
         p_items: items,
       };
 
-      // Some deployments require p_user_id, others reject extra named args.
-      let data: any = null;
-      let error: any = null;
-      if (staffUserId) {
-        const firstAttempt = await supabase.rpc("pos_create_order", {
-          ...basePayload,
-          p_user_id: staffUserId,
-        } as any);
-        data = firstAttempt.data;
-        error = firstAttempt.error;
-      } else {
-        const firstAttempt = await supabase.rpc("pos_create_order", basePayload as any);
-        data = firstAttempt.data;
-        error = firstAttempt.error;
-      }
-
-      if (error) {
-        const message = String(error.message ?? "").toLowerCase();
-        const supportsNoUserId =
-          staffUserId &&
-          (message.includes("named argument") ||
-            message.includes("schema cache") ||
-            (message.includes("pos_create_order") && message.includes("p_user_id")));
-        const requiresUserId =
-          !staffUserId &&
-          ((message.includes("user id") && message.includes("required")) ||
-            (message.includes("user_id") && message.includes("required")) ||
-            (message.includes("p_user_id") && message.includes("required")));
-
-        if (supportsNoUserId) {
-          const retry = await supabase.rpc("pos_create_order", basePayload as any);
-          data = retry.data;
-          error = retry.error;
-        } else if (requiresUserId) {
-          throw new Error("Staff session missing user id. Please refresh and sign in again.");
-        }
-      }
+      const { data, error } = await supabase.rpc(
+        "pos_create_order",
+        basePayload as any
+      );
       if (error) throw error;
 
       const orderId = resolveOrderId(data);

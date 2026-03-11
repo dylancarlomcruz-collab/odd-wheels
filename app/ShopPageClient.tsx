@@ -18,7 +18,6 @@ import {
   normalizeSearchTerm,
 } from "@/lib/search";
 import { useProfile } from "@/hooks/useProfile";
-import { useAdminViewMode } from "@/hooks/useAdminViewMode";
 import { InventoryEditorDrawer } from "@/components/admin/InventoryEditorDrawer";
 import type { AdminProduct } from "@/components/admin/InventoryBrowseGrid";
 import { resolveEffectivePrice } from "@/lib/pricing";
@@ -62,14 +61,6 @@ const FILTER_CHIP_STYLES = {
 };
 const PAGE_SIZE = 48;
 const PAGE_SIZE_WIDE = 64;
-
-type LastSoldEntry = {
-  orderId: string;
-  productKey: string;
-  productTitle: string;
-  variantId: string;
-  condition: string;
-};
 
 type TourStep = {
   key: string;
@@ -225,7 +216,6 @@ export default function ShopPageClient() {
   const cart = useCart();
   const { profile } = useProfile();
   const isAdminUser = profile?.role === "admin";
-  const { isAdminMode } = useAdminViewMode(isAdminUser);
   const [loading, setLoading] = React.useState(true);
   const [err, setErr] = React.useState<string | null>(null);
   const [rows, setRows] = React.useState<VariantRow[]>([]);
@@ -273,9 +263,6 @@ export default function ShopPageClient() {
   const [lastSearch, setLastSearch] = React.useState<string | null>(null);
   const [showBackToTop, setShowBackToTop] = React.useState(false);
   const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
-  const [lastSoldEntry, setLastSoldEntry] =
-    React.useState<LastSoldEntry | null>(null);
-  const [revertingSale, setRevertingSale] = React.useState(false);
   const { sortBy, priceDir, newestDir } = useShopSort();
   const isSingleView = viewMode === "single";
   const isDoubleView = viewMode === "double";
@@ -1216,137 +1203,6 @@ export default function ShopPageClient() {
     setRecentEntries(readRecentViewEntries());
   }
 
-  function resolveOrderId(data: any): string | null {
-    if (!data) return null;
-    if (typeof data === "string" || typeof data === "number") return String(data);
-    if (typeof data === "object") {
-      return (
-        data.order_id ??
-        data.orderId ??
-        data.id ??
-        data.order?.id ??
-        data.data?.id ??
-        null
-      );
-    }
-    return null;
-  }
-
-  async function markOneSoldViaPos(
-    product: ShopProduct,
-    option: {
-      id: string;
-      condition: string;
-    }
-  ) {
-    const shippingDetails = {
-      method: "PICKUP",
-      text: "Auto-sold from inventory editor",
-      discount: null,
-    };
-
-    const { data, error } = await supabase.rpc("pos_create_order", {
-      p_customer_name: "Odd Wheels FB",
-      p_customer_phone: "N/A",
-      p_shipping_method: "PICKUP",
-      p_shipping_details: shippingDetails,
-      p_payment_method: "CASH",
-      p_save_customer: false,
-      p_items: [{ variant_id: option.id, qty: 1 }],
-    });
-    if (error) throw error;
-
-    const orderId = resolveOrderId(data);
-    if (!orderId) {
-      throw new Error("POS order created, but order id is missing.");
-    }
-
-    const session = await supabase.auth.getSession();
-    const token = session.data.session?.access_token;
-    if (!token) {
-      throw new Error("Staff session not found. Please sign in again.");
-    }
-
-    const res = await fetch("/api/pos/complete", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ orderId, markToShip: true }),
-    });
-    const payload = await res.json().catch(() => null);
-    if (!res.ok || !payload?.ok) {
-      throw new Error(payload?.error ?? "POS completion failed.");
-    }
-
-    setRows((prev) =>
-      prev.map((row) => {
-        if (row.id !== option.id) return row;
-        const currentQty = Math.max(0, Math.trunc(Number(row.qty ?? 0)));
-        return { ...row, qty: Math.max(0, currentQty - 1) };
-      })
-    );
-    setLastSoldEntry({
-      orderId,
-      productKey: product.key,
-      productTitle: product.title,
-      variantId: option.id,
-      condition: option.condition,
-    });
-
-    toast({
-      intent: "success",
-      title: "Marked sold",
-      message: `1 qty sold as Odd Wheels FB and added to To Ship (${formatConditionLabel(option.condition, {
-        upper: true,
-      })}).`,
-      image_url: product.image_url,
-    });
-  }
-
-  async function revertLastSoldSale() {
-    if (!lastSoldEntry || revertingSale) return;
-    const confirmed = window.confirm(
-      `Revert last sale for "${lastSoldEntry.productTitle}"?`
-    );
-    if (!confirmed) return;
-
-    setRevertingSale(true);
-    try {
-      const { error } = await supabase.rpc("fn_staff_void_order", {
-        p_order_id: lastSoldEntry.orderId,
-        p_reason: "Reverted sale from shop admin mode",
-      });
-      if (error) throw error;
-
-      setRows((prev) =>
-        prev.map((row) => {
-          if (row.id !== lastSoldEntry.variantId) return row;
-          const currentQty = Math.max(0, Math.trunc(Number(row.qty ?? 0)));
-          return { ...row, qty: currentQty + 1 };
-        })
-      );
-
-      toast({
-        intent: "success",
-        title: "Sale reverted",
-        message: `Sale reverted (${formatConditionLabel(lastSoldEntry.condition, {
-          upper: true,
-        })}).`,
-      });
-      setLastSoldEntry(null);
-    } catch (e: any) {
-      toast({
-        intent: "error",
-        title: "Revert failed",
-        message: e?.message ?? "Unable to revert this sale.",
-      });
-    } finally {
-      setRevertingSale(false);
-    }
-  }
-
   async function onAdd(
     product: ShopProduct,
     option: {
@@ -1359,11 +1215,6 @@ export default function ShopPageClient() {
     }
   ) {
     try {
-      if (isAdminMode) {
-        await markOneSoldViaPos(product, option);
-        return;
-      }
-
       const result = await cart.add(option.id, 1);
       const effectivePrice = resolveEffectivePrice({
         price: Number(option.price),
@@ -1399,7 +1250,7 @@ export default function ShopPageClient() {
     product: ShopProduct,
     _imageUrl: string | null
   ) {
-    if (!isAdminMode) return;
+    if (!isAdminUser) return;
     const { data, error } = await supabase
       .from("products")
       .select(
@@ -1932,16 +1783,6 @@ export default function ShopPageClient() {
                 <span>
                   Showing {visibleMainItems.length} of {mainSection.items.length}
                 </span>
-                {isAdminMode && lastSoldEntry ? (
-                  <button
-                    type="button"
-                    onClick={() => void revertLastSoldSale()}
-                    disabled={revertingSale}
-                    className="rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {revertingSale ? "Reverting..." : "Revert last sold"}
-                  </button>
-                ) : null}
               </div>
             </div>
             {(() => {
@@ -1994,10 +1835,10 @@ export default function ShopPageClient() {
                       product={p}
                       wideView={isQuadView}
                       mobileVariant={isSingleView ? "diecast" : undefined}
-                      primaryActionLabel={isAdminMode ? "Sold" : "Add"}
+                      primaryActionLabel="Add"
                       onAddToCart={(opt) => onAdd(p, opt)}
                       onImageClick={
-                        isAdminMode
+                        isAdminUser
                           ? (item, imageUrl) => openAdminEditor(item, imageUrl)
                           : undefined
                       }
@@ -2016,18 +1857,18 @@ export default function ShopPageClient() {
                   product={p}
                   wideView={isQuadView}
                   mobileVariant={isSingleView ? "diecast" : undefined}
-                  primaryActionLabel={isAdminMode ? "Sold" : "Add"}
+                  primaryActionLabel="Add"
                   onAddToCart={(opt) => onAdd(p, opt)}
                   onImageClick={
-                    isAdminMode
+                    isAdminUser
                       ? (item, imageUrl) => openAdminEditor(item, imageUrl)
-                        : undefined
-                    }
-                    onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
-                    onProductClick={(item) => recordProductClick(item.key)}
-                    socialProof={buildSocialProof(p)}
-                    relatedPool={sortedProducts}
-                  />
+                      : undefined
+                  }
+                  onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
+                  onProductClick={(item) => recordProductClick(item.key)}
+                  socialProof={buildSocialProof(p)}
+                  relatedPool={sortedProducts}
+                />
                 );
                 if (shouldInsert(index)) {
                   const section = suggestionQueue.shift();

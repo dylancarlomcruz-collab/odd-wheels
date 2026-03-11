@@ -13,10 +13,13 @@ import {
   Wallet,
 } from "lucide-react";
 import { RequireAuth } from "@/components/auth/RequireAuth";
+import { useAuth } from "@/components/auth/AuthProvider";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { supabase } from "@/lib/supabase/browser";
+
+const CART_EVENT = "oddwheels:cart-updated";
 
 function peso(n: number) {
   try {
@@ -182,6 +185,13 @@ function getItemPrice(it: any): number {
   return direct ?? lineTotal ?? 0;
 }
 
+function emitCartUpdated() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(CART_EVENT, { detail: { source: "admin-sales-revert" } })
+  );
+}
+
 type DetailsModalProps = {
   open: boolean;
   onClose: () => void;
@@ -225,6 +235,7 @@ function DetailsModal({ open, onClose, title, children }: DetailsModalProps) {
 }
 
 export default function AdminSalesPage() {
+  const { user } = useAuth();
   const today = React.useMemo(() => new Date(), []);
   const [from, setFrom] = React.useState(() => {
     const d = new Date();
@@ -260,6 +271,7 @@ export default function AdminSalesPage() {
   const [revertingOrderId, setRevertingOrderId] = React.useState<string | null>(
     null
   );
+  const [revertingToCart, setRevertingToCart] = React.useState(false);
   const [selectedKpi, setSelectedKpi] = React.useState<
     "sales" | "orders" | "aov" | "cogs" | "profit" | "margin" | null
   >(null);
@@ -623,14 +635,111 @@ export default function AdminSalesPage() {
     loadDetails();
   }, [selectedOrderId]);
 
-  async function revertSale(orderId: string) {
+  async function addVariantsToCurrentCart(
+    variantQtyToRestore: Map<string, number>
+  ) {
+    const userId = String(user?.id ?? "").trim();
+    if (!userId) {
+      throw new Error("Staff session not found. Please sign in again.");
+    }
+
+    const variantIds = Array.from(variantQtyToRestore.keys()).filter(Boolean);
+    if (!variantIds.length) return { addedQty: 0, addedLines: 0 };
+
+    const [existingRes, inventoryRes] = await Promise.all([
+      supabase
+        .from("cart_items")
+        .select("id,variant_id,qty")
+        .eq("user_id", userId)
+        .in("variant_id", variantIds),
+      supabase
+        .from("product_variants")
+        .select("id,qty")
+        .in("id", variantIds),
+    ]);
+
+    if (existingRes.error) throw existingRes.error;
+    if (inventoryRes.error) throw inventoryRes.error;
+
+    const existingMap = new Map<
+      string,
+      { id: string; qty: number }
+    >();
+    (existingRes.data as any[] | null)?.forEach((row) => {
+      if (!row?.id || !row?.variant_id) return;
+      existingMap.set(String(row.variant_id), {
+        id: String(row.id),
+        qty: Math.max(0, Number(row.qty ?? 0)),
+      });
+    });
+
+    const inventoryMap = new Map<string, number>();
+    (inventoryRes.data as any[] | null)?.forEach((row) => {
+      if (!row?.id) return;
+      inventoryMap.set(String(row.id), Math.max(0, Number(row.qty ?? 0)));
+    });
+
+    const writes: PromiseLike<any>[] = [];
+    let addedQty = 0;
+    let addedLines = 0;
+
+    for (const variantId of variantIds) {
+      const restoreQty = Math.max(0, Number(variantQtyToRestore.get(variantId) ?? 0));
+      if (!restoreQty) continue;
+
+      const available = Math.max(0, Number(inventoryMap.get(variantId) ?? 0));
+      if (!available) continue;
+
+      const existing = existingMap.get(variantId);
+      if (existing?.id) {
+        const nextQty = Math.max(1, Math.min(existing.qty + restoreQty, available));
+        if (nextQty !== existing.qty) {
+          writes.push(
+            supabase.from("cart_items").update({ qty: nextQty }).eq("id", existing.id)
+          );
+          addedQty += nextQty - existing.qty;
+          addedLines += 1;
+        }
+        continue;
+      }
+
+      const nextQty = Math.max(1, Math.min(restoreQty, available));
+      writes.push(
+        supabase.from("cart_items").insert({
+          user_id: userId,
+          variant_id: variantId,
+          qty: nextQty,
+          protector_selected: false,
+        })
+      );
+      addedQty += nextQty;
+      addedLines += 1;
+    }
+
+    const results = await Promise.all(writes);
+    const failed = results.find((result: any) => result?.error);
+    if (failed?.error) throw failed.error;
+
+    if (writes.length) {
+      emitCartUpdated();
+    }
+
+    return { addedQty, addedLines };
+  }
+
+  async function revertSale(orderId: string, options?: { addToCart?: boolean }) {
     const shortId = String(orderId).slice(0, 8);
+    const addToCart = Boolean(options?.addToCart);
     const confirmed = window.confirm(
-      `Revert sale for order #${shortId}? This will void the order.`
+      addToCart
+        ? `Revert sale for order #${shortId} and add the items to your cart? This will void the order.`
+        : `Revert sale for order #${shortId}? This will void the order.`
     );
     if (!confirmed) return;
 
     setRevertingOrderId(orderId);
+    setRevertingToCart(addToCart);
+    let reverted = false;
     try {
       const { data: orderItems, error: itemsError } = await supabase
         .from("order_items")
@@ -672,6 +781,7 @@ export default function AdminSalesPage() {
         p_reason: "Reverted from sales report",
       });
       if (error) throw error;
+      reverted = true;
 
       // Guarantee stock is restored even if backend void function did not restock.
       if (variantIds.length) {
@@ -703,12 +813,31 @@ export default function AdminSalesPage() {
         }
       }
 
+      if (addToCart) {
+        const result = await addVariantsToCurrentCart(variantQtyToRestore);
+        if (result.addedQty <= 0) {
+          throw new Error("Sale reverted, but no items could be added to cart.");
+        }
+      }
+
       setSelectedOrderId(null);
       await run();
     } catch (err: any) {
-      alert(err?.message ?? "Failed to revert sale.");
+      if (reverted) {
+        setSelectedOrderId(null);
+        await run().catch(() => undefined);
+        alert(
+          err?.message ??
+            (addToCart
+              ? "Sale reverted, but the items could not be added to cart."
+              : "Sale reverted, but a follow-up update failed.")
+        );
+      } else {
+        alert(err?.message ?? "Failed to revert sale.");
+      }
     } finally {
       setRevertingOrderId(null);
+      setRevertingToCart(false);
     }
   }
 
@@ -1229,13 +1358,24 @@ export default function AdminSalesPage() {
                 if (!canRevert) return null;
                 const busy = revertingOrderId === String(selectedOrder.id);
                 return (
-                  <div className="flex justify-end">
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button
+                      variant="secondary"
+                      disabled={busy}
+                      onClick={() =>
+                        void revertSale(String(selectedOrder.id), { addToCart: true })
+                      }
+                    >
+                      {busy && revertingToCart
+                        ? "Reverting + adding..."
+                        : "Revert sale and add to cart"}
+                    </Button>
                     <Button
                       variant="danger"
                       disabled={busy}
                       onClick={() => void revertSale(String(selectedOrder.id))}
                     >
-                      {busy ? "Reverting..." : "Revert sale"}
+                      {busy && !revertingToCart ? "Reverting..." : "Revert sale"}
                     </Button>
                   </div>
                 );

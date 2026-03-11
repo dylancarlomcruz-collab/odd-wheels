@@ -2287,6 +2287,10 @@ security definer
 set search_path = public
 as $$
 begin
+  if new.user_id is null then
+    return new;
+  end if;
+
   if (tg_op = 'INSERT' and new.payment_status = 'PAID')
      or (tg_op = 'UPDATE' and new.payment_status = 'PAID' and old.payment_status is distinct from new.payment_status) then
     perform public.fn_recalculate_profile_tier(new.user_id);
@@ -3064,6 +3068,10 @@ security definer
 set search_path = public
 as $$
 begin
+  if new.user_id is null then
+    return new;
+  end if;
+
   if (tg_op = 'INSERT' and new.payment_status = 'PAID')
      or (tg_op = 'UPDATE' and new.payment_status = 'PAID' and old.payment_status is distinct from new.payment_status) then
     perform public.fn_grant_spend_vouchers(new.user_id);

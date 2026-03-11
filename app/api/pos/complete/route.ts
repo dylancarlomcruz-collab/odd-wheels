@@ -1,6 +1,28 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
+function normalizeShippingDetails(raw: unknown) {
+  if (raw && typeof raw === "object") {
+    return raw as Record<string, unknown>;
+  }
+
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return {};
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === "object") {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return { text: trimmed };
+    }
+    return { text: trimmed };
+  }
+
+  return {};
+}
+
 export async function POST(req: Request) {
   try {
     const authResult = await requireStaff(req);
@@ -50,15 +72,17 @@ export async function POST(req: Request) {
     const paymentStatus = String(order.payment_status ?? "").toUpperCase();
     const inventoryDeducted = Boolean(order.inventory_deducted);
     const hasUserId = Boolean(order.user_id);
-    const shippingDetails =
-      order.shipping_details && typeof order.shipping_details === "object"
-        ? order.shipping_details
-        : {};
+    const shippingDetails = normalizeShippingDetails(order.shipping_details);
     const shippingText = String(shippingDetails?.text ?? "").toLowerCase();
+    const shippingSource = String(shippingDetails?.source ?? "").toLowerCase();
     const customerName = String(order.customer_name ?? "").toLowerCase();
     const shippingMethod = String(order.shipping_method ?? "").toUpperCase();
     const channel = String(order.channel ?? "").toUpperCase();
     const isPosOrder = channel === "POS";
+    const isAdminCartCheckout =
+      shippingDetails?.admin_cart_checkout === true ||
+      shippingSource === "admin_cart_checkout" ||
+      shippingText.includes("fb checkout from admin cart");
     const autoOddWheelsToShip =
       customerName.includes("odd wheels") ||
       shippingText.includes("auto-sold from inventory editor") ||
@@ -66,7 +90,7 @@ export async function POST(req: Request) {
     const markToShip = forceToShip || autoOddWheelsToShip;
 
     if (paymentStatus !== "PAID") {
-      if (isPosOrder || inventoryDeducted || !hasUserId) {
+      if (isPosOrder || isAdminCartCheckout || inventoryDeducted || !hasUserId) {
         const { error: updateError } = await sb
           .from("orders")
           .update({
