@@ -516,6 +516,153 @@ function createShippingLabelCanvas(data: ShippingLabelData) {
   return canvas;
 }
 
+function escapeHtml(value: string) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function supportsDirectNiimbotPrinting() {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return false;
+  if (!window.isSecureContext) return false;
+
+  const bluetooth = (navigator as Navigator & {
+    bluetooth?: { requestDevice?: unknown };
+  }).bluetooth;
+
+  return Boolean(bluetooth && typeof bluetooth.requestDevice === "function");
+}
+
+function getNiimbotSupportMessage() {
+  if (typeof window === "undefined") {
+    return "Direct Bluetooth label printing is only available in supported browsers.";
+  }
+  if (!window.isSecureContext) {
+    return "Niimbot requires HTTPS (secure context).";
+  }
+  if (!supportsDirectNiimbotPrinting()) {
+    return "Direct Bluetooth label printing is not supported here. Use Print label to open a printable preview instead.";
+  }
+  return null;
+}
+
+function openShippingLabelPrintPreview(canvas: HTMLCanvasElement, title: string) {
+  if (typeof window === "undefined") {
+    throw new Error("Print preview is only available in the browser.");
+  }
+
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    throw new Error("Unable to open the printable label preview. Allow pop-ups and try again.");
+  }
+
+  const labelDataUrl = canvas.toDataURL("image/png");
+  const safeTitle = escapeHtml(title);
+  const width = `${B1_LABEL_WIDTH_MM}mm`;
+  const height = `${B1_LABEL_HEIGHT_MM}mm`;
+
+  printWindow.document.open();
+  printWindow.document.write(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${safeTitle}</title>
+    <style>
+      @page {
+        size: ${width} ${height};
+        margin: 0;
+      }
+
+      :root {
+        color-scheme: light;
+      }
+
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: ${width};
+        min-height: ${height};
+        background: #ffffff;
+        color: #111111;
+        font-family: Arial, sans-serif;
+      }
+
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      }
+
+      img {
+        display: block;
+        width: ${width};
+        height: ${height};
+        object-fit: contain;
+        image-rendering: pixelated;
+      }
+
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 16px;
+        background: #111111;
+        color: #ffffff;
+        font: inherit;
+      }
+
+      p {
+        margin: 0 12px 12px;
+        text-align: center;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      @media print {
+        button,
+        p {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <img id="shipping-label" src="${labelDataUrl}" alt="Shipping label" />
+    <button type="button" onclick="window.print()">Print</button>
+    <p>If the print dialog does not open automatically, tap Print.</p>
+    <script>
+      (function () {
+        var label = document.getElementById("shipping-label");
+        var printed = false;
+
+        function triggerPrint() {
+          if (printed) return;
+          printed = true;
+          setTimeout(function () {
+            try {
+              window.focus();
+              window.print();
+            } catch (error) {}
+          }, 180);
+        }
+
+        if (label && label.complete) {
+          triggerPrint();
+        } else if (label) {
+          label.addEventListener("load", triggerPrint, { once: true });
+        }
+      })();
+    </script>
+  </body>
+</html>`);
+  printWindow.document.close();
+}
+
 type OrderDetailsModalProps = {
   open: boolean;
   onClose: () => void;
@@ -597,12 +744,19 @@ export default function CashierShipmentsPage() {
   const niimbotLibRef = React.useRef<any>(null);
   const niimbotClientRef = React.useRef<any>(null);
   const isAdmin = profile?.role === "admin";
+  const [labelPrintMode, setLabelPrintMode] = React.useState<"bluetooth" | "browser">(
+    "browser"
+  );
 
   const shippingDays = React.useMemo(
     () => pickShippingDays(notices),
     [notices]
   );
   const shippingDaysLabel = shippingDays || "the posted shipping days";
+
+  React.useEffect(() => {
+    setLabelPrintMode(supportsDirectNiimbotPrinting() ? "bluetooth" : "browser");
+  }, []);
 
   const loadNiimbotLib = React.useCallback(async () => {
     if (niimbotLibRef.current) return niimbotLibRef.current;
@@ -612,6 +766,11 @@ export default function CashierShipmentsPage() {
   }, []);
 
   const ensureNiimbotClient = React.useCallback(async () => {
+    const supportMessage = getNiimbotSupportMessage();
+    if (supportMessage) {
+      throw new Error(supportMessage);
+    }
+
     const lib = await loadNiimbotLib();
     if (!niimbotClientRef.current) {
       const client = lib.instantiateClient("bluetooth");
@@ -632,17 +791,11 @@ export default function CashierShipmentsPage() {
 
   const connectNiimbot = React.useCallback(async () => {
     if (niimbotState === "connecting" || niimbotState === "connected") return;
-    if (typeof window === "undefined" || !window.isSecureContext) {
+    const supportMessage = getNiimbotSupportMessage();
+    if (supportMessage) {
       toast({
         intent: "error",
-        message: "Niimbot requires HTTPS (secure context).",
-      });
-      return;
-    }
-    if (!("bluetooth" in navigator)) {
-      toast({
-        intent: "error",
-        message: "Web Bluetooth is not supported in this browser.",
+        message: supportMessage,
       });
       return;
     }
@@ -898,11 +1051,6 @@ export default function CashierShipmentsPage() {
     trackingRaw: string
   ) {
     const tracking = String(trackingRaw ?? "").trim();
-    if (!tracking) {
-      setErrorById((cur) => ({ ...cur, [orderId]: "Tracking number is required." }));
-      return;
-    }
-
     setBusyById((cur) => ({ ...cur, [orderId]: true }));
     setErrorById((cur) => ({ ...cur, [orderId]: "" }));
     try {
@@ -1259,8 +1407,20 @@ export default function CashierShipmentsPage() {
           packaging: shippingContainer || shippingMethod || "Not set",
           barcodeValue,
         };
-
         const canvas = createShippingLabelCanvas(payload);
+
+        if (labelPrintMode === "browser") {
+          openShippingLabelPrintPreview(
+            canvas,
+            `Shipping label ${orderId.slice(0, 8)}`
+          );
+          toast({
+            intent: "success",
+            message: `Opened printable label for #${orderId.slice(0, 8)}.`,
+          });
+          return;
+        }
+
         const niimbot = await ensureNiimbotClient();
         const lib = niimbot.lib;
         client = niimbot.client;
@@ -1312,7 +1472,7 @@ export default function CashierShipmentsPage() {
         setPrintingOrderId((cur) => (cur === orderId ? null : cur));
       }
     },
-    [ensureNiimbotClient, getDraft, niimbotState]
+    [ensureNiimbotClient, getDraft, labelPrintMode, niimbotState]
   );
 
   const renderShippingDetails = (o: any) => {
@@ -1330,7 +1490,7 @@ export default function CashierShipmentsPage() {
         draft.bookingReference || getLbcBookingReference(o, details) || ""
       ).trim();
       const canSaveBookingReference = bookingReference.length > 0;
-      const canMarkShipped = draft.tracking.trim().length > 0;
+      const canMarkShipped = true;
       const busy = Boolean(busyById[o.id]);
       const error = errorById[o.id];
       const shippingSummary = buildShippingSummary(o, details);
@@ -2161,32 +2321,40 @@ export default function CashierShipmentsPage() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge>{bulkOrders.length}</Badge>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={niimbotState === "connected" ? "secondary" : "ghost"}
-                      onClick={connectNiimbot}
-                      disabled={niimbotState === "connecting"}
-                      className="gap-1.5"
-                    >
-                      {niimbotState === "connecting" ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : niimbotState === "connected" ? (
-                        <BluetoothConnected className="h-3.5 w-3.5" />
-                      ) : (
-                        <Bluetooth className="h-3.5 w-3.5" />
-                      )}
-                      {niimbotState === "connected"
-                        ? `Niimbot ${niimbotPrinterName ? `(${niimbotPrinterName})` : "Connected"}`
-                        : niimbotState === "connecting"
-                          ? "Connecting Niimbot..."
-                          : "Connect Niimbot B1"}
-                    </Button>
-                    {niimbotState === "connected" ? (
-                      <Button type="button" size="sm" variant="ghost" onClick={disconnectNiimbot}>
-                        Disconnect
-                      </Button>
-                    ) : null}
+                    {labelPrintMode === "bluetooth" ? (
+                      <>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={niimbotState === "connected" ? "secondary" : "ghost"}
+                          onClick={connectNiimbot}
+                          disabled={niimbotState === "connecting"}
+                          className="gap-1.5"
+                        >
+                          {niimbotState === "connecting" ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : niimbotState === "connected" ? (
+                            <BluetoothConnected className="h-3.5 w-3.5" />
+                          ) : (
+                            <Bluetooth className="h-3.5 w-3.5" />
+                          )}
+                          {niimbotState === "connected"
+                            ? `Niimbot ${niimbotPrinterName ? `(${niimbotPrinterName})` : "Connected"}`
+                            : niimbotState === "connecting"
+                              ? "Connecting Niimbot..."
+                              : "Connect Niimbot B1"}
+                        </Button>
+                        {niimbotState === "connected" ? (
+                          <Button type="button" size="sm" variant="ghost" onClick={disconnectNiimbot}>
+                            Disconnect
+                          </Button>
+                        ) : null}
+                      </>
+                    ) : (
+                      <div className="max-w-[18rem] text-right text-xs text-white/60">
+                        This browser uses printable label preview instead of direct Niimbot Bluetooth.
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -2216,7 +2384,7 @@ export default function CashierShipmentsPage() {
                       const customerName = getCustomerName(o, details);
                       const draft = getDraft(o.id);
                       const courierLabel = String(draft.courier || o.shipping_method || "").trim();
-                      const canMarkShipped = draft.tracking.trim().length > 0;
+                      const canMarkShipped = true;
                       const busy = Boolean(busyById[o.id]);
 
                       return (
