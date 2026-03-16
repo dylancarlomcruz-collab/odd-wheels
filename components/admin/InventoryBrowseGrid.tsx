@@ -44,6 +44,7 @@ export type AdminProduct = {
   brand: string | null;
   model: string | null;
   variation: string | null;
+  special_tags: string[] | null;
   image_urls: string[] | null;
   is_active: boolean;
   created_at: string;
@@ -546,7 +547,7 @@ export function InventoryBrowseGrid({
         let pQuery = supabase
           .from("products")
           .select(
-            `id,title,brand,model,variation,image_urls,is_active,created_at,${variantSelect}`
+            `*,${variantSelect}`
           )
           .in("id", productIds);
 
@@ -605,7 +606,7 @@ export function InventoryBrowseGrid({
         let query = supabase
           .from("products")
           .select(
-            `id,title,brand,model,variation,image_urls,is_active,created_at,${variantSelect}`
+            `*,${variantSelect}`
           );
 
         if (showSoldOut) {

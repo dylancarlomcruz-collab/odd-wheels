@@ -9,7 +9,7 @@ import { useCart } from "@/hooks/useCart";
 import { toast } from "@/components/ui/toast";
 import { collapseVariants, type VariantRow } from "@/lib/shopProducts";
 import { readRecentViewEntries } from "@/lib/recentViews";
-import { formatConditionLabel, isBlisterCondition } from "@/lib/conditions";
+import { formatConditionLabel } from "@/lib/conditions";
 import {
   buildProductSearchText,
   buildSearchTermTokens,
@@ -17,6 +17,7 @@ import {
   matchesSearchText,
   normalizeSearchTerm,
 } from "@/lib/search";
+import { SHOP_CATEGORY_OPTIONS, matchesShopCategory } from "@/lib/shopCategories";
 import { useProfile } from "@/hooks/useProfile";
 import { InventoryEditorDrawer } from "@/components/admin/InventoryEditorDrawer";
 import type { AdminProduct } from "@/components/admin/InventoryBrowseGrid";
@@ -59,6 +60,12 @@ const FILTER_CHIP_STYLES = {
   idle:
     "border-white/10 bg-bg-950/50 text-white/70 hover:bg-bg-950/70 hover:text-white",
 };
+const FILTER_SECTION_CARD_STYLES =
+  "panel panel-muted relative h-full min-w-0 overflow-hidden rounded-[22px] border-white/12 px-3 py-3 shadow-[0_18px_40px_rgba(0,0,0,0.16)]";
+const FILTER_SECTION_HEADER_STYLES =
+  "flex items-start justify-between gap-3 border-b border-white/8 pb-2";
+const FILTER_SECTION_BADGE_STYLES =
+  "inline-flex shrink-0 rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-[10px] font-medium text-white/50";
 const PAGE_SIZE = 48;
 const PAGE_SIZE_WIDE = 64;
 
@@ -69,43 +76,21 @@ type TourStep = {
   body: string;
 };
 
+type ShopDrawerFilterState = {
+  categories: string[];
+  conditions: string[];
+  minPrice: string;
+  maxPrice: string;
+};
+
 function normalizeBrandKey(value: string | null | undefined) {
   return String(value ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
 }
 
-const BOXED_TRUESCALES_BRANDS = new Set([
-  "minigt",
-  "kaidohouse",
-  "kaido",
-  "bmc",
-  "bmcreations",
-  "poprace",
-]);
-const TOMICA_BRANDS = new Set([
-  "tomica",
-  "tlvn",
-  "tlv",
-  "tomicalimitedvintage",
-  "tomicalimitedvintageneo",
-]);
 const HOT_WHEELS_BRANDS = ["hotwheels", "hotwheel"];
-const TRUCK_KEYWORDS = ["truck", "trucks", "pickup", "hauler", "semi", "tractor", "rig", "lorry"];
-const TRUESCALE_KEYWORDS = ["truescale", "true scale", "tsm", "acrylic"];
 const LBWK_QUERY_TERMS = ["lbwk", "lb works", "liberty walk", "libertywalk", "lb-"];
-
-function matchesKeyword(text: string, keyword: string) {
-  const padded = ` ${text} `;
-  return padded.includes(` ${keyword} `);
-}
-
-function matchesAnyKeyword(text: string, keywords: string[]) {
-  for (const keyword of keywords) {
-    if (matchesKeyword(text, keyword)) return true;
-  }
-  return false;
-}
 
 function hasAnyPhrase(text: string, terms: string[]) {
   const padded = ` ${text} `;
@@ -114,45 +99,6 @@ function hasAnyPhrase(text: string, terms: string[]) {
     if (!normalized) return false;
     return padded.includes(` ${normalized} `) || text.includes(normalized);
   });
-}
-
-function matchesCategory(product: any, category: string) {
-  const brandKey = normalizeBrandKey(product?.brand);
-  const text = buildProductSearchText(product);
-  switch (category) {
-    case "boxed-truescales":
-      return BOXED_TRUESCALES_BRANDS.has(brandKey);
-    case "tomicas":
-      return TOMICA_BRANDS.has(brandKey);
-    case "hot-wheels":
-      return HOT_WHEELS_BRANDS.some((key) => brandKey.includes(key));
-    case "trucks":
-      return matchesAnyKeyword(text, TRUCK_KEYWORDS);
-    case "dioramas":
-      return (
-        matchesKeyword(text, "diorama") ||
-        (product?.options ?? []).some(
-          (opt: any) => {
-            const shipClass = String(opt?.ship_class ?? "").toUpperCase();
-            return shipClass === "FIGURES_DIORAMA" || shipClass === "DIORAMA";
-          }
-        )
-      );
-    case "truescales":
-      if (brandKey.includes("inno64")) {
-        return false;
-      }
-      return (product?.options ?? []).some((opt: any) => {
-        const shipClass = String(opt?.ship_class ?? "").toUpperCase();
-        return shipClass === "ACRYLIC_TRUE_SCALE";
-      });
-    case "blistered":
-      return (product?.options ?? []).some((opt: any) =>
-        isBlisterCondition(opt?.condition_raw)
-      );
-    default:
-      return true;
-  }
 }
 
 function getBrandButtonClasses(active: boolean, joined: boolean) {
@@ -178,6 +124,24 @@ function toggleValue(list: string[], value: string) {
     return list.filter((item) => item !== value);
   }
   return [...list, value];
+}
+
+function getDefaultDrawerFilters(): ShopDrawerFilterState {
+  return {
+    categories: [],
+    conditions: [],
+    minPrice: "",
+    maxPrice: "",
+  };
+}
+
+function parsePriceValue(value: string) {
+  const cleaned = String(value ?? "")
+    .replace(/,/g, "")
+    .trim();
+  if (!cleaned) return null;
+  const amount = Number(cleaned);
+  return Number.isFinite(amount) ? amount : null;
 }
 
 function getMoreButtonClasses(joined: boolean) {
@@ -229,6 +193,11 @@ export default function ShopPageClient() {
   );
   const [selectedConditions, setSelectedConditions] = React.useState<string[]>(
     []
+  );
+  const [minPriceFilter, setMinPriceFilter] = React.useState("");
+  const [maxPriceFilter, setMaxPriceFilter] = React.useState("");
+  const [draftFilters, setDraftFilters] = React.useState<ShopDrawerFilterState>(
+    () => getDefaultDrawerFilters()
   );
   const [showAllBrands, setShowAllBrands] = React.useState(false);
   const [brandColumns, setBrandColumns] = React.useState(BRAND_COLUMN_DEFAULT);
@@ -294,6 +263,7 @@ export default function ShopPageClient() {
   const lastScrolledQuery = React.useRef<string>("");
   const lastRecentRefresh = React.useRef<number>(0);
   const loadMoreRef = React.useRef<HTMLDivElement | null>(null);
+
   const tourSteps = React.useMemo<TourStep[]>(
     () => [
       {
@@ -318,7 +288,7 @@ export default function ShopPageClient() {
         key: "filters",
         selector: "[data-tour='shop-filters']",
         title: "Filters",
-        body: "Open category and condition filters.",
+        body: "Open category, condition, and price filters.",
       },
       {
         key: "view",
@@ -472,7 +442,7 @@ export default function ShopPageClient() {
       const { data, error } = await supabase
         .from("product_variants")
         .select(
-          "id,condition,barcode,issue_notes,issue_photo_urls,public_notes,ship_class,price,sale_price,discount_percent,qty, product:products(id,title,brand,model,variation,image_urls,is_active,created_at)"
+          "id,condition,barcode,issue_notes,issue_photo_urls,public_notes,ship_class,price,sale_price,discount_percent,qty, product:products(*)"
         )
         .gt("qty", 0)
         .order("created_at", { ascending: false });
@@ -675,21 +645,7 @@ export default function ShopPageClient() {
     []
   );
 
-  const categoryOptions = React.useMemo(
-    () => [
-      {
-        key: "boxed-truescales",
-        label: "Boxed truescales",
-      },
-      { key: "tomicas", label: "Tomicas" },
-      { key: "hot-wheels", label: "Hot Wheels" },
-      { key: "trucks", label: "Trucks" },
-      { key: "dioramas", label: "Figures & Dioramas" },
-      { key: "truescales", label: "Truescales" },
-      { key: "blistered", label: "Blistered" },
-    ],
-    []
-  );
+  const categoryOptions = SHOP_CATEGORY_OPTIONS;
 
   const productById = React.useMemo(() => {
     const map = new Map<string, (typeof shopProducts)[number]>();
@@ -748,8 +704,17 @@ export default function ShopPageClient() {
   }, [brandStats]);
 
   const activeFilterCount = React.useMemo(() => {
-    return selectedCategories.length + selectedConditions.length;
-  }, [selectedCategories.length, selectedConditions.length]);
+    let count = selectedCategories.length + selectedConditions.length;
+    if (minPriceFilter.trim() || maxPriceFilter.trim()) {
+      count += 1;
+    }
+    return count;
+  }, [
+    maxPriceFilter,
+    minPriceFilter,
+    selectedCategories.length,
+    selectedConditions.length,
+  ]);
 
   const maxVisibleBrands = React.useMemo(() => {
     const reserveMore = allBrandTabs.length > brandColumns;
@@ -884,6 +849,16 @@ export default function ShopPageClient() {
     const categoryKeys = selectedCategories.length
       ? new Set(selectedCategories)
       : null;
+    const minimumPrice = parsePriceValue(minPriceFilter);
+    const maximumPrice = parsePriceValue(maxPriceFilter);
+    const floor =
+      minimumPrice != null && maximumPrice != null
+        ? Math.min(minimumPrice, maximumPrice)
+        : minimumPrice;
+    const ceiling =
+      minimumPrice != null && maximumPrice != null
+        ? Math.max(minimumPrice, maximumPrice)
+        : maximumPrice;
 
     return searchFiltered.filter((p) => {
       if (brandKeys) {
@@ -898,13 +873,28 @@ export default function ShopPageClient() {
       }
       if (categoryKeys) {
         const matchesCategoryFilter = Array.from(categoryKeys).some((key) =>
-          matchesCategory(p, key)
+          matchesShopCategory(p, key)
         );
         if (!matchesCategoryFilter) return false;
       }
+      if (floor != null) {
+        const effectivePrice = p.minEffectivePrice ?? p.minPrice ?? 0;
+        if (effectivePrice < floor) return false;
+      }
+      if (ceiling != null) {
+        const effectivePrice = p.minEffectivePrice ?? p.minPrice ?? 0;
+        if (effectivePrice > ceiling) return false;
+      }
       return true;
     });
-  }, [searchFiltered, selectedBrands, selectedCategories, selectedConditions]);
+  }, [
+    maxPriceFilter,
+    minPriceFilter,
+    searchFiltered,
+    selectedBrands,
+    selectedCategories,
+    selectedConditions,
+  ]);
 
   const sortedFiltered = React.useMemo(() => {
     const list = filtered.slice();
@@ -1188,6 +1178,36 @@ export default function ShopPageClient() {
     return picks;
   }, [recentEntries, productById, sortedProducts]);
 
+  function openFiltersDrawer() {
+    setDraftFilters({
+      categories: [...selectedCategories],
+      conditions: [...selectedConditions],
+      minPrice: minPriceFilter,
+      maxPrice: maxPriceFilter,
+    });
+    setFiltersOpen(true);
+  }
+
+  function clearAppliedFilters() {
+    setSelectedCategories([]);
+    setSelectedConditions([]);
+    setMinPriceFilter("");
+    setMaxPriceFilter("");
+    setDraftFilters(getDefaultDrawerFilters());
+  }
+
+  function resetDraftFilters() {
+    setDraftFilters(getDefaultDrawerFilters());
+  }
+
+  function applyDraftFilters() {
+    setSelectedCategories([...draftFilters.categories]);
+    setSelectedConditions([...draftFilters.conditions]);
+    setMinPriceFilter(draftFilters.minPrice);
+    setMaxPriceFilter(draftFilters.maxPrice);
+    setFiltersOpen(false);
+  }
+
   async function recordProductClick(productId: string) {
     supabase
       .rpc("record_recent_view", { p_product_id: productId })
@@ -1254,7 +1274,7 @@ export default function ShopPageClient() {
     const { data, error } = await supabase
       .from("products")
       .select(
-        "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)"
+        "*, product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)"
       )
       .eq("id", product.key)
       .maybeSingle();
@@ -1349,6 +1369,8 @@ export default function ShopPageClient() {
     sortBy === "relevance" &&
     selectedCategories.length === 0 &&
     selectedConditions.length === 0 &&
+    !minPriceFilter.trim() &&
+    !maxPriceFilter.trim() &&
     selectedBrands.length === 0;
   const mainSection = React.useMemo(() => {
     return (
@@ -1379,6 +1401,8 @@ export default function ShopPageClient() {
     selectedBrands,
     selectedCategories,
     selectedConditions,
+    minPriceFilter,
+    maxPriceFilter,
     sortBy,
     priceDir,
   ]);
@@ -1608,7 +1632,13 @@ export default function ShopPageClient() {
               </div>
               <button
                 type="button"
-                onClick={() => setFiltersOpen((prev) => !prev)}
+                onClick={() => {
+                  if (filtersOpen) {
+                    setFiltersOpen(false);
+                    return;
+                  }
+                  openFiltersDrawer();
+                }}
                 data-tour="shop-filters"
                 className="relative inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-bg-950/50 text-white/70 transition hover:bg-bg-950/70 hover:text-white"
                 aria-expanded={filtersOpen}
@@ -1679,83 +1709,169 @@ export default function ShopPageClient() {
           {filtersOpen ? (
             <div
               id="shop-filters-panel"
-              className="-mx-2 border-b border-white/10 bg-bg-900/95 px-2 py-2 sm:-mx-4 sm:px-4"
+              className="-mx-2 border-b border-white/10 bg-bg-900/92 px-2 py-2 sm:-mx-4 sm:px-4"
             >
-              <div className="mx-auto max-w-6xl space-y-1.5">
-                <div className="flex items-center justify-end gap-2">
-                  <div className="flex items-center gap-2">
+              <div className="mx-auto max-w-6xl rounded-[28px] border border-white/10 bg-bg-950/35 px-3 py-3 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm sm:px-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.22em] text-white/45">
+                    <span>Filters</span>
+                    {activeFilterCount ? (
+                      <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[10px] tracking-normal text-amber-100">
+                        {activeFilterCount} active
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
                     {activeFilterCount ? (
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelectedCategories([]);
-                          setSelectedConditions([]);
-                        }}
-                        className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-bg-950/50 px-2 py-1 text-[10px] uppercase tracking-wide text-white/60 hover:bg-bg-950/70 hover:text-white"
+                        onClick={clearAppliedFilters}
+                        className="rounded-full border border-white/10 bg-transparent px-2.5 py-1.5 text-[11px] text-white/60 transition hover:bg-white/[0.04] hover:text-white"
                       >
                         Clear
                       </button>
                     ) : null}
                     <button
                       type="button"
+                      onClick={resetDraftFilters}
+                      className="rounded-full border border-white/10 bg-bg-950/40 px-2.5 py-1.5 text-[11px] text-white/70 transition hover:bg-bg-950/65 hover:text-white"
+                    >
+                      Reset
+                    </button>
+                    <button
+                      type="button"
+                      onClick={applyDraftFilters}
+                      className="rounded-full border border-amber-400/45 bg-amber-500 px-3 py-1.5 text-[11px] font-semibold text-black transition hover:bg-amber-400"
+                    >
+                      Apply
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setFiltersOpen(false)}
-                      className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-bg-950/50 text-white/60 hover:bg-bg-950/70 hover:text-white"
-                      aria-label="Close filters"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-bg-950/40 text-white/55 transition hover:bg-bg-950/70 hover:text-white"
+                      aria-label="Collapse filters"
                     >
                       <X className="h-3 w-3" />
                     </button>
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <div className="space-y-1">
-                    <div className="text-[10px] font-semibold uppercase tracking-wide text-white/50">
-                      Categories
+                <div className="mt-3 grid gap-3 border-t border-white/10 pt-3 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,0.95fr)_250px] lg:items-stretch">
+                  <section className={FILTER_SECTION_CARD_STYLES}>
+                    <div className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-amber-400/35 to-transparent" />
+                    <div className={FILTER_SECTION_HEADER_STYLES}>
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/45">
+                        Category
+                      </div>
+                      <span className={FILTER_SECTION_BADGE_STYLES}>
+                        {draftFilters.categories.length
+                          ? `${draftFilters.categories.length} selected`
+                          : "All"}
+                      </span>
                     </div>
-                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                    <div className="mt-3 flex max-h-28 flex-wrap gap-1.5 overflow-y-auto pr-1">
                       {categoryOptions.map((category) => (
                         <button
                           key={category.key}
                           type="button"
-                          className={getFilterChipClasses(
-                            selectedCategories.includes(category.key)
-                          )}
-                          onClick={() => {
-                            setSelectedCategories((prev) => {
-                              const next = toggleValue(prev, category.key);
-                              return next;
-                            });
-                          }}
+                          className={[
+                            "rounded-full border px-2.5 py-1.5 text-[11px] font-medium transition",
+                            draftFilters.categories.includes(category.key)
+                              ? "border-amber-400/45 bg-amber-400/14 text-amber-50"
+                              : "border-white/10 bg-bg-950/30 text-white/70 hover:bg-bg-950/55 hover:text-white",
+                          ].join(" ")}
+                          onClick={() =>
+                            setDraftFilters((current) => ({
+                              ...current,
+                              categories: toggleValue(
+                                current.categories,
+                                category.key
+                              ),
+                            }))
+                          }
                         >
-                          <span>{category.label}</span>
+                          {category.label}
                         </button>
                       ))}
                     </div>
-                  </div>
+                  </section>
 
-                  <div className="space-y-1">
-                    <div className="text-[10px] font-semibold uppercase tracking-wide text-white/50">
-                      Condition
+                  <section className={FILTER_SECTION_CARD_STYLES}>
+                    <div className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-sky-400/30 to-transparent" />
+                    <div className={FILTER_SECTION_HEADER_STYLES}>
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/45">
+                        Condition
+                      </div>
+                      <span className={FILTER_SECTION_BADGE_STYLES}>
+                        {draftFilters.conditions.length
+                          ? `${draftFilters.conditions.length} selected`
+                          : "Any"}
+                      </span>
                     </div>
-                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                    <div className="mt-3 flex flex-wrap gap-1.5">
                       {conditionOptions.map((condition) => (
                         <button
                           key={condition.key}
                           type="button"
                           className={getFilterChipClasses(
-                            selectedConditions.includes(condition.key)
+                            draftFilters.conditions.includes(condition.key)
                           )}
                           onClick={() =>
-                            setSelectedConditions((prev) =>
-                              toggleValue(prev, condition.key)
-                            )
+                            setDraftFilters((current) => ({
+                              ...current,
+                              conditions: toggleValue(
+                                current.conditions,
+                                condition.key
+                              ),
+                            }))
                           }
                         >
                           <span>{condition.label}</span>
                         </button>
                       ))}
                     </div>
-                  </div>
+                  </section>
+
+                  <section className={FILTER_SECTION_CARD_STYLES}>
+                    <div className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-emerald-400/30 to-transparent" />
+                    <div className={FILTER_SECTION_HEADER_STYLES}>
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/45">
+                        Price
+                      </div>
+                      <span className={FILTER_SECTION_BADGE_STYLES}>
+                        {draftFilters.minPrice || draftFilters.maxPrice
+                          ? "Range set"
+                          : "Any"}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+                      <input
+                        value={draftFilters.minPrice}
+                        onChange={(event) =>
+                          setDraftFilters((current) => ({
+                            ...current,
+                            minPrice: event.target.value.replace(/[^\d,]/g, ""),
+                          }))
+                        }
+                        inputMode="numeric"
+                        placeholder="Min"
+                        className="h-10 w-full rounded-xl border border-white/10 bg-bg-950/30 px-3 text-center text-sm text-white placeholder:text-white/25 focus:outline-none focus:ring-2 focus:ring-amber-400/35"
+                      />
+                      <span className="text-sm text-white/30">-</span>
+                      <input
+                        value={draftFilters.maxPrice}
+                        onChange={(event) =>
+                          setDraftFilters((current) => ({
+                            ...current,
+                            maxPrice: event.target.value.replace(/[^\d,]/g, ""),
+                          }))
+                        }
+                        inputMode="numeric"
+                        placeholder="Max"
+                        className="h-10 w-full rounded-xl border border-white/10 bg-bg-950/30 px-3 text-center text-sm text-white placeholder:text-white/25 focus:outline-none focus:ring-2 focus:ring-amber-400/35"
+                      />
+                    </div>
+                  </section>
                 </div>
               </div>
             </div>
@@ -1937,8 +2053,9 @@ export default function ShopPageClient() {
           onClose={() => {
             setAdminEditProduct(null);
           }}
-          onSaved={() => {
+          onSaved={(event) => {
             setReloadToken((prev) => prev + 1);
+            if (event?.backgroundUpload) return;
             setAdminEditProduct(null);
           }}
         />

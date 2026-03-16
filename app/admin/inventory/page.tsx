@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
+import { ProductSpecialTagPicker } from "@/components/admin/ProductSpecialTagPicker";
 import { normalizeBarcode } from "@/lib/barcode";
 import { shipClassFromBrand } from "@/lib/shipping/shipClass";
 import {
@@ -35,6 +36,10 @@ import {
   parseImageCrop,
   type ImageCrop,
 } from "@/lib/imageCrop";
+import {
+  normalizeProductSpecialTags,
+  type ProductSpecialTag,
+} from "@/lib/productTags";
 
 type Product = {
   id: string;
@@ -42,6 +47,7 @@ type Product = {
   brand: string | null;
   model: string | null;
   variation: string | null;
+  special_tags: string[] | null;
   image_urls: string[] | null;
   is_active: boolean;
   created_at: string;
@@ -49,7 +55,14 @@ type Product = {
 };
 type ProductSummary = Pick<
   Product,
-  "id" | "title" | "brand" | "model" | "variation" | "image_urls" | "is_active"
+  | "id"
+  | "title"
+  | "brand"
+  | "model"
+  | "variation"
+  | "special_tags"
+  | "image_urls"
+  | "is_active"
 > & {
   product_variants?: Array<{ ship_class: string | null; condition?: string | null }> | null;
 };
@@ -202,6 +215,13 @@ const BULK_SHIP_CLASS_FILTER_OPTIONS: Array<{ value: ShipClass; label: string }>
   { value: "LALAMOVE", label: "Lalamove" },
   { value: "FIGURES_DIORAMA", label: "Figures & Diorama" },
 ];
+
+const DEFAULT_COST_BY_SHIP_CLASS: Partial<Record<ShipClass, string>> = {
+  ACRYLIC_TRUE_SCALE: "700",
+  MINI_GT: "450",
+  POPRACE: "500",
+  KAIDO: "500",
+};
 
 const WARM_HASH_DEFAULT_IMAGES = 8;
 const WARM_HASH_DEFAULT_PRODUCTS = 20;
@@ -546,6 +566,40 @@ function formatCount(value: number) {
   return new Intl.NumberFormat("en-PH").format(num);
 }
 
+function getDefaultCostForShipClass(value: ShipClass | null | undefined) {
+  if (!value) return "";
+  return DEFAULT_COST_BY_SHIP_CLASS[value] ?? "";
+}
+
+function mergeBrandSuggestions(
+  current: string[],
+  nextValues: Array<string | null | undefined>
+) {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+
+  const push = (rawValue: string | null | undefined) => {
+    const normalized = normalizeBrandAlias(rawValue)?.trim();
+    if (!normalized) return;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(normalized);
+  };
+
+  current.forEach(push);
+  nextValues.forEach(push);
+
+  return merged
+    .slice()
+    .sort((a, b) =>
+      a.localeCompare(b, "en", {
+        sensitivity: "base",
+        numeric: true,
+      })
+    );
+}
+
 function VariantDraftPanel({
   draft,
   index,
@@ -705,6 +759,9 @@ export default function AdminInventoryPage() {
   );
   const [variants, setVariants] = React.useState<Variant[]>([]);
   const [loadingVariants, setLoadingVariants] = React.useState(false);
+  const [savingVariantIds, setSavingVariantIds] = React.useState<
+    Record<string, boolean>
+  >({});
 
   // Barcode lookup
   const [barcodeLookup, setBarcodeLookup] = React.useState("");
@@ -736,8 +793,11 @@ export default function AdminInventoryPage() {
   const barcodeLookupTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastAutoLookupRef = React.useRef("");
   const barcodeInputRef = React.useRef<HTMLInputElement | null>(null);
+  const modelInputRef = React.useRef<HTMLInputElement | null>(null);
   const focusAfterSaveRef = React.useRef(false);
   const conditionTouchedRef = React.useRef(false);
+  const costTouchedRef = React.useRef(false);
+  const lastAutoCostRef = React.useRef("");
   const titleEditedRef = React.useRef(false);
   const lastAutoTitleRef = React.useRef("");
   const titleCommaStageRef = React.useRef(0);
@@ -824,6 +884,8 @@ export default function AdminInventoryPage() {
   const bulkSearchTimersRef = React.useRef<Record<string, number>>({});
   const bulkSearchInputRefs = React.useRef<Record<string, HTMLInputElement | null>>({});
   const productEditorRef = React.useRef<HTMLDivElement | null>(null);
+  const existingVariantsSectionRef = React.useRef<HTMLDivElement | null>(null);
+  const newVariantSectionRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
     return () => {
@@ -839,12 +901,43 @@ export default function AdminInventoryPage() {
   // Product fields (edit)
   const [title, setTitle] = React.useState("");
   const [brand, setBrand] = React.useState("");
+  const [brandSuggestions, setBrandSuggestions] = React.useState<string[]>([]);
+  const [brandAutocompleteOpen, setBrandAutocompleteOpen] = React.useState(false);
+  const [brandSuggestionIndex, setBrandSuggestionIndex] = React.useState(-1);
   const [model, setModel] = React.useState("");
   const [variation, setVariation] = React.useState("");
+  const [specialTags, setSpecialTags] = React.useState<ProductSpecialTag[]>([]);
   const [images, setImages] = React.useState<string[]>([]);
   const [selectedImages, setSelectedImages] = React.useState<
     Record<string, boolean>
   >({});
+  const brandInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const filteredBrandSuggestions = React.useMemo(() => {
+    const query = brand.trim().toLowerCase();
+    const startsWith: string[] = [];
+    const includes: string[] = [];
+
+    for (const suggestion of brandSuggestions) {
+      const normalizedSuggestion = suggestion.toLowerCase();
+      if (!query) {
+        startsWith.push(suggestion);
+        continue;
+      }
+      if (normalizedSuggestion === query) continue;
+      if (normalizedSuggestion.startsWith(query)) {
+        startsWith.push(suggestion);
+        continue;
+      }
+      if (normalizedSuggestion.includes(query)) {
+        includes.push(suggestion);
+      }
+    }
+
+    return [...startsWith, ...includes].slice(0, 8);
+  }, [brand, brandSuggestions]);
+  const showBrandSuggestions =
+    brandAutocompleteOpen && filteredBrandSuggestions.length > 0;
 
   function syncTitleFromIdentity(
     nextBrand: string,
@@ -922,6 +1015,62 @@ export default function AdminInventoryPage() {
     }
   }
 
+  function selectBrandSuggestion(nextBrand: string) {
+    setBrand(nextBrand);
+    setBrandAutocompleteOpen(false);
+    setBrandSuggestionIndex(-1);
+    syncTitleFromIdentity(nextBrand, model, variation);
+    requestAnimationFrame(() => {
+      brandInputRef.current?.focus();
+    });
+  }
+
+  function moveBrandSuggestion(direction: 1 | -1) {
+    if (!filteredBrandSuggestions.length) return;
+    setBrandAutocompleteOpen(true);
+    setBrandSuggestionIndex((prev) => {
+      const start = prev < 0 ? (direction > 0 ? 0 : filteredBrandSuggestions.length - 1) : prev;
+      return (start + direction + filteredBrandSuggestions.length) % filteredBrandSuggestions.length;
+    });
+  }
+
+  function handleBrandInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (!filteredBrandSuggestions.length) return;
+
+    if (event.key === "Tab") {
+      event.preventDefault();
+      moveBrandSuggestion(event.shiftKey ? -1 : 1);
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      moveBrandSuggestion(1);
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      moveBrandSuggestion(-1);
+      return;
+    }
+
+    if (event.key === "Enter" && showBrandSuggestions) {
+      event.preventDefault();
+      const nextIndex = brandSuggestionIndex >= 0 ? brandSuggestionIndex : 0;
+      const nextBrand = filteredBrandSuggestions[nextIndex];
+      if (nextBrand) {
+        selectBrandSuggestion(nextBrand);
+      }
+      return;
+    }
+
+    if (event.key === "Escape") {
+      setBrandAutocompleteOpen(false);
+      setBrandSuggestionIndex(-1);
+    }
+  }
+
   // Manual image
   const [manualImageUrl, setManualImageUrl] = React.useState("");
   const [manualUploadLoading, setManualUploadLoading] = React.useState(false);
@@ -994,6 +1143,63 @@ export default function AdminInventoryPage() {
     return isHotWheelsShipClass(shipClassFromBrand(value)) ? "sealed" : "unsealed";
   }
 
+  function applyDefaultCostForShipClass(
+    nextShipClass: ShipClass,
+    options?: { force?: boolean; currentCost?: string }
+  ) {
+    const nextDefaultCost = getDefaultCostForShipClass(nextShipClass);
+    const currentCost = String(options?.currentCost ?? cost).trim();
+    const previousAutoCost = lastAutoCostRef.current;
+    const shouldApplyDefault =
+      options?.force ||
+      !costTouchedRef.current ||
+      !currentCost ||
+      currentCost === previousAutoCost;
+
+    if (!shouldApplyDefault) return;
+
+    costTouchedRef.current = false;
+    lastAutoCostRef.current = nextDefaultCost;
+    setCost(nextDefaultCost);
+  }
+
+  function adoptDraftCost(nextCost: string | null | undefined, nextShipClass: ShipClass) {
+    const cleaned = String(nextCost ?? "").trim();
+    lastAutoCostRef.current = getDefaultCostForShipClass(nextShipClass);
+
+    if (cleaned) {
+      costTouchedRef.current = true;
+      setCost(cleaned);
+      return;
+    }
+
+    applyDefaultCostForShipClass(nextShipClass, {
+      force: true,
+      currentCost: "",
+    });
+  }
+
+  function handleCostChange(nextValue: string) {
+    costTouchedRef.current = true;
+    setCost(nextValue.replace(/[^0-9.]/g, ""));
+  }
+
+  function handleCostInputClick() {
+    const currentCost = cost.trim();
+    if (!currentCost) return;
+
+    const defaultCost = getDefaultCostForShipClass(shipClass);
+    if (
+      currentCost !== lastAutoCostRef.current &&
+      currentCost !== defaultCost
+    ) {
+      return;
+    }
+
+    costTouchedRef.current = true;
+    setCost("");
+  }
+
   React.useEffect(() => {
     if (isBlisterCondition(condition)) return;
     if (isLalamoveOnlyShipClass(shipClass)) return;
@@ -1015,9 +1221,24 @@ export default function AdminInventoryPage() {
   }, [brand, condition, queuedVariants.length, variants.length]);
 
   React.useEffect(() => {
+    applyDefaultCostForShipClass(shipClass);
+  }, [shipClass]);
+
+  React.useEffect(() => {
+    if (!filteredBrandSuggestions.length) {
+      setBrandSuggestionIndex(-1);
+      return;
+    }
+    setBrandSuggestionIndex((prev) =>
+      prev >= filteredBrandSuggestions.length ? filteredBrandSuggestions.length - 1 : prev
+    );
+  }, [filteredBrandSuggestions.length]);
+
+  React.useEffect(() => {
     void loadValuations();
     void loadBarcodeLogs();
     void loadProtectorStock();
+    void loadBrandSuggestions();
     void loadReviewQueue();
   }, []);
 
@@ -1137,6 +1358,39 @@ export default function AdminInventoryPage() {
     setProtectorStockLoading(false);
   }
 
+  async function loadBrandSuggestions() {
+    const [{ data: productRows, error: productError }, { data: brandTabRows, error: brandTabError }] =
+      await Promise.all([
+        supabase
+          .from("products")
+          .select("brand")
+          .not("brand", "is", null)
+          .limit(1000),
+        supabase
+          .from("brand_tabs")
+          .select("name")
+          .limit(200),
+      ]);
+
+    if (productError) {
+      console.error("Failed to load product brand suggestions", productError);
+    }
+    if (brandTabError) {
+      console.error("Failed to load brand tab suggestions", brandTabError);
+    }
+
+    const productBrands = ((productRows as Array<{ brand?: string | null }> | null) ?? []).map(
+      (row) => row.brand ?? null
+    );
+    const brandTabNames = ((brandTabRows as Array<{ name?: string | null }> | null) ?? []).map(
+      (row) => row.name ?? null
+    );
+
+    setBrandSuggestions((prev) =>
+      mergeBrandSuggestions(prev, [...productBrands, ...brandTabNames])
+    );
+  }
+
   async function saveProtectorStock() {
     if (protectorStockSaving) return;
     setProtectorStockSaving(true);
@@ -1183,9 +1437,7 @@ export default function AdminInventoryPage() {
       await Promise.all([
         supabase
           .from("products")
-          .select(
-            "id,title,brand,model,variation,image_urls,is_active,created_at"
-          )
+          .select("*")
           .or(
             `title.ilike.${ilike},brand.ilike.${ilike},model.ilike.${ilike},variation.ilike.${ilike}`
           )
@@ -1195,7 +1447,7 @@ export default function AdminInventoryPage() {
         supabase
           .from("product_variants")
           .select(
-            "product:products(id,title,brand,model,variation,image_urls,is_active,created_at)"
+            "product:products(*)"
           )
           .ilike("barcode", ilike)
           .limit(20),
@@ -1223,7 +1475,10 @@ export default function AdminInventoryPage() {
     setResults(merged);
   }
 
-  async function loadProduct(p: Product) {
+  async function loadProduct(
+    p: Product,
+    options?: { focusBarcode?: boolean }
+  ) {
     conditionTouchedRef.current = false;
     titleEditedRef.current = false;
     lastAutoTitleRef.current = "";
@@ -1231,8 +1486,10 @@ export default function AdminInventoryPage() {
     setSelectedProduct(p);
     setTitle(p.title ?? "");
     setBrand(p.brand ?? "");
+    setBrandSuggestions((prev) => mergeBrandSuggestions(prev, [p.brand ?? null]));
     setModel(p.model ?? "");
     setVariation(p.variation ?? "");
+    setSpecialTags(normalizeProductSpecialTags(p.special_tags));
     setImages(Array.isArray(p.image_urls) ? p.image_urls : []);
     setSelectedImages({});
     setLookupMsg(null);
@@ -1257,14 +1514,16 @@ export default function AdminInventoryPage() {
     const loaded = (data as any) ?? [];
     setVariants(loaded);
     applyVariantDefaultsFromExisting(loaded);
-    focusBarcodeInput();
+    if (options?.focusBarcode ?? true) {
+      focusBarcodeInput();
+    }
   }
 
   async function loadProductById(productId: string) {
     if (!productId) return;
     const { data, error } = await supabase
       .from("products")
-      .select("id,title,brand,model,variation,image_urls,is_active,created_at")
+      .select("*")
       .eq("id", productId)
       .maybeSingle();
 
@@ -1283,6 +1542,25 @@ export default function AdminInventoryPage() {
     });
   }
 
+  async function openProductForQuickVariantMode(
+    product: Product,
+    mode: "existing" | "new"
+  ) {
+    setShowExistingVariants(mode === "existing");
+    await loadProduct(product, { focusBarcode: false });
+
+    requestAnimationFrame(() => {
+      const target =
+        mode === "existing"
+          ? existingVariantsSectionRef.current
+          : newVariantSectionRef.current;
+      target?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }
+
   function syncVariantQtyIfSelected(
     productId: string,
     variantId: string,
@@ -1292,6 +1570,14 @@ export default function AdminInventoryPage() {
     setVariants((prev) =>
       prev.map((variant) =>
         variant.id === variantId ? { ...variant, qty: qtyValue } : variant
+      )
+    );
+  }
+
+  function updateVariantDraft(variantId: string, patch: Partial<Variant>) {
+    setVariants((prev) =>
+      prev.map((variant) =>
+        variant.id === variantId ? { ...variant, ...patch } : variant
       )
     );
   }
@@ -1480,7 +1766,7 @@ export default function AdminInventoryPage() {
           image_urls: seedImages,
           is_active: true,
         })
-        .select("id,title,brand,model,variation,image_urls,is_active,created_at")
+        .select("*")
         .single();
       if (productError || !createdProduct) {
         throw productError ?? new Error("Failed to create product card.");
@@ -1532,6 +1818,7 @@ export default function AdminInventoryPage() {
 
   function clearProduct() {
     conditionTouchedRef.current = false;
+    costTouchedRef.current = false;
     titleEditedRef.current = false;
     lastAutoTitleRef.current = "";
     lastAutoIdentityRef.current = { brand: "", model: "", variation: "" };
@@ -1540,6 +1827,7 @@ export default function AdminInventoryPage() {
     setBrand("");
     setModel("");
     setVariation("");
+    setSpecialTags([]);
     setImages([]);
     setSelectedImages({});
     setVariants([]);
@@ -1550,15 +1838,69 @@ export default function AdminInventoryPage() {
     setQueuedVariants([]);
 
     // also clear variant draft
+    const nextShipClass = shipClassFromBrand("");
     setCondition(defaultConditionForBrand(""));
     setPublicNotes("");
     setIssuePhotos([]);
     setIssuePhotosUploading(false);
     setIssuePhotosUploadingId(null);
-    setCost("");
+    applyDefaultCostForShipClass(nextShipClass, {
+      force: true,
+      currentCost: "",
+    });
     setPrice("");
     setQty("1");
-    setShipClass(shipClassFromBrand(brand));
+    setShipClass(nextShipClass);
+    setVariantBarcode("");
+  }
+
+  function clearFieldsForBarcodeLookup() {
+    conditionTouchedRef.current = false;
+    costTouchedRef.current = false;
+    titleEditedRef.current = false;
+    lastAutoTitleRef.current = "";
+    lastAutoIdentityRef.current = { brand: "", model: "", variation: "" };
+    setSearch("");
+    setResults([]);
+    setShowAllSearchResults(false);
+    setSelectedProduct(null);
+    setTitle("");
+    setBrand("");
+    setModel("");
+    setVariation("");
+    setSpecialTags([]);
+    setImages([]);
+    setSelectedImages({});
+    setCropEditor(null);
+    setVariants([]);
+    setSavingVariantIds({});
+    setAddQtyByVariant({});
+    setProductUrl("");
+    setProductUrlMsg(null);
+    setManualImageUrl("");
+    setQueuedVariants([]);
+    setLookupMsg(null);
+    setExistingBarcodePrompt(null);
+    setExistingBarcodeVariantId("");
+    setExistingBarcodeAddQty("1");
+    setNewCardTitle("");
+    setNewCardBrand("");
+    setNewCardModel("");
+    setNewCardVariation("");
+
+    const nextShipClass = shipClassFromBrand("");
+    setCondition(defaultConditionForBrand(""));
+    setPublicNotes("");
+    setIssuePhotos([]);
+    setIssuePhotosUploading(false);
+    setIssuePhotosUploadingId(null);
+    applyDefaultCostForShipClass(nextShipClass, {
+      force: true,
+      currentCost: "",
+    });
+    setPrice("");
+    setQty("1");
+    setShipClass(nextShipClass);
     setVariantBarcode("");
   }
 
@@ -1588,15 +1930,20 @@ export default function AdminInventoryPage() {
 
   function resetVariantDraft() {
     conditionTouchedRef.current = false;
+    costTouchedRef.current = false;
+    const nextShipClass = shipClassFromBrand(brand);
     setCondition(defaultConditionForBrand(brand));
     setPublicNotes("");
     setIssuePhotos([]);
     setIssuePhotosUploading(false);
     setIssuePhotosUploadingId(null);
-    setCost("");
+    applyDefaultCostForShipClass(nextShipClass, {
+      force: true,
+      currentCost: "",
+    });
     setPrice("");
     setQty("1");
-    setShipClass(shipClassFromBrand(brand));
+    setShipClass(nextShipClass);
     setVariantBarcode("");
   }
 
@@ -1789,6 +2136,7 @@ export default function AdminInventoryPage() {
     const code = normalizeBarcode(override ?? barcodeLookup);
     if (!code) return;
 
+    clearFieldsForBarcodeLookup();
     setBarcodeLookup(code);
     setLookupLoading(true);
     setLookupMsg(null);
@@ -1797,7 +2145,7 @@ export default function AdminInventoryPage() {
       const { data: existingRows, error: existingError } = await supabase
         .from("product_variants")
         .select(
-          "id,product_id,qty,condition,ship_class,barcode,product:products(id,title,brand,model,variation,image_urls,is_active,created_at)"
+          "id,product_id,qty,condition,ship_class,barcode,product:products(*)"
         )
         .eq("barcode", code)
         .limit(20);
@@ -1837,8 +2185,8 @@ export default function AdminInventoryPage() {
 
       const d = j.data;
 
-      // Fill product identity, but do not overwrite manual edits
-      const rawTitle = String(d.title ?? title ?? "");
+      // Barcode lookup starts from a blank editor state, so do not reuse prior values.
+      const rawTitle = String(d.title ?? "");
       const normalizedTitle = properLookupCase(
         normalizeLookupTitle(rawTitle, d.brand ?? null)
       );
@@ -1846,60 +2194,50 @@ export default function AdminInventoryPage() {
         normalizedTitle || normalizeTitleBrandAliases(rawTitle),
         d.color_style ?? null
       );
+      let nextTitle = "";
+      let nextBrand = "";
+      let nextModel = "";
+      let nextVariation = "";
 
       if (kaidoNormalized) {
-        if (kaidoNormalized.title) {
-          setTitle((prev) =>
-            resolveNormalizedTitle(prev, properLookupCase(kaidoNormalized.title))
-          );
-        }
-        if (kaidoNormalized.brand) {
-          setBrand((prev) =>
-            resolveNormalizedBrand(prev, kaidoNormalized.brand)
-          );
-        }
-        const cleanedModel = properLookupCase(
+        nextTitle = resolveNormalizedTitle(
+          "",
+          properLookupCase(kaidoNormalized.title)
+        );
+        nextBrand = resolveNormalizedBrand("", kaidoNormalized.brand);
+        nextModel = properLookupCase(
           normalizeLookupField(kaidoNormalized.model)
         );
-        const cleanedVariation = properLookupCase(
+        nextVariation = properLookupCase(
           normalizeLookupField(kaidoNormalized.variation)
         );
-        if (cleanedModel && !model) setModel(cleanedModel);
-        if (cleanedVariation && !variation) setVariation(cleanedVariation);
       } else {
-        if (d.title || title) {
-          setTitle((prev) => resolveNormalizedTitle(prev, normalizedTitle));
-        }
         const titleBrand = brandFromNormalizedTitle(normalizedTitle);
-        if (titleBrand) {
-          setBrand(titleBrand);
-        } else if (d.brand) {
-          setBrand((prev) => resolveNormalizedBrand(prev, d.brand));
-        }
         const cleanedModel = properLookupCase(normalizeLookupField(d.model));
         const cleanedVariation = properLookupCase(
           normalizeLookupField(d.color_style)
         );
-        if (cleanedModel && !model) setModel(cleanedModel);
-        if (cleanedVariation && !variation) setVariation(cleanedVariation);
-
         const inferred = inferFieldsFromTitle(normalizedTitle);
-        if (inferred.brand && !titleBrand) {
-          setBrand((prev) => resolveNormalizedBrand(prev, inferred.brand));
+        const inferredModel = properLookupCase(
+          normalizeLookupField(inferred.model)
+        );
+        const inferredVariation = properLookupCase(
+          normalizeLookupField(inferred.color_style)
+        );
+
+        nextTitle = resolveNormalizedTitle("", normalizedTitle);
+        nextBrand = titleBrand || resolveNormalizedBrand("", d.brand);
+        if (!titleBrand) {
+          nextBrand = resolveNormalizedBrand(nextBrand, inferred.brand);
         }
-        if (!d.model && !model && inferred.model) {
-          const inferredModel = properLookupCase(
-            normalizeLookupField(inferred.model)
-          );
-          if (inferredModel) setModel(inferredModel);
-        }
-        if (!d.color_style && !variation && inferred.color_style) {
-          const inferredVariation = properLookupCase(
-            normalizeLookupField(inferred.color_style)
-          );
-          if (inferredVariation) setVariation(inferredVariation);
-        }
+        nextModel = cleanedModel || inferredModel;
+        nextVariation = cleanedVariation || inferredVariation;
       }
+
+      setTitle(nextTitle);
+      setBrand(nextBrand);
+      setModel(nextModel);
+      setVariation(nextVariation);
 
       // Fill images (select first 3 by default)
       const imgs = (d.images ?? []).filter(Boolean);
@@ -1912,7 +2250,7 @@ export default function AdminInventoryPage() {
 
       // ✅ IMPORTANT: barcode lookup should prefill Variant Barcode so it gets saved.
       // Barcode belongs to product_variants, not products.
-      if (!variantBarcode.trim()) setVariantBarcode(code);
+      setVariantBarcode(code);
 
       setLookupMsg(
         "Barcode lookup success. Review details and confirm images before saving."
@@ -2247,7 +2585,7 @@ export default function AdminInventoryPage() {
         const ids = Array.from(candidateIds);
         const { data: productsData, error: productsError } = await supabase
           .from("products")
-          .select("id,title,brand,model,variation,image_urls,is_active,created_at")
+          .select("*")
           .in("id", ids);
 
         if (!productsError && productsData) {
@@ -2750,7 +3088,7 @@ export default function AdminInventoryPage() {
         const { data: barcodeData, error: barcodeError } = await supabase
           .from("product_variants")
           .select(
-            "barcode,ship_class,condition,product:products(id,title,brand,model,variation,image_urls,is_active)"
+            "barcode,ship_class,condition,product:products(*)"
           )
           .eq("barcode", barcode)
           .limit(20);
@@ -2828,7 +3166,7 @@ export default function AdminInventoryPage() {
       const { data, error } = await supabase
         .from("products")
         .select(
-          "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(ship_class,condition)"
+          "*, product_variants(ship_class,condition)"
         )
         .or(orParts.join(","))
         .limit(60);
@@ -3017,20 +3355,21 @@ export default function AdminInventoryPage() {
     const base = [...list].reverse().find((v) => v) ?? list[list.length - 1];
     if (!base) return;
     const nextCondition = nextConditionFromExisting(list);
-    setCondition(nextCondition);
-    setVariantBarcode(base.barcode ?? "");
-    setCost(base.cost != null ? String(base.cost) : "");
-    setPrice("");
-    setQty(base.qty != null ? String(base.qty) : "1");
     const baseShipClass =
       (base.ship_class as ShipClass | null) ?? shipClassFromBrand(brand);
-    setShipClass(
+    const nextShipClass = (
       isBlisterCondition(nextCondition)
         ? "BLISTER"
         : baseShipClass && isLalamoveOnlyShipClass(baseShipClass)
           ? baseShipClass
           : baseShipClass ?? shipClassFromBrand(brand)
-    );
+    ) as ShipClass;
+    setCondition(nextCondition);
+    setVariantBarcode(base.barcode ?? "");
+    adoptDraftCost(base.cost != null ? String(base.cost) : "", nextShipClass);
+    setPrice("");
+    setQty(base.qty != null ? String(base.qty) : "1");
+    setShipClass(nextShipClass);
     setPublicNotes(String(base.public_notes ?? base.issue_notes ?? ""));
     setIssuePhotos(Array.isArray(base.issue_photo_urls) ? base.issue_photo_urls : []);
   }
@@ -3111,7 +3450,7 @@ export default function AdminInventoryPage() {
       }
       if (!uploaded.length) return;
       const next = uniq([...(v.issue_photo_urls ?? []), ...uploaded]);
-      await updateVariant(v, { issue_photo_urls: next });
+      updateVariantDraft(v.id, { issue_photo_urls: next });
     } finally {
       setIssuePhotosUploadingId(null);
     }
@@ -3130,7 +3469,7 @@ export default function AdminInventoryPage() {
 
   async function removeVariantIssuePhoto(v: Variant, url: string) {
     const next = (v.issue_photo_urls ?? []).filter((u) => u !== url);
-    await updateVariant(v, { issue_photo_urls: next.length ? next : null });
+    updateVariantDraft(v.id, { issue_photo_urls: next.length ? next : null });
   }
 
   function addManualUrl() {
@@ -3249,7 +3588,7 @@ export default function AdminInventoryPage() {
   function stepExistingQty(v: Variant, delta: number) {
     const current = Math.trunc(n(v.qty));
     const next = Math.max(0, current + delta);
-    updateVariant(v, { qty: next });
+    updateVariantDraft(v.id, { qty: next });
   }
 
   function addQtyToVariant(v: Variant) {
@@ -3258,7 +3597,7 @@ export default function AdminInventoryPage() {
     if (!Number.isFinite(parsed) || parsed <= 0) return;
     const current = Math.trunc(n(v.qty));
     const next = Math.max(0, current + parsed);
-    updateVariant(v, { qty: next });
+    updateVariantDraft(v.id, { qty: next });
     setAddQtyByVariant((prev) => ({ ...prev, [v.id]: "" }));
   }
 
@@ -3328,6 +3667,7 @@ export default function AdminInventoryPage() {
             brand: brand || null,
             model: model || null,
             variation: variation || null,
+            special_tags: specialTags,
             created_at: new Date().toISOString(),
           })
           .eq("id", selectedProduct.id);
@@ -3346,9 +3686,7 @@ export default function AdminInventoryPage() {
 
       const { data, error } = await supabase
         .from("products")
-        .select(
-          "id,title,brand,model,variation,image_urls,is_active,created_at"
-        )
+        .select("*")
         .eq("id", selectedProduct.id)
         .single();
 
@@ -3377,9 +3715,7 @@ export default function AdminInventoryPage() {
 
       const { data, error } = await supabase
         .from("products")
-        .select(
-          "id,title,brand,model,variation,image_urls,is_active,created_at"
-        )
+        .select("*")
         .eq("id", selectedProduct.id)
         .single();
 
@@ -3426,12 +3762,11 @@ export default function AdminInventoryPage() {
             brand: brand || null,
             model: model || null,
             variation: variation || null,
+            special_tags: specialTags,
             image_urls: [],
             is_active: true,
           })
-          .select(
-            "id,title,brand,model,variation,image_urls,is_active,created_at"
-          )
+          .select("*")
           .single();
 
         if (pErr) throw pErr;
@@ -3458,6 +3793,7 @@ export default function AdminInventoryPage() {
             brand: brand || null,
             model: model || null,
             variation: variation || null,
+            special_tags: specialTags,
             created_at: new Date().toISOString(),
           })
           .eq("id", productId);
@@ -3562,6 +3898,7 @@ export default function AdminInventoryPage() {
             brand: brand || null,
             model: model || null,
             variation: variation || null,
+            special_tags: specialTags,
             image_urls: nextImages,
           };
           setSelectedProduct(nextProduct);
@@ -3573,6 +3910,7 @@ export default function AdminInventoryPage() {
             brand: brand || null,
             model: model || null,
             variation: variation || null,
+            special_tags: specialTags,
           });
         }
 
@@ -3680,9 +4018,7 @@ export default function AdminInventoryPage() {
             image_urls: [],
             is_active: true,
           })
-          .select(
-            "id,title,brand,model,variation,image_urls,is_active,created_at"
-          )
+          .select("*")
           .single();
 
         if (pErr) throw pErr;
@@ -3754,16 +4090,77 @@ export default function AdminInventoryPage() {
   }
 
   async function updateVariant(v: Variant, patch: Partial<Variant>) {
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("product_variants")
       .update(patch)
-      .eq("id", v.id);
+      .eq("id", v.id)
+      .select(
+        "id,product_id,condition,issue_notes,issue_photo_urls,public_notes,cost,price,qty,ship_class,barcode,created_at"
+      )
+      .single();
 
     if (error) {
       toast({ intent: "error", message: error.message });
+      return null;
+    }
+    if (data) {
+      setVariants((prev) =>
+        prev.map((variant) =>
+          variant.id === v.id ? (data as Variant) : variant
+        )
+      );
+      return data as Variant;
+    }
+    return null;
+  }
+
+  async function saveExistingVariant(v: Variant) {
+    const priceValue = n(v.price, NaN);
+    const qtyValue = Math.max(0, Math.trunc(n(v.qty, NaN)));
+    const costValue =
+      v.cost == null || String(v.cost).trim() === ""
+        ? null
+        : n(v.cost, NaN);
+
+    if (!Number.isFinite(priceValue)) {
+      toast({ intent: "error", message: "Enter a valid selling price." });
       return;
     }
-    if (selectedProduct) await loadProduct(selectedProduct);
+    if (!Number.isFinite(qtyValue)) {
+      toast({ intent: "error", message: "Enter a valid quantity." });
+      return;
+    }
+    if (costValue != null && !Number.isFinite(costValue)) {
+      toast({ intent: "error", message: "Enter a valid cost." });
+      return;
+    }
+
+    const notesValue = String(v.public_notes ?? v.issue_notes ?? "").trim();
+    const resolvedNotes =
+      v.condition === "near_mint"
+        ? notesValue || "Near Mint Condition"
+        : notesValue || null;
+
+    setSavingVariantIds((prev) => ({ ...prev, [v.id]: true }));
+    try {
+      const updated = await updateVariant(v, {
+        barcode: normalizeBarcode(v.barcode ?? "") || null,
+        cost: costValue,
+        price: priceValue,
+        qty: qtyValue,
+        ship_class: v.ship_class || null,
+        public_notes: resolvedNotes,
+        issue_notes: null,
+        issue_photo_urls:
+          v.issue_photo_urls && v.issue_photo_urls.length
+            ? v.issue_photo_urls
+            : null,
+      });
+      if (!updated) return;
+      toast({ intent: "success", message: "Variant saved." });
+    } finally {
+      setSavingVariantIds((prev) => ({ ...prev, [v.id]: false }));
+    }
   }
 
   function generateBarcodeCandidate() {
@@ -4063,6 +4460,12 @@ export default function AdminInventoryPage() {
                   placeholder="Search title/brand/model/variation... (or barcode)"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void runSearch();
+                    }
+                  }}
                 />
               </div>
               <Button variant="secondary" onClick={runSearch}>
@@ -4082,42 +4485,67 @@ export default function AdminInventoryPage() {
                       : null;
 
                   return (
-                    <button
+                    <div
                       key={p.id}
-                      type="button"
-                      onClick={() => loadProduct(p)}
-                      className="text-left rounded-xl border border-white/10 bg-paper/5 hover:bg-paper/10 px-3 py-2 flex gap-3"
+                      className="rounded-xl border border-white/10 bg-paper/5 px-3 py-2 transition hover:bg-paper/10"
                     >
-                      <div className="h-14 w-14 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
-                        {img ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={img}
-                            alt={p.title}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : null}
-                      </div>
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                        <button
+                          type="button"
+                          onClick={() => loadProduct(p)}
+                          className="flex min-w-0 flex-1 gap-3 text-left"
+                        >
+                          <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg border border-white/10 bg-bg-800">
+                            {img ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={img}
+                                alt={p.title}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : null}
+                          </div>
 
-                      <div className="min-w-0 flex-1">
-                        <div className="font-medium flex items-center justify-between gap-3">
-                          <span className="truncate">{p.title}</span>
-                          <span
-                            className={
-                              p.is_active
-                                ? "text-accent-700 dark:text-accent-200 text-xs"
-                                : "text-red-300 text-xs"
-                            }
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-3 font-medium">
+                              <span className="truncate">{p.title}</span>
+                              <span
+                                className={
+                                  p.is_active
+                                    ? "text-xs text-accent-700 dark:text-accent-200"
+                                    : "text-xs text-red-300"
+                                }
+                              >
+                                {p.is_active ? "ACTIVE" : "SOLD OUT"}
+                              </span>
+                            </div>
+                            <div className="text-xs text-white/60">
+                              {p.brand ?? "-"} {p.model ? `• ${p.model}` : ""}{" "}
+                              {p.variation ? `• ${p.variation}` : ""}
+                            </div>
+                          </div>
+                        </button>
+
+                        <div className="flex flex-wrap items-center gap-2 lg:flex-shrink-0">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void openProductForQuickVariantMode(p, "existing")}
                           >
-                            {p.is_active ? "ACTIVE" : "SOLD OUT"}
-                          </span>
-                        </div>
-                        <div className="text-xs text-white/60">
-                          {p.brand ?? "—"} {p.model ? `• ${p.model}` : ""}{" "}
-                          {p.variation ? `• ${p.variation}` : ""}
+                            Existing Variant
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => void openProductForQuickVariantMode(p, "new")}
+                          >
+                            New Variant
+                          </Button>
                         </div>
                       </div>
-                    </button>
+                    </div>
                   );
                 })}
                 {hiddenSearchResultCount > 0 ? (
@@ -4156,6 +4584,11 @@ export default function AdminInventoryPage() {
                       scheduleBarcodeLookup(next);
                     }}
                     onKeyDown={(e) => {
+                      if (e.key === "Tab" && !e.shiftKey) {
+                        e.preventDefault();
+                        brandInputRef.current?.focus();
+                        return;
+                      }
                       if (e.key === "Enter") {
                         e.preventDefault();
                         lookupBarcode();
@@ -4331,16 +4764,74 @@ export default function AdminInventoryPage() {
                     syncIdentityFromTitle(nextTitle);
                   }}
                 />
+                <div className="relative">
+                  <Input
+                    ref={brandInputRef}
+                    label="Diecast Brand"
+                    role="combobox"
+                    aria-expanded={showBrandSuggestions}
+                    aria-controls="inventory-brand-suggestions"
+                    aria-activedescendant={
+                      brandSuggestionIndex >= 0
+                        ? `inventory-brand-suggestion-${brandSuggestionIndex}`
+                        : undefined
+                    }
+                    autoComplete="off"
+                    value={brand}
+                    onFocus={() => {
+                      if (filteredBrandSuggestions.length) {
+                        setBrandAutocompleteOpen(true);
+                      }
+                    }}
+                    onBlur={() => {
+                      setBrandAutocompleteOpen(false);
+                      setBrandSuggestionIndex(-1);
+                    }}
+                    onChange={(e) => {
+                      const nextBrand = e.target.value;
+                      setBrand(nextBrand);
+                      setBrandAutocompleteOpen(true);
+                      setBrandSuggestionIndex(-1);
+                      syncTitleFromIdentity(nextBrand, model, variation);
+                    }}
+                    onKeyDown={handleBrandInputKeyDown}
+                  />
+                  {showBrandSuggestions ? (
+                    <div
+                      id="inventory-brand-suggestions"
+                      role="listbox"
+                      className="absolute left-0 top-full z-30 mt-2 w-full overflow-hidden rounded-2xl border border-[#2d3a22] bg-[#192014] shadow-[0_20px_50px_rgba(0,0,0,0.45)]"
+                    >
+                      {filteredBrandSuggestions.map((suggestion, index) => {
+                        const isActive = index === brandSuggestionIndex;
+                        return (
+                          <button
+                            key={suggestion}
+                            id={`inventory-brand-suggestion-${index}`}
+                            type="button"
+                            role="option"
+                            aria-selected={isActive}
+                            onMouseEnter={() => setBrandSuggestionIndex(index)}
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              selectBrandSuggestion(suggestion);
+                            }}
+                            className={[
+                              "flex w-full items-center px-4 py-3 text-left text-sm transition",
+                              isActive
+                                ? "bg-[#27331e] text-white"
+                                : "text-[#eef4e7]/90 hover:bg-[#222c1b]",
+                            ].join(" ")}
+                          >
+                            {suggestion}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
                 <Input
-                  label="Diecast Brand"
-                  value={brand}
-                  onChange={(e) => {
-                    const nextBrand = e.target.value;
-                    setBrand(nextBrand);
-                    syncTitleFromIdentity(nextBrand, model, variation);
-                  }}
-                />
-                <Input
+                  ref={modelInputRef}
                   label="Car Model"
                   value={model}
                   onChange={(e) => {
@@ -4359,6 +4850,18 @@ export default function AdminInventoryPage() {
                   }}
                 />
               </div>
+
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Product tags</div>
+              <ProductSpecialTagPicker
+                value={specialTags}
+                onChange={setSpecialTags}
+                disabled={saving}
+              />
+              <div className="text-xs text-white/50">
+                These tags drive the standout badges shown on shop product cards.
+              </div>
+            </div>
 
             <div className="flex flex-wrap gap-2">
               <Button
@@ -4536,7 +5039,10 @@ export default function AdminInventoryPage() {
           </div>
 
           {/* Variants list (edit) */}
-          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+          <div
+            ref={existingVariantsSectionRef}
+            className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3"
+          >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="font-semibold">Existing Variants</div>
@@ -4582,6 +5088,7 @@ export default function AdminInventoryPage() {
                         ? "bg-amber-400"
                         : "";
                   const showIndicator = indicatorTone.length > 0;
+                  const isSavingVariant = Boolean(savingVariantIds[v.id]);
 
                   return (
                     <div
@@ -4620,14 +5127,16 @@ export default function AdminInventoryPage() {
                         label="Barcode"
                         value={v.barcode ?? ""}
                         onChange={(e) =>
-                          updateVariant(v, { barcode: e.target.value || null })
+                          updateVariantDraft(v.id, {
+                            barcode: e.target.value || null,
+                          })
                         }
                       />
                       <Input
                         label="Cost"
                         value={String(v.cost ?? "")}
                         onChange={(e) =>
-                          updateVariant(v, {
+                          updateVariantDraft(v.id, {
                             cost: e.target.value ? n(e.target.value) : null,
                           })
                         }
@@ -4636,7 +5145,7 @@ export default function AdminInventoryPage() {
                         label="Price"
                         value={String(v.price ?? "")}
                         onChange={(e) =>
-                          updateVariant(v, { price: n(e.target.value) })
+                          updateVariantDraft(v.id, { price: n(e.target.value) })
                         }
                       />
                       <div className="space-y-1">
@@ -4655,7 +5164,7 @@ export default function AdminInventoryPage() {
                             <Input
                               value={String(v.qty ?? 0)}
                               onChange={(e) =>
-                                updateVariant(v, {
+                                updateVariantDraft(v.id, {
                                   qty: Math.max(
                                     0,
                                     Math.trunc(n(e.target.value))
@@ -4707,7 +5216,7 @@ export default function AdminInventoryPage() {
                         label="Class"
                         value={v.ship_class ?? ""}
                         onChange={(e) =>
-                          updateVariant(v, {
+                          updateVariantDraft(v.id, {
                             ship_class: e.target.value || null,
                           })
                         }
@@ -4729,10 +5238,18 @@ export default function AdminInventoryPage() {
                         <option value="FIGURES_DIORAMA">DIORAMA</option>
                       </Select>
 
-                      <div className="flex items-end">
+                      <div className="flex items-end gap-2">
+                        <Button
+                          variant="secondary"
+                          onClick={() => void saveExistingVariant(v)}
+                          disabled={isSavingVariant}
+                        >
+                          {isSavingVariant ? "Saving..." : "Save"}
+                        </Button>
                         <Button
                           variant="ghost"
                           onClick={() => deleteVariant(v)}
+                          disabled={isSavingVariant}
                         >
                           Delete
                         </Button>
@@ -4743,7 +5260,7 @@ export default function AdminInventoryPage() {
                           label="Notes (visible to customers)"
                           value={String(v.public_notes ?? v.issue_notes ?? "")}
                           onChange={(e) =>
-                            updateVariant(v, {
+                            updateVariantDraft(v.id, {
                               public_notes: e.target.value || null,
                               issue_notes: null,
                             })
@@ -4837,7 +5354,10 @@ export default function AdminInventoryPage() {
           ) : null}
 
           {/* Add new variant */}
-          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-4">
+          <div
+            ref={newVariantSectionRef}
+            className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-4"
+          >
             <div className="font-semibold">Add New Variant (Condition)</div>
 
             <div className="grid gap-4 md:grid-cols-2">
@@ -4887,9 +5407,8 @@ export default function AdminInventoryPage() {
               <Input
                 label="Cost (₱)"
                 value={cost}
-                onChange={(e) =>
-                  setCost(e.target.value.replace(/[^0-9.]/g, ""))
-                }
+                onChange={(e) => handleCostChange(e.target.value)}
+                onClick={handleCostInputClick}
                 placeholder="(empty)"
               />
               <Input
@@ -5557,10 +6076,10 @@ export default function AdminInventoryPage() {
                                     <div className="font-medium truncate">
                                       {p.title}
                                     </div>
-                                    <div className="text-xs text-white/60">
-                                      {p.brand ?? "â€”"} {p.model ? `â€¢ ${p.model}` : ""}{" "}
-                                      {p.variation ? `â€¢ ${p.variation}` : ""}
-                                    </div>
+                            <div className="text-xs text-white/60">
+                          {p.brand ?? "-"} {p.model ? `• ${p.model}` : ""}{" "}
+                              {p.variation ? `• ${p.variation}` : ""}
+                        </div>
                                     {conditions.length ? (
                                       <div className="mt-1 flex flex-wrap gap-1">
                                         {conditions.map((c) => (
@@ -5861,9 +6380,8 @@ export default function AdminInventoryPage() {
                   <Input
                     label="Cost (P)"
                     value={cost}
-                    onChange={(e) =>
-                      setCost(e.target.value.replace(/[^0-9.]/g, ""))
-                    }
+                    onChange={(e) => handleCostChange(e.target.value)}
+                    onClick={handleCostInputClick}
                     placeholder="(empty)"
                     disabled={existingBarcodeActionLoading}
                   />

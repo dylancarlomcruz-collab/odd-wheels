@@ -1,4 +1,8 @@
 import type { ShopProduct } from "@/components/ProductCard";
+import {
+  getProductSpecialTagLabel,
+  normalizeProductSpecialTags,
+} from "@/lib/productTags";
 
 const BRAND_SYNONYMS: Array<{ pattern: RegExp; canonical: string }> = [
   { pattern: /\bmini\s*-?\s*gt\b/gi, canonical: "mini gt" },
@@ -185,11 +189,15 @@ export function buildProductSearchText(product: ShopProduct) {
       option.barcode,
     ])
     .filter(Boolean);
+  const specialTags = normalizeProductSpecialTags(product.special_tags).map(
+    getProductSpecialTagLabel
+  );
   const raw = [
     product.title,
     product.brand,
     product.model,
     product.variation,
+    ...specialTags,
     ...optionNotes,
   ]
     .filter(Boolean)

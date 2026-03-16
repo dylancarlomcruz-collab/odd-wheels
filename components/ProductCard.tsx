@@ -9,6 +9,11 @@ import { formatConditionLabel } from "@/lib/conditions";
 import { parseImageCrop } from "@/lib/imageCrop";
 import { applyImageFallback, buildSrcSet, getOptimizedImageUrl } from "@/lib/imageUrl";
 import { getOptionPricing, getProductEffectiveRange } from "@/lib/pricing";
+import {
+  getProductSpecialTagLabel,
+  normalizeProductSpecialTags,
+  type ProductSpecialTag,
+} from "@/lib/productTags";
 import { formatTitle } from "@/lib/text";
 import { supabase } from "@/lib/supabase/browser";
 import { getOrCreateGuestSessionId } from "@/lib/guestSession";
@@ -93,10 +98,42 @@ export type ShopProduct = {
   created_at?: string | null;
   totalQty?: number;
   minQty?: number;
+  special_tags?: ProductSpecialTag[] | null;
   socialProof?: SocialProof;
   searchScore?: number;
   popularityScore?: number;
 };
+
+type FeatureTag = {
+  key: ProductSpecialTag;
+  label: string;
+  toneClass: string;
+};
+
+const FEATURE_TAG_BASE_CLASS =
+  "inline-flex items-center gap-1.5 rounded-full border font-black uppercase text-white shadow-[0_14px_28px_rgba(0,0,0,0.36)] ring-1 ring-inset ring-white/20 backdrop-blur-md";
+const FEATURE_TAG_TONE_CLASSES: Record<ProductSpecialTag, string> = {
+  exclusive:
+    "border-cyan-200/80 bg-[linear-gradient(135deg,rgba(8,145,178,0.96),rgba(14,116,144,0.98))] !text-white",
+  limited_edition:
+    "border-amber-200/80 bg-[linear-gradient(135deg,rgba(245,158,11,0.96),rgba(180,83,9,0.98))] !text-white",
+  chase:
+    "border-rose-200/80 bg-[linear-gradient(135deg,rgba(244,63,94,0.96),rgba(159,18,57,0.98))] !text-white",
+  rare:
+    "border-violet-200/80 bg-[linear-gradient(135deg,rgba(139,92,246,0.96),rgba(91,33,182,0.98))] !text-white",
+  new_release:
+    "border-emerald-200/80 bg-[linear-gradient(135deg,rgba(16,185,129,0.96),rgba(6,95,70,0.98))] !text-white",
+  discontinued:
+    "border-zinc-200/70 bg-[linear-gradient(135deg,rgba(82,82,91,0.96),rgba(39,39,42,0.98))] !text-white",
+};
+
+function getFeatureTags(product: ShopProduct): FeatureTag[] {
+  return normalizeProductSpecialTags(product.special_tags).map((key) => ({
+    key,
+    label: getProductSpecialTagLabel(key),
+    toneClass: FEATURE_TAG_TONE_CLASSES[key],
+  }));
+}
 
 function peso(n: number) {
   try {
@@ -399,9 +436,43 @@ export default function ProductCard({
     if (!brand) return "DIECAST COLLECTION";
     return `${brand.toUpperCase()} COLLECTION`;
   })();
+  const featureTags = React.useMemo(() => getFeatureTags(product), [product]);
   const mobilePrimaryImage = cardImages[0] ?? null;
   const mobilePrimarySrc = cardImageSrc || parsedCardImage?.src || mobilePrimaryImage || "";
   const mobilePrimarySrcSet = cardImageSrcSet || undefined;
+
+  function renderFeatureTagOverlay(mode: "mobile" | "desktop") {
+    if (!featureTags.length) return null;
+
+    const stackClassName =
+      mode === "mobile"
+        ? "absolute left-2 top-2 z-10 flex max-w-[65%] flex-col items-start gap-1.5"
+        : wideView
+          ? "absolute left-2 top-2 z-10 flex max-w-[78%] flex-col items-start gap-1.5"
+          : "absolute left-2 top-2 z-10 flex max-w-[65%] flex-col items-start gap-1 sm:left-3 sm:top-3";
+    const badgeClassName =
+      mode === "mobile"
+        ? "px-2.5 py-1.5 text-[9px] tracking-[0.16em]"
+        : wideView
+          ? "px-2.5 py-1.5 text-[9px] leading-none tracking-[0.14em]"
+          : "px-2 py-1 text-[8px] tracking-[0.15em] sm:px-2.5 sm:py-1.5 sm:text-[9px]";
+
+    return (
+      <div className={stackClassName}>
+        {featureTags.map((tag) => (
+          <span
+            key={tag.key}
+            className={[FEATURE_TAG_BASE_CLASS, badgeClassName, tag.toneClass].join(
+              " "
+            )}
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-current opacity-75 shadow-[0_0_0_1px_rgba(255,255,255,0.45)]" />
+            {tag.label}
+          </span>
+        ))}
+      </div>
+    );
+  }
 
   const relatedItems = React.useMemo(() => {
     if (!isOpen || !relatedPool?.length) return [];
@@ -1240,6 +1311,7 @@ export default function ProductCard({
           </div>
           <div className="mb-2 rounded-2xl border border-white/30 bg-[#fffdf8] shadow-[0_12px_25px_rgba(0,0,0,0.18)] overflow-hidden">
             <div className="relative aspect-[4/3] w-full overflow-hidden">
+              {renderFeatureTagOverlay("mobile")}
               {mobilePrimaryImage ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
@@ -1336,6 +1408,7 @@ export default function ProductCard({
               On Sale
             </span>
           ) : null}
+          {renderFeatureTagOverlay("desktop")}
         </button>
 
         <div className="p-2.5 sm:p-4">

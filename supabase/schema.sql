@@ -188,6 +188,8 @@ create table if not exists public.products (
   brand text,
   model text,
   variation text,
+  special_tags text[] not null default '{}'::text[]
+    check (special_tags <@ array['exclusive','limited_edition','chase','rare','new_release','discontinued']::text[]),
   image_urls text[] default '{}'::text[],
   is_active boolean not null default true,
   created_at timestamptz not null default now()

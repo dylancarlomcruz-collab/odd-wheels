@@ -3130,3 +3130,21 @@ create index if not exists idx_product_image_hashes_algo_hash
 
 alter table public.product_upload_matches
   add column if not exists upload_hashes jsonb;
+
+alter table public.products
+  add column if not exists special_tags text[] not null default '{}'::text[];
+
+alter table public.products
+  drop constraint if exists products_special_tags_valid;
+
+alter table public.products
+  add constraint products_special_tags_valid
+  check (
+    special_tags <@ array['exclusive','limited_edition','chase','rare','new_release','discontinued']::text[]
+  );
+
+-- Product tags are manual-only. Do not auto-backfill special_tags from text.
+
+update public.products
+set special_tags = array_remove(special_tags, 'new_release')
+where 'new_release' = any(special_tags);

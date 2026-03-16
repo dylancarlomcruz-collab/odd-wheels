@@ -56,7 +56,7 @@ export function useSearchProducts(q: string) {
         const { data, error } = await supabase
           .from("products")
           .select(
-            "id, title, brand, model, variation, image_urls, is_active, created_at, product_variants(id, condition, barcode, issue_notes, issue_photo_urls, public_notes, price, sale_price, discount_percent, qty)"
+            "*, product_variants(id, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty)"
           )
         .eq("is_active", true)
         .or(orClause)

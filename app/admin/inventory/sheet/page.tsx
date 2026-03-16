@@ -15,6 +15,11 @@ import {
   normalizeTitleBrandAliases,
 } from "@/lib/titleInference";
 import { formatConditionLabel } from "@/lib/conditions";
+import {
+  getProductSpecialTagLabel,
+  normalizeProductSpecialTags,
+  type ProductSpecialTag,
+} from "@/lib/productTags";
 
 type SheetRow = {
   id: string;
@@ -29,6 +34,7 @@ type SheetRow = {
     brand: string | null;
     model: string | null;
     variation: string | null;
+    special_tags: string[] | null;
     image_urls: string[] | null;
     created_at: string | null;
   } | null;
@@ -687,6 +693,99 @@ function formatExportCondition(row: ExportRow) {
   return formatCompactCondition(row.condition);
 }
 
+function getRowProductTagKeys(row: { product: SheetRow["product"] }) {
+  return normalizeProductSpecialTags(row.product?.special_tags);
+}
+
+function getRowProductTagLabels(row: { product: SheetRow["product"] }) {
+  return getRowProductTagKeys(row).map((tag) => getProductSpecialTagLabel(tag));
+}
+
+function formatRowProductTags(row: { product: SheetRow["product"] }) {
+  const labels = getRowProductTagLabels(row);
+  return labels.length ? labels.join(" | ") : "-";
+}
+
+function getProductTagBadgeClass(tag: ProductSpecialTag | "more") {
+  if (tag === "more") return "product-tag product-tag--more";
+  return `product-tag product-tag--${tag.replace(/_/g, "-")}`;
+}
+
+function renderProductTagBadgesHtml(
+  row: { product: SheetRow["product"] },
+  options: {
+    containerClassName?: string;
+    maxVisible?: number;
+  } = {}
+) {
+  const tags = getRowProductTagKeys(row);
+  if (!tags.length) return "";
+  const maxVisible = Math.max(1, options.maxVisible ?? tags.length);
+  const visibleTags = tags.slice(0, maxVisible);
+  const extraCount = tags.length - visibleTags.length;
+  const badges = visibleTags.map(
+    (tag) =>
+      `<span class="${getProductTagBadgeClass(tag)}">${escapeHtml(
+        getProductSpecialTagLabel(tag)
+      )}</span>`
+  );
+  if (extraCount > 0) {
+    badges.push(
+      `<span class="${getProductTagBadgeClass("more")}">+${extraCount} more</span>`
+    );
+  }
+  const containerClassName = options.containerClassName ?? "product-tags";
+  return `<div class="${containerClassName}">${badges.join("")}</div>`;
+}
+
+function getProductTagPalette(tag: ProductSpecialTag | "more") {
+  switch (tag) {
+    case "exclusive":
+      return {
+        fill: "rgba(255, 191, 105, 0.92)",
+        stroke: "rgba(255, 227, 173, 0.95)",
+        text: "#2c1600",
+      };
+    case "limited_edition":
+      return {
+        fill: "rgba(127, 179, 255, 0.94)",
+        stroke: "rgba(207, 226, 255, 0.96)",
+        text: "#0d1c3f",
+      };
+    case "chase":
+      return {
+        fill: "rgba(255, 122, 122, 0.94)",
+        stroke: "rgba(255, 208, 208, 0.96)",
+        text: "#3c0909",
+      };
+    case "rare":
+      return {
+        fill: "rgba(181, 154, 255, 0.94)",
+        stroke: "rgba(223, 213, 255, 0.96)",
+        text: "#24104d",
+      };
+    case "new_release":
+      return {
+        fill: "rgba(110, 242, 214, 0.94)",
+        stroke: "rgba(210, 255, 246, 0.98)",
+        text: "#05342b",
+      };
+    case "discontinued":
+      return {
+        fill: "rgba(255, 166, 77, 0.96)",
+        stroke: "rgba(255, 223, 191, 0.98)",
+        text: "#3a1d00",
+      };
+    case "more":
+    default:
+      return {
+        fill: "rgba(32, 36, 48, 0.94)",
+        stroke: "rgba(255, 255, 255, 0.26)",
+        text: "#f8fafc",
+      };
+  }
+}
+
 function normalizeSheetRows(data: any[]): SheetRow[] {
   return (data ?? []).map((row) => ({
     ...row,
@@ -1031,6 +1130,7 @@ function inferVehicleMakeModelFromFields(fields: {
       brand: fields.brand ?? null,
       model: fields.model ?? null,
       variation: fields.variation ?? null,
+      special_tags: null,
       image_urls: null,
       created_at: null,
     },
@@ -1386,6 +1486,52 @@ function wrapText(
   return lines.slice(0, maxLines);
 }
 
+function drawProductTagBadge(
+  ctx: CanvasRenderingContext2D,
+  label: string,
+  x: number,
+  y: number,
+  options: {
+    tag: ProductSpecialTag | "more";
+    font: string;
+    height: number;
+    paddingX: number;
+    maxWidth?: number;
+    lineWidth?: number;
+  }
+) {
+  const palette = getProductTagPalette(options.tag);
+  ctx.save();
+  ctx.font = options.font;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  const maxTextWidth = Math.max(
+    12,
+    (options.maxWidth ?? Number.POSITIVE_INFINITY) - options.paddingX * 2
+  );
+  const fittedLabel = Number.isFinite(maxTextWidth)
+    ? truncateText(ctx, label, maxTextWidth)
+    : label;
+  const textWidth = ctx.measureText(fittedLabel).width;
+  const width = Math.max(
+    options.height,
+    textWidth + options.paddingX * 2
+  );
+  ctx.shadowColor = "rgba(0,0,0,0.22)";
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = palette.fill;
+  ctx.strokeStyle = palette.stroke;
+  ctx.lineWidth = options.lineWidth ?? 1.5;
+  drawRoundedRect(ctx, x, y, width, options.height, options.height / 2);
+  ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.stroke();
+  ctx.fillStyle = palette.text;
+  ctx.fillText(fittedLabel, x + options.paddingX, y + options.height / 2 + 0.5);
+  ctx.restore();
+  return width;
+}
+
 function drawContainImage(
   ctx: CanvasRenderingContext2D,
   image: CanvasImageSource,
@@ -1642,6 +1788,40 @@ function renderCardCanvas(
     ctx.restore();
   }
 
+  const cardTags = getRowProductTagKeys(row);
+  if (cardTags.length) {
+    const visibleTags = cardTags.slice(0, 3);
+    let tagY = imgY + 26;
+    for (const tag of visibleTags) {
+      drawProductTagBadge(
+        ctx,
+        getProductSpecialTagLabel(tag).toUpperCase(),
+        imgX + 24,
+        tagY,
+        {
+          tag,
+          font: '800 22px "Segoe UI", Arial, sans-serif',
+          height: 42,
+          paddingX: 18,
+          maxWidth: imgW - 48,
+          lineWidth: 2,
+        }
+      );
+      tagY += 54;
+    }
+    const extraCount = cardTags.length - visibleTags.length;
+    if (extraCount > 0) {
+      drawProductTagBadge(ctx, `+${extraCount} MORE`, imgX + 24, tagY, {
+        tag: "more",
+        font: '800 22px "Segoe UI", Arial, sans-serif',
+        height: 42,
+        paddingX: 18,
+        maxWidth: imgW - 48,
+        lineWidth: 2,
+      });
+    }
+  }
+
   const title = formatName(row);
   ctx.save();
   ctx.fillStyle = "rgba(255,255,255,0.92)";
@@ -1860,6 +2040,40 @@ function renderEightUpCanvas(
       ctx.textBaseline = "middle";
       ctx.fillText("No image", innerX + innerW / 2, imageY + imageHeight / 2);
       ctx.restore();
+    }
+
+    const exportTags = getRowProductTagKeys(row);
+    if (exportTags.length) {
+      const visibleTags = exportTags.slice(0, 2);
+      let tagY = imageY + 8;
+      for (const tag of visibleTags) {
+        drawProductTagBadge(
+          ctx,
+          getProductSpecialTagLabel(tag).toUpperCase(),
+          innerX + 8,
+          tagY,
+          {
+            tag,
+            font: '800 8px "Segoe UI", Arial, sans-serif',
+            height: 16,
+            paddingX: 6,
+            maxWidth: innerW - 16,
+            lineWidth: 1,
+          }
+        );
+        tagY += 19;
+      }
+      const extraCount = exportTags.length - visibleTags.length;
+      if (extraCount > 0) {
+        drawProductTagBadge(ctx, `+${extraCount} more`, innerX + 8, tagY, {
+          tag: "more",
+          font: '800 8px "Segoe UI", Arial, sans-serif',
+          height: 16,
+          paddingX: 6,
+          maxWidth: innerW - 16,
+          lineWidth: 1,
+        });
+      }
     }
 
     cursorY = imageY + imageHeight + spacingAfterImage;
@@ -2094,7 +2308,7 @@ export default function InventorySheetPage() {
         const { data, error: qErr } = await supabase
           .from("product_variants")
           .select(
-            "id,created_at,condition,ship_class,qty,price, product:products(id,title,brand,model,variation,image_urls,created_at)"
+            "id,created_at,condition,ship_class,qty,price, product:products(id,title,brand,model,variation,special_tags,image_urls,created_at)"
           )
           .order("created_at", { ascending: false })
           .range(from, to);
@@ -2150,7 +2364,7 @@ export default function InventorySheetPage() {
       const { data, error: qErr } = await supabase
         .from("product_variants")
         .select(
-          "id,created_at,condition,ship_class,qty,price, product:products(id,title,brand,model,variation,image_urls,created_at)"
+          "id,created_at,condition,ship_class,qty,price, product:products(id,title,brand,model,variation,special_tags,image_urls,created_at)"
         )
         .gt("qty", 0)
         .order("created_at", { ascending: false })
@@ -2448,7 +2662,7 @@ export default function InventorySheetPage() {
       const { data, error: fetchError } = await supabase
         .from("products")
         .select(
-          "id,title,brand,model,variation,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)"
+          "id,title,brand,model,variation,special_tags,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)"
         )
         .eq("id", id)
         .maybeSingle();
@@ -2485,6 +2699,7 @@ export default function InventorySheetPage() {
         "Name",
         "Make",
         "Model",
+        "Product Tags",
         "Condition",
         "Qty",
         "Price",
@@ -2498,6 +2713,7 @@ export default function InventorySheetPage() {
           formatName(row),
           inferred.make,
           inferred.model,
+          formatRowProductTags(row),
           formatCondition(row.condition),
           Number(row.qty ?? 0),
           Number(row.price ?? 0),
@@ -2582,6 +2798,7 @@ export default function InventorySheetPage() {
         "Name",
         "Make",
         "Model",
+        "Product Tags",
         "Condition",
         "Qty",
         "Price",
@@ -2622,6 +2839,7 @@ export default function InventorySheetPage() {
           formatName(row),
           inferred.make,
           inferred.model,
+          formatRowProductTags(row),
           formatCondition(row.condition),
           Number(row.qty ?? 0),
           Number(row.price ?? 0),
@@ -3115,7 +3333,7 @@ export default function InventorySheetPage() {
 
       const rowsHtml = grouped
         .map((group) => {
-          const groupHeader = `<tr class="group"><td colspan="6">${group.brand} (${group.rows.length})</td></tr>`;
+          const groupHeader = `<tr class="group"><td colspan="7">${group.brand} (${group.rows.length})</td></tr>`;
           const bodyRows = group.rows
             .map((row) => {
               const photoUrl = row.product?.image_urls?.[0] ?? "";
@@ -3123,11 +3341,21 @@ export default function InventorySheetPage() {
               const imageCell = photo
                 ? `<img src="${photo}" alt=""/>`
                 : `<span class="no-image">No image</span>`;
+              const tagsCell = (() => {
+                const tags = getRowProductTagLabels(row);
+                if (!tags.length) return `<span class="muted">-</span>`;
+                return `<div class="sheet-tags">${tags
+                  .map(
+                    (tag) => `<span class="sheet-tag">${escapeHtml(tag)}</span>`
+                  )
+                  .join("")}</div>`;
+              })();
               return `
                 <tr>
                   <td class="photo">${imageCell}</td>
                   <td>${escapeCsv(formatName(row))}</td>
                   <td class="muted">${escapeCsv(formatVehicleDisplayModel(row))}</td>
+                  <td>${tagsCell}</td>
                   <td class="muted">${escapeCsv(formatCondition(row.condition))}</td>
                   <td class="num">${Number(row.qty ?? 0)}</td>
                   <td class="num">${formatPHP(Number(row.price ?? 0))}</td>
@@ -3248,6 +3476,24 @@ export default function InventorySheetPage() {
       .muted {
         color: var(--muted);
       }
+      .sheet-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .sheet-tag {
+        display: inline-flex;
+        align-items: center;
+        min-height: 22px;
+        padding: 3px 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.14);
+        background: rgba(255,255,255,0.06);
+        color: var(--text);
+        font-size: 11px;
+        line-height: 1;
+        white-space: nowrap;
+      }
       .num {
         text-align: right;
       }
@@ -3272,6 +3518,7 @@ export default function InventorySheetPage() {
               <th>Photo</th>
               <th>Name</th>
               <th>Model</th>
+              <th>Product Tags</th>
               <th>Condition</th>
               <th style="text-align:right;">Qty</th>
               <th style="text-align:right;">Price</th>
@@ -3424,6 +3671,10 @@ export default function InventorySheetPage() {
             const titleText = escapeHtml(formatName(row));
             const condition = escapeHtml(formatExportCondition(row));
             const price = escapeHtml(formatExportPrice(row));
+            const tagBadges = renderProductTagBadgesHtml(row, {
+              containerClassName: "product-tags product-tags--card",
+              maxVisible: 2,
+            });
             const variantsNote =
               row.variant_count > 1
                 ? `<div class="card-variants">Multiple variants available</div>`
@@ -3431,7 +3682,10 @@ export default function InventorySheetPage() {
             return `
               <div class="card">
                 <div class="card-brand">${cardBrand}</div>
-                <div class="card-image">${imageCell}</div>
+                <div class="card-image">
+                  ${tagBadges}
+                  ${imageCell}
+                </div>
                 <div class="card-title">${titleText}</div>
                 ${variantsNote}
                 <div class="card-meta">
@@ -3587,6 +3841,7 @@ export default function InventorySheetPage() {
         border-radius: 10px;
         flex: 1 1 0;
         min-height: 0;
+        position: relative;
         display: grid;
         place-items: center;
         overflow: hidden;
@@ -3604,6 +3859,71 @@ export default function InventorySheetPage() {
         color: rgba(0,0,0,0.5);
         font-size: 11px;
         text-align: center;
+      }
+      .product-tags {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .product-tags--card {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        right: 8px;
+        z-index: 2;
+        pointer-events: none;
+      }
+      .product-tag {
+        width: fit-content;
+        max-width: 100%;
+        min-height: 20px;
+        padding: 4px 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.18);
+        box-shadow: 0 8px 18px rgba(0,0,0,0.22);
+        font-size: 8px;
+        line-height: 1;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .product-tag--exclusive {
+        background: rgba(255, 191, 105, 0.94);
+        border-color: rgba(255, 227, 173, 0.96);
+        color: #2c1600;
+      }
+      .product-tag--limited-edition {
+        background: rgba(127, 179, 255, 0.94);
+        border-color: rgba(207, 226, 255, 0.96);
+        color: #0d1c3f;
+      }
+      .product-tag--chase {
+        background: rgba(255, 122, 122, 0.94);
+        border-color: rgba(255, 208, 208, 0.96);
+        color: #3c0909;
+      }
+      .product-tag--rare {
+        background: rgba(181, 154, 255, 0.94);
+        border-color: rgba(223, 213, 255, 0.96);
+        color: #24104d;
+      }
+      .product-tag--new-release {
+        background: rgba(110, 242, 214, 0.94);
+        border-color: rgba(210, 255, 246, 0.98);
+        color: #05342b;
+      }
+      .product-tag--discontinued {
+        background: rgba(255, 166, 77, 0.96);
+        border-color: rgba(255, 223, 191, 0.98);
+        color: #3a1d00;
+      }
+      .product-tag--more {
+        background: rgba(32, 36, 48, 0.94);
+        border-color: rgba(255,255,255,0.22);
+        color: #f8fafc;
       }
       .card-title {
         font-size: 12px;

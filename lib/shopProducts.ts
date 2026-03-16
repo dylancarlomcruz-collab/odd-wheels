@@ -1,4 +1,5 @@
 import { conditionSortOrder } from "@/lib/conditions";
+import { normalizeProductSpecialTags } from "@/lib/productTags";
 import { resolveEffectivePrice } from "@/lib/pricing";
 import type { ShopProduct } from "@/components/ProductCard";
 
@@ -20,6 +21,7 @@ export type VariantRow = {
     brand: string | null;
     model: string | null;
     variation?: string | null;
+    special_tags?: string[] | null;
     image_urls: string[] | null;
     is_active: boolean | null;
     created_at: string | null;
@@ -32,6 +34,7 @@ export type ProductRow = {
   brand: string | null;
   model: string | null;
   variation?: string | null;
+  special_tags?: string[] | null;
   image_urls: string[] | null;
   is_active: boolean | null;
   created_at: string | null;
@@ -114,6 +117,7 @@ export function collapseVariants(rows: VariantRow[]): ShopProduct[] {
         brand: p.brand,
         model: p.model,
         variation: p.variation ?? null,
+        special_tags: normalizeProductSpecialTags(p.special_tags),
         image_url,
         image_urls: image_urls.length ? image_urls : image_url ? [image_url] : [],
         minPrice: price,
@@ -242,6 +246,7 @@ export function mapProductsToShopProducts(rows: ProductRow[]): ShopProduct[] {
       brand: p.brand,
       model: p.model,
       variation: p.variation ?? null,
+      special_tags: normalizeProductSpecialTags(p.special_tags),
       image_url,
       image_urls: image_urls.length ? image_urls : image_url ? [image_url] : [],
       minPrice,

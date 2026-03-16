@@ -7,6 +7,7 @@ import { Select } from "@/components/ui/Select";
 import { Button } from "@/components/ui/Button";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { Badge } from "@/components/ui/Badge";
+import { ProductSpecialTagPicker } from "@/components/admin/ProductSpecialTagPicker";
 import { supabase } from "@/lib/supabase/browser";
 import { toast } from "@/components/ui/toast";
 import { shipClassFromBrand } from "@/lib/shipping/shipClass";
@@ -22,6 +23,10 @@ import {
   parseImageCrop,
   type ImageCrop,
 } from "@/lib/imageCrop";
+import {
+  normalizeProductSpecialTags,
+  type ProductSpecialTag,
+} from "@/lib/productTags";
 import type { AdminProduct, AdminVariant } from "./InventoryBrowseGrid";
 
 type VariantDraft = AdminVariant & {
@@ -32,7 +37,7 @@ type VariantDraft = AdminVariant & {
 type InventoryEditorDrawerProps = {
   product: AdminProduct | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (event?: { productId: string; backgroundUpload?: boolean }) => void;
 };
 
 type LastSoldEntry = {
@@ -109,10 +114,12 @@ export function InventoryEditorDrawer({
   const [brand, setBrand] = React.useState("");
   const [model, setModel] = React.useState("");
   const [variation, setVariation] = React.useState("");
+  const [specialTags, setSpecialTags] = React.useState<ProductSpecialTag[]>([]);
   const [images, setImages] = React.useState<string[]>([]);
   const [newImage, setNewImage] = React.useState("");
   const [uploadingImages, setUploadingImages] = React.useState(false);
-  const [quickThumbUploading, setQuickThumbUploading] = React.useState(false);
+  const [quickThumbUploadingByProductId, setQuickThumbUploadingByProductId] =
+    React.useState<Record<string, number>>({});
   const [issueUploadId, setIssueUploadId] = React.useState<string | null>(null);
   const [isActive, setIsActive] = React.useState(true);
   const [variants, setVariants] = React.useState<VariantDraft[]>([]);
@@ -140,6 +147,7 @@ export function InventoryEditorDrawer({
   } | null>(null);
   const quickThumbInputRef = React.useRef<HTMLInputElement | null>(null);
   const mountedRef = React.useRef(false);
+  const activeProductIdRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     mountedRef.current = true;
@@ -149,11 +157,16 @@ export function InventoryEditorDrawer({
   }, []);
 
   React.useEffect(() => {
+    activeProductIdRef.current = product?.id ?? null;
+  }, [product]);
+
+  React.useEffect(() => {
     if (!product) return;
     setTitle(product.title ?? "");
     setBrand(product.brand ?? "");
     setModel(product.model ?? "");
     setVariation(product.variation ?? "");
+    setSpecialTags(normalizeProductSpecialTags(product.special_tags));
     setImages(Array.isArray(product.image_urls) ? product.image_urls : []);
     setIsActive(product.is_active);
     // Keep a local copy so inline edits do not mutate list until save.
@@ -181,7 +194,25 @@ export function InventoryEditorDrawer({
   if (!product) return null;
 
   const productId = product.id;
+  const isQuickThumbUploading = Boolean(quickThumbUploadingByProductId[productId]);
   const editableVariants = variants.filter((v) => !v._delete);
+
+  function setQuickThumbUploading(productIdForUpload: string, active: boolean) {
+    if (!mountedRef.current) return;
+    setQuickThumbUploadingByProductId((prev) => {
+      const current = prev[productIdForUpload] ?? 0;
+      const nextCount = active ? current + 1 : Math.max(0, current - 1);
+      if (nextCount === current) return prev;
+      if (nextCount === 0) {
+        const { [productIdForUpload]: _removed, ...rest } = prev;
+        return rest;
+      }
+      return {
+        ...prev,
+        [productIdForUpload]: nextCount,
+      };
+    });
+  }
 
   async function uploadImageFileRaw(
     file: File,
@@ -470,7 +501,7 @@ export function InventoryEditorDrawer({
 
       setVariants((prev) => prev.filter((item) => item.id !== v.id));
       toast({ intent: "success", message: "Variant deleted." });
-      onSaved();
+      onSaved({ productId });
     } finally {
       setDeletingVariantId(null);
     }
@@ -570,7 +601,7 @@ export function InventoryEditorDrawer({
           return { ...v, qty: Math.max(0, currentQty - 1) };
         })
       );
-      onSaved();
+      onSaved({ productId });
       toast({
         intent: "success",
         title: "Marked sold",
@@ -609,7 +640,7 @@ export function InventoryEditorDrawer({
           return { ...v, qty: currentQty + 1 };
         })
       );
-      onSaved();
+      onSaved({ productId });
       toast({
         intent: "success",
         title: "Sale reverted",
@@ -662,7 +693,7 @@ export function InventoryEditorDrawer({
       }
 
       toast({ intent: "success", message: "Product deleted." });
-      onSaved();
+      onSaved({ productId });
       onClose();
     } finally {
       setDeletingProduct(false);
@@ -791,6 +822,7 @@ export function InventoryEditorDrawer({
             brand: brand || null,
             model: model || null,
             variation: variation || null,
+            special_tags: specialTags,
             image_urls: imagesToSave,
             is_active: isActive,
             created_at: new Date().toISOString(),
@@ -899,7 +931,7 @@ export function InventoryEditorDrawer({
       }
 
       toast({ intent: "success", title: "Saved", message: "Inventory updated." });
-      onSaved();
+      onSaved({ productId });
       if (options?.closeAfter ?? true) onClose();
     } catch (e: any) {
       toast({
@@ -912,20 +944,25 @@ export function InventoryEditorDrawer({
     }
   }
 
-  async function saveProductImages(imagesToSave: string[]) {
+  async function saveProductImages(
+    productIdForSave: string,
+    imagesToSave: string[]
+  ) {
     const { error } = await supabase
       .from("products")
       .update({
         image_urls: imagesToSave,
         created_at: new Date().toISOString(),
       })
-      .eq("id", productId);
+      .eq("id", productIdForSave);
     if (error) throw error;
   }
 
   async function handleQuickThumbUpload(files: File[]) {
     if (!files.length) return;
-    setQuickThumbUploading(true);
+    const targetProductId = productId;
+    const currentImages = [...images];
+    setQuickThumbUploading(targetProductId, true);
     if (mountedRef.current) {
       onClose();
     }
@@ -933,7 +970,7 @@ export function InventoryEditorDrawer({
       const uploaded: string[] = [];
       for (const file of files) {
         try {
-          const url = await uploadImageFileRaw(file, productId);
+          const url = await uploadImageFileRaw(file, targetProductId);
           uploaded.push(url);
         } catch (e) {
           console.error("Thumbnail upload failed", e);
@@ -943,13 +980,19 @@ export function InventoryEditorDrawer({
         throw new Error("No images were uploaded.");
       }
       const nextImages = Array.from(
-        new Set([...uploaded, ...images.filter((u) => !uploaded.includes(u))])
+        new Set([
+          ...uploaded,
+          ...currentImages.filter((u) => !uploaded.includes(u)),
+        ])
       );
-      if (mountedRef.current) {
+      if (
+        mountedRef.current &&
+        activeProductIdRef.current === targetProductId
+      ) {
         setImages(nextImages);
       }
-      await saveProductImages(nextImages);
-      onSaved();
+      await saveProductImages(targetProductId, nextImages);
+      onSaved({ productId: targetProductId, backgroundUpload: true });
     } catch (e: any) {
       toast({
         intent: "error",
@@ -957,9 +1000,7 @@ export function InventoryEditorDrawer({
         message: e?.message ?? "Unable to upload thumbnail.",
       });
     } finally {
-      if (mountedRef.current) {
-        setQuickThumbUploading(false);
-      }
+      setQuickThumbUploading(targetProductId, false);
     }
   }
 
@@ -1104,12 +1145,12 @@ export function InventoryEditorDrawer({
                 <Button
                   variant="secondary"
                   className="w-full"
-                  disabled={quickThumbUploading || saving}
+                  disabled={isQuickThumbUploading || saving}
                   onClick={() => {
                     void openQuickThumbPicker();
                   }}
                 >
-                  {quickThumbUploading ? "Uploading..." : "Upload thumbnail"}
+                  {isQuickThumbUploading ? "Uploading..." : "Upload thumbnail"}
                 </Button>
                 <div className="mt-2 text-xs text-white/60">
                   Closes immediately and uploads in background so you can edit the next item.
@@ -1141,6 +1182,17 @@ export function InventoryEditorDrawer({
               <Input label="Brand" value={brand} onChange={(e) => setBrand(e.target.value)} />
               <Input label="Model" value={model} onChange={(e) => setModel(e.target.value)} />
               <Input label="Variation" value={variation} onChange={(e) => setVariation(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Product tags</div>
+              <ProductSpecialTagPicker
+                value={specialTags}
+                onChange={setSpecialTags}
+                disabled={saving}
+              />
+              <div className="text-xs text-white/50">
+                These tags control the standout badges on the shop product card.
+              </div>
             </div>
           </div>
 
