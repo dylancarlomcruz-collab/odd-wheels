@@ -82,6 +82,13 @@ function normalizePhoneToPlus10(raw: string | null | undefined) {
   return `+${digits.replace(/^0+/, "")}`;
 }
 
+function normalizeCourier(method: string) {
+  const value = String(method ?? "").trim().toUpperCase();
+  if (!value) return null;
+  if (value === "J&T") return "JNT";
+  return value;
+}
+
 async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text);
@@ -1266,6 +1273,8 @@ export default function CashierShipmentsPage() {
       const bookingReference = manualBookingReference.trim();
       const parsedTotal = Number(String(manualTotalRaw ?? "0").replace(/,/g, "").trim());
       const total = Number.isFinite(parsedTotal) && parsedTotal > 0 ? parsedTotal : 0;
+      const address = detailsText || null;
+      const courier = normalizeCourier(shippingMethod);
 
       const shippingDetails: Record<string, any> = {
         method: shippingMethod,
@@ -1284,7 +1293,13 @@ export default function CashierShipmentsPage() {
 
       const insertPayload = {
         user_id: userId,
+        customer_name: customerName,
+        contact: contact || null,
+        customer_phone: contact || null,
+        address,
         status: "PAID",
+        order_status: "PAID",
+        fulfillment_status: "PENDING",
         payment_method: "MANUAL",
         payment_status: "PAID",
         subtotal: total,
@@ -1292,6 +1307,8 @@ export default function CashierShipmentsPage() {
         shipping_method: shippingMethod,
         shipping_details: shippingDetails,
         shipping_status: "PREPARING TO SHIP",
+        courier,
+        tracking_number: null,
         paid_at: new Date().toISOString(),
         channel: "POS",
       };
