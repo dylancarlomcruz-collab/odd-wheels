@@ -1307,6 +1307,7 @@ export default function CashierShipmentsPage() {
         shipping_method: shippingMethod,
         shipping_details: shippingDetails,
         shipping_status: "PREPARING TO SHIP",
+        carrier: courier,
         courier,
         tracking_number: null,
         paid_at: new Date().toISOString(),
