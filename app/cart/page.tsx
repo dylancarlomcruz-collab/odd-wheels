@@ -48,6 +48,8 @@ function formatCourierLabel(value: string) {
   switch (value) {
     case "JNT":
       return "J&T";
+    case "INTERNATIONAL":
+      return "International";
     case "LALAMOVE":
       return "Lalamove";
     default:

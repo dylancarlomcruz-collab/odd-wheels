@@ -6527,7 +6527,7 @@ export default function AdminInventoryPage() {
           <div className="relative w-full max-w-2xl rounded-2xl border border-white/10 bg-bg-900/95 p-5 shadow-soft">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-xs text-white/50">Product card preview</div>
+                <div className="text-xs text-white/50">Mobile web + inventory sheet preview</div>
                 <div className="text-lg font-semibold">Adjust image crop</div>
               </div>
               <Button
@@ -6552,7 +6552,7 @@ export default function AdminInventoryPage() {
                 <img
                   src={cropEditor.baseUrl}
                   alt="Card preview"
-                  className="h-full w-full object-contain"
+                  className="h-full w-full object-cover bg-white"
                   style={cropStyle(cropEditor.crop)}
                 />
                 <div className="pointer-events-none absolute inset-0 border border-white/70 shadow-[0_0_0_9999px_rgba(255,255,255,0.6)] dark:border-white/40 dark:shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]" />

@@ -72,6 +72,7 @@ const SHIP_CLASS_OPTIONS: ShipClass[] = [
 const COURIER_OPTIONS: Array<{ value: Courier; label: string }> = [
   { value: "JNT", label: "J&T" },
   { value: "LBC", label: "LBC" },
+  { value: "INTERNATIONAL", label: "International" },
   { value: "LALAMOVE", label: "Lalamove" },
 ];
 

@@ -73,6 +73,7 @@ const SHIP_OPTIONS = [
 ];
 const COURIER_OPTIONS = [
   { value: "LBC", label: "LBC" },
+  { value: "INTERNATIONAL", label: "International" },
   { value: "JNT", label: "J&T" },
   { value: "LALAMOVE", label: "Lalamove" },
   { value: "PICKUP", label: "Pickup" },
@@ -1724,7 +1725,7 @@ export function InventoryEditorDrawer({
               <div className="sticky top-0 z-10 -mx-4 -mt-4 mb-4 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:static sm:m-0 sm:border-0 sm:bg-transparent sm:p-0">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-xs text-white/50">Product card preview</div>
+                    <div className="text-xs text-white/50">Mobile web + inventory sheet preview</div>
                     <div className="text-lg font-semibold">Adjust image crop</div>
                   </div>
                   <Button
@@ -1751,13 +1752,13 @@ export function InventoryEditorDrawer({
                     <img
                       src={cropEditor.baseUrl}
                       alt="Card preview"
-                      className="h-full w-full object-contain"
+                      className="h-full w-full object-cover bg-white"
                       style={cropStyle(cropEditor.crop)}
                     />
                     <div className="pointer-events-none absolute inset-0 border border-white/70 shadow-[0_0_0_9999px_rgba(255,255,255,0.6)] dark:border-white/40 dark:shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]" />
                   </div>
                   <div className="md:hidden space-y-2">
-                    <div className="text-xs text-white/60">Card preview</div>
+                    <div className="text-xs text-white/60">Mobile web + inventory sheet preview</div>
                     <div className="rounded-[22px] border border-amber-300/30 bg-[#0f1016] p-3 shadow-[0_10px_24px_rgba(0,0,0,0.45)]">
                       <div className="text-center text-[10px] font-extrabold tracking-[0.24em] text-amber-300/90 uppercase mb-2">
                         {String(brand || "Brand").toUpperCase()}
@@ -1768,7 +1769,7 @@ export function InventoryEditorDrawer({
                           <img
                             src={cropEditor.baseUrl}
                             alt="Card preview"
-                            className="h-full w-full object-contain bg-white"
+                            className="h-full w-full object-cover bg-white"
                             style={cropStyle(cropEditor.crop)}
                           />
                         </div>
@@ -1903,7 +1904,7 @@ export function InventoryEditorDrawer({
                   </div>
 
                   <div className="hidden md:block space-y-2 pt-2">
-                    <div className="text-xs text-white/60">Card preview</div>
+                    <div className="text-xs text-white/60">Mobile web + inventory sheet preview</div>
                     <div className="rounded-[22px] border border-amber-300/30 bg-[#0f1016] p-3 shadow-[0_10px_24px_rgba(0,0,0,0.45)]">
                       <div className="text-center text-[10px] font-extrabold tracking-[0.24em] text-amber-300/90 uppercase mb-2">
                         {String(brand || "Brand").toUpperCase()}
@@ -1914,7 +1915,7 @@ export function InventoryEditorDrawer({
                           <img
                             src={cropEditor.baseUrl}
                             alt="Card preview"
-                            className="h-full w-full object-contain bg-white"
+                            className="h-full w-full object-cover bg-white"
                             style={cropStyle(cropEditor.crop)}
                           />
                         </div>

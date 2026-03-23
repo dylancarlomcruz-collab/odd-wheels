@@ -1,5 +1,5 @@
 export type Region = "METRO_MANILA" | "LUZON" | "VISAYAS" | "MINDANAO";
-export type Courier = "LBC" | "JNT" | "LALAMOVE";
+export type Courier = "LBC" | "JNT" | "LALAMOVE" | "INTERNATIONAL";
 
 export type ShipClass =
   | "MINI_GT"

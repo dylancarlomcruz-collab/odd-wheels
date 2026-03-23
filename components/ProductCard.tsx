@@ -6,11 +6,12 @@ import { ChevronDown, ChevronLeft, ShoppingCart, X } from "lucide-react";
 import { recordRecentView } from "@/lib/recentViews";
 import { normalizeSearchTerm } from "@/lib/search";
 import { formatConditionLabel } from "@/lib/conditions";
-import { parseImageCrop } from "@/lib/imageCrop";
+import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
 import { applyImageFallback, buildSrcSet, getOptimizedImageUrl } from "@/lib/imageUrl";
 import { getOptionPricing, getProductEffectiveRange } from "@/lib/pricing";
 import {
   getProductSpecialTagLabel,
+  getProductSpecialTagStyle,
   normalizeProductSpecialTags,
   type ProductSpecialTag,
 } from "@/lib/productTags";
@@ -111,27 +112,13 @@ type FeatureTag = {
 };
 
 const FEATURE_TAG_BASE_CLASS =
-  "inline-flex items-center gap-1.5 rounded-full border font-black uppercase text-white shadow-[0_14px_28px_rgba(0,0,0,0.36)] ring-1 ring-inset ring-white/20 backdrop-blur-md";
-const FEATURE_TAG_TONE_CLASSES: Record<ProductSpecialTag, string> = {
-  exclusive:
-    "border-cyan-200/80 bg-[linear-gradient(135deg,rgba(8,145,178,0.96),rgba(14,116,144,0.98))] !text-white",
-  limited_edition:
-    "border-amber-200/80 bg-[linear-gradient(135deg,rgba(245,158,11,0.96),rgba(180,83,9,0.98))] !text-white",
-  chase:
-    "border-rose-200/80 bg-[linear-gradient(135deg,rgba(244,63,94,0.96),rgba(159,18,57,0.98))] !text-white",
-  rare:
-    "border-violet-200/80 bg-[linear-gradient(135deg,rgba(139,92,246,0.96),rgba(91,33,182,0.98))] !text-white",
-  new_release:
-    "border-emerald-200/80 bg-[linear-gradient(135deg,rgba(16,185,129,0.96),rgba(6,95,70,0.98))] !text-white",
-  discontinued:
-    "border-zinc-200/70 bg-[linear-gradient(135deg,rgba(82,82,91,0.96),rgba(39,39,42,0.98))] !text-white",
-};
+  "inline-flex items-center gap-1.5 rounded-full border font-black uppercase text-white ring-1 ring-inset ring-white/15 backdrop-blur-sm";
 
 function getFeatureTags(product: ShopProduct): FeatureTag[] {
   return normalizeProductSpecialTags(product.special_tags).map((key) => ({
     key,
     label: getProductSpecialTagLabel(key),
-    toneClass: FEATURE_TAG_TONE_CLASSES[key],
+    toneClass: getProductSpecialTagStyle(key).displayClassName,
   }));
 }
 
@@ -437,36 +424,74 @@ export default function ProductCard({
     return `${brand.toUpperCase()} COLLECTION`;
   })();
   const featureTags = React.useMemo(() => getFeatureTags(product), [product]);
+  const visibleFeatureTags = React.useMemo(
+    () => featureTags.slice(0, 2),
+    [featureTags]
+  );
   const mobilePrimaryImage = cardImages[0] ?? null;
-  const mobilePrimarySrc = cardImageSrc || parsedCardImage?.src || mobilePrimaryImage || "";
-  const mobilePrimarySrcSet = cardImageSrcSet || undefined;
+  const parsedMobilePrimaryImage = React.useMemo(
+    () => (mobilePrimaryImage ? parseImageCrop(mobilePrimaryImage) : null),
+    [mobilePrimaryImage]
+  );
+  const mobilePrimarySrc = React.useMemo(
+    () =>
+      parsedMobilePrimaryImage
+        ? getOptimizedImageUrl(parsedMobilePrimaryImage.src, {
+            width: 480,
+            quality: 100,
+            format: "webp",
+          })
+        : "",
+    [parsedMobilePrimaryImage]
+  );
+  const mobilePrimarySrcSet = React.useMemo(
+    () =>
+      parsedMobilePrimaryImage
+        ? buildSrcSet(parsedMobilePrimaryImage.src, [200, 320, 480], {
+            quality: 100,
+            format: "webp",
+          })
+        : "",
+    [parsedMobilePrimaryImage]
+  );
 
   function renderFeatureTagOverlay(mode: "mobile" | "desktop") {
-    if (!featureTags.length) return null;
+    if (!visibleFeatureTags.length) return null;
 
     const stackClassName =
       mode === "mobile"
-        ? "absolute left-2 top-2 z-10 flex max-w-[65%] flex-col items-start gap-1.5"
+        ? "absolute left-3 top-3 z-10 flex max-w-[76%] flex-col items-start gap-2"
         : wideView
           ? "absolute left-2 top-2 z-10 flex max-w-[78%] flex-col items-start gap-1.5"
-          : "absolute left-2 top-2 z-10 flex max-w-[65%] flex-col items-start gap-1 sm:left-3 sm:top-3";
+          : "absolute left-3 top-3 z-10 flex max-w-[74%] flex-col items-start gap-2";
     const badgeClassName =
       mode === "mobile"
-        ? "px-2.5 py-1.5 text-[9px] tracking-[0.16em]"
+        ? "px-3 py-1.5 text-[10px] leading-none tracking-[0.18em]"
         : wideView
           ? "px-2.5 py-1.5 text-[9px] leading-none tracking-[0.14em]"
-          : "px-2 py-1 text-[8px] tracking-[0.15em] sm:px-2.5 sm:py-1.5 sm:text-[9px]";
+          : "px-3 py-1.5 text-[10px] leading-none tracking-[0.16em] sm:px-3.5 sm:py-2 sm:text-[11px]";
+    const dotClassName =
+      mode === "mobile"
+        ? "h-2 w-2"
+        : wideView
+          ? "h-1.5 w-1.5"
+          : "h-2 w-2";
 
     return (
       <div className={stackClassName}>
-        {featureTags.map((tag) => (
+        {visibleFeatureTags.map((tag) => (
           <span
             key={tag.key}
             className={[FEATURE_TAG_BASE_CLASS, badgeClassName, tag.toneClass].join(
               " "
             )}
           >
-            <span className="h-1.5 w-1.5 rounded-full bg-current opacity-75 shadow-[0_0_0_1px_rgba(255,255,255,0.45)]" />
+            <span
+              className={[
+                dotClassName,
+                "rounded-full bg-white/95 shadow-[0_0_0_1px_rgba(255,255,255,0.42)]",
+              ].join(" ")}
+            />
             {tag.label}
           </span>
         ))}
@@ -1320,6 +1345,7 @@ export default function ProductCard({
                   sizes="90vw"
                   alt={displayTitle}
                   className="h-full w-full object-cover object-center"
+                  style={cropStyle(parsedMobilePrimaryImage?.crop)}
                   loading="eager"
                   decoding="async"
                   onError={(e) =>
@@ -1393,6 +1419,7 @@ export default function ProductCard({
                 sizes="(min-width: 1024px) 240px, (min-width: 640px) 200px, 45vw"
                 alt={displayTitle}
                 className="h-full w-full object-contain"
+                style={cropStyle(parsedCardImage?.crop)}
                 loading="eager"
                 decoding="async"
                 onError={(e) =>

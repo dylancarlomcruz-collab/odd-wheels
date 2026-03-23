@@ -56,10 +56,24 @@ export type LalamoveDefaults = {
   [key: string]: unknown;
 };
 
+export type InternationalDefaults = {
+  recipient_name: string;
+  contact_number: string;
+  address_line1: string;
+  address_line2: string;
+  city: string;
+  state_or_province: string;
+  postal_code: string;
+  country: string;
+  notes: string;
+  [key: string]: unknown;
+};
+
 export type ShippingDefaults = {
   jnt: JntDefaults;
   lbc: LbcDefaults;
   lalamove: LalamoveDefaults;
+  international: InternationalDefaults;
   jt?: Record<string, unknown>;
   [key: string]: unknown;
 };
@@ -92,10 +106,23 @@ const EMPTY_LALAMOVE: LalamoveDefaults = {
   map_screenshot_url: "",
 };
 
+const EMPTY_INTERNATIONAL: InternationalDefaults = {
+  recipient_name: "",
+  contact_number: "",
+  address_line1: "",
+  address_line2: "",
+  city: "",
+  state_or_province: "",
+  postal_code: "",
+  country: "",
+  notes: "",
+};
+
 export const EMPTY_SHIPPING_DEFAULTS: ShippingDefaults = {
   jnt: { ...EMPTY_JNT },
   lbc: { ...EMPTY_LBC },
   lalamove: { ...EMPTY_LALAMOVE },
+  international: { ...EMPTY_INTERNATIONAL },
 };
 
 const LEGACY_JNT_KEYS = [
@@ -137,6 +164,18 @@ const LALAMOVE_KEYS = [
   "dropoff_address",
   "notes",
   "map_screenshot_url",
+];
+
+const INTERNATIONAL_KEYS = [
+  "recipient_name",
+  "contact_number",
+  "address_line1",
+  "address_line2",
+  "city",
+  "state_or_province",
+  "postal_code",
+  "country",
+  "notes",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -357,13 +396,43 @@ export function normalizeShippingDefaults(raw: unknown): ShippingDefaults {
     ),
   };
 
+  const internationalSource = isRecord(source.international)
+    ? source.international
+    : {};
+  const internationalExtras = stripKeys(internationalSource, INTERNATIONAL_KEYS);
+  const international: InternationalDefaults = {
+    ...internationalExtras,
+    recipient_name: normalizeString(
+      internationalSource.recipient_name as string | undefined
+    ),
+    contact_number: normalizeString(
+      internationalSource.contact_number as string | undefined
+    ),
+    address_line1: normalizeString(
+      internationalSource.address_line1 as string | undefined
+    ),
+    address_line2: normalizeString(
+      internationalSource.address_line2 as string | undefined
+    ),
+    city: normalizeString(internationalSource.city as string | undefined),
+    state_or_province: normalizeString(
+      internationalSource.state_or_province as string | undefined
+    ),
+    postal_code: normalizeString(
+      internationalSource.postal_code as string | undefined
+    ),
+    country: normalizeString(internationalSource.country as string | undefined),
+    notes: normalizeString(internationalSource.notes as string | undefined),
+  };
+
   const rest = { ...source };
   delete rest.jnt;
   delete rest.jt;
   delete rest.lbc;
   delete rest.lalamove;
+  delete rest.international;
 
-  return { ...rest, jnt, lbc, lalamove };
+  return { ...rest, jnt, lbc, lalamove, international };
 }
 
 export function mergeShippingDefaults(
@@ -378,10 +447,14 @@ export function mergeShippingDefaults(
   delete rest.jt;
   delete rest.lbc;
   delete rest.lalamove;
+  delete rest.international;
 
   const jntBase = isRecord(base.jnt) ? base.jnt : {};
   const lbcBase = isRecord(base.lbc) ? base.lbc : {};
   const lalamoveBase = isRecord(base.lalamove) ? base.lalamove : {};
+  const internationalBase = isRecord(base.international)
+    ? base.international
+    : {};
 
   const jntExtras = stripKeys(jntBase, [...JNT_KEYS, ...LEGACY_JNT_KEYS]);
   const lbcExtras = stripKeys(lbcBase, [...LBC_KEYS, ...LEGACY_LBC_KEYS]);
@@ -389,11 +462,19 @@ export function mergeShippingDefaults(
     lalamoveBase,
     [...LALAMOVE_KEYS, ...LEGACY_LALAMOVE_KEYS]
   );
+  const internationalExtras = stripKeys(
+    internationalBase,
+    INTERNATIONAL_KEYS
+  );
 
   return {
     ...rest,
     jnt: { ...jntExtras, ...normalizedUpdates.jnt },
     lbc: { ...lbcExtras, ...normalizedUpdates.lbc },
     lalamove: { ...lalamoveExtras, ...normalizedUpdates.lalamove },
+    international: {
+      ...internationalExtras,
+      ...normalizedUpdates.international,
+    },
   };
 }

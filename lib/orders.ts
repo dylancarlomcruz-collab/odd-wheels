@@ -8,7 +8,7 @@ import { protectorUnitFee } from "@/lib/addons";
 export type CreateOrderInput = {
   userId: string;
   payment_method: string;
-  shipping_method: "LBC" | "JNT" | "LALAMOVE" | "PICKUP";
+  shipping_method: "LBC" | "JNT" | "LALAMOVE" | "PICKUP" | "INTERNATIONAL";
   shipping_region: string | null;
   shipping_details: any;
   voucher_id?: string | null;
@@ -91,6 +91,7 @@ function carrierFromShippingMethod(m: CreateOrderInput["shipping_method"]) {
   if (m === "LBC") return "LBC";
   if (m === "LALAMOVE") return "LALAMOVE";
   if (m === "PICKUP") return "PICKUP";
+  if (m === "INTERNATIONAL") return "INTERNATIONAL";
   return "OTHER";
 }
 

@@ -50,6 +50,7 @@ function formatShippingMethodLabel(raw: string | null | undefined) {
   if (!method) return "-";
   if (method === "JNT" || method === "J&T") return "J&T";
   if (method === "LBC") return "LBC Pickup";
+  if (method === "INTERNATIONAL") return "International";
   if (method === "LALAMOVE") return "Lalamove";
   return formatStatusLabel(method);
 }
@@ -151,6 +152,14 @@ function buildShippingSections(order: any, details: Record<string, any>) {
     typeof details.full_address === "string" ? details.full_address.trim() : "";
   const detailAddress =
     typeof details.address === "string" ? details.address.trim() : "";
+  const country =
+    typeof details.country === "string" ? details.country.trim() : "";
+  const stateOrProvince =
+    typeof details.state_or_province === "string"
+      ? details.state_or_province.trim()
+      : "";
+  const postalCode =
+    typeof details.postal_code === "string" ? details.postal_code.trim() : "";
   const address =
     method === "PICKUP"
       ? pickupLocation || null
@@ -163,6 +172,8 @@ function buildShippingSections(order: any, details: Record<string, any>) {
   const addressLabel =
     method === "PICKUP"
       ? "Pickup location"
+      : method === "INTERNATIONAL"
+      ? "Delivery address"
       : method === "LALAMOVE" || dropoffAddress
       ? "Drop-off address"
       : "Address";
@@ -183,6 +194,13 @@ function buildShippingSections(order: any, details: Record<string, any>) {
 
   const locationItems: { label: string; value: React.ReactNode }[] = [];
   if (address) locationItems.push({ label: addressLabel, value: address });
+  if (country) locationItems.push({ label: "Country", value: country });
+  if (stateOrProvince) {
+    locationItems.push({ label: "State / Province", value: stateOrProvince });
+  }
+  if (postalCode) {
+    locationItems.push({ label: "Postal code", value: postalCode });
+  }
   if (pickupDirectory && method === "PICKUP") {
     locationItems.push({ label: "Directory", value: pickupDirectory });
   }

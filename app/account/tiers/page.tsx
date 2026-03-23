@@ -40,6 +40,7 @@ function formatCourierLabel(value: string | null | undefined) {
   if (!raw) return "";
   if (raw === "JNT" || raw === "J&T") return "J&T";
   if (raw === "LBC") return "LBC";
+  if (raw === "INTERNATIONAL") return "International";
   if (raw === "LALAMOVE") return "Lalamove";
   return raw;
 }

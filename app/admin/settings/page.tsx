@@ -22,11 +22,13 @@ const PICKUP_DAYS = [
 const FREE_SHIPPING_COURIERS = [
   { value: "JNT", label: "J&T" },
   { value: "LBC", label: "LBC" },
+  { value: "INTERNATIONAL", label: "International" },
   { value: "LALAMOVE", label: "Lalamove" },
 ] as const;
 
 const SHIPPING_METHOD_OPTIONS = [
   { value: "LBC", label: "LBC" },
+  { value: "INTERNATIONAL", label: "International" },
   { value: "JNT", label: "J&T" },
   { value: "LALAMOVE", label: "Lalamove" },
   { value: "PICKUP", label: "Store pickup" },

@@ -66,6 +66,7 @@ function normalizeCourier(value: string | null | undefined) {
   if (raw === "JNT") return "JNT";
   if (raw === "LBC") return "LBC";
   if (raw === "LALAMOVE") return "LALAMOVE";
+  if (raw === "INTERNATIONAL") return "INTERNATIONAL";
   return raw;
 }
 

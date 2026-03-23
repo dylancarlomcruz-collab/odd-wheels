@@ -9,6 +9,7 @@ import { InventoryEditorDrawer } from "@/components/admin/InventoryEditorDrawer"
 import type { AdminProduct } from "@/components/admin/InventoryBrowseGrid";
 import { formatPHP } from "@/lib/money";
 import { getOptimizedImageUrl } from "@/lib/imageUrl";
+import { cropStyle, parseImageCrop, type ImageCrop } from "@/lib/imageCrop";
 import {
   inferFieldsFromTitle,
   normalizeBrandAlias,
@@ -16,7 +17,9 @@ import {
 } from "@/lib/titleInference";
 import { formatConditionLabel } from "@/lib/conditions";
 import {
+  PRODUCT_SPECIAL_TAG_OPTIONS,
   getProductSpecialTagLabel,
+  getProductSpecialTagStyle,
   normalizeProductSpecialTags,
   type ProductSpecialTag,
 } from "@/lib/productTags";
@@ -77,6 +80,7 @@ const EIGHT_UP_HEIGHT = 1080;
 const GRID_COLS = 2;
 const GRID_ROWS = 2;
 const GRID_PAGE_SIZE = GRID_COLS * GRID_ROWS;
+const PRODUCT_CARD_IMAGE_ASPECT = 4 / 3;
 const EXPORT_THUMB_WIDTH = 960;
 const EXPORT_THUMB_HEIGHT = 720;
 const EXPORT_THUMB_QUALITY = 100;
@@ -725,13 +729,13 @@ function renderProductTagBadgesHtml(
   const extraCount = tags.length - visibleTags.length;
   const badges = visibleTags.map(
     (tag) =>
-      `<span class="${getProductTagBadgeClass(tag)}">${escapeHtml(
+      `<span class="${getProductTagBadgeClass(tag)}"><span class="product-tag__dot"></span><span class="product-tag__label">${escapeHtml(
         getProductSpecialTagLabel(tag)
-      )}</span>`
+      )}</span></span>`
   );
   if (extraCount > 0) {
     badges.push(
-      `<span class="${getProductTagBadgeClass("more")}">+${extraCount} more</span>`
+      `<span class="${getProductTagBadgeClass("more")}"><span class="product-tag__dot"></span><span class="product-tag__label">+${extraCount} more</span></span>`
     );
   }
   const containerClassName = options.containerClassName ?? "product-tags";
@@ -739,51 +743,47 @@ function renderProductTagBadgesHtml(
 }
 
 function getProductTagPalette(tag: ProductSpecialTag | "more") {
-  switch (tag) {
-    case "exclusive":
-      return {
-        fill: "rgba(255, 191, 105, 0.92)",
-        stroke: "rgba(255, 227, 173, 0.95)",
-        text: "#2c1600",
-      };
-    case "limited_edition":
-      return {
-        fill: "rgba(127, 179, 255, 0.94)",
-        stroke: "rgba(207, 226, 255, 0.96)",
-        text: "#0d1c3f",
-      };
-    case "chase":
-      return {
-        fill: "rgba(255, 122, 122, 0.94)",
-        stroke: "rgba(255, 208, 208, 0.96)",
-        text: "#3c0909",
-      };
-    case "rare":
-      return {
-        fill: "rgba(181, 154, 255, 0.94)",
-        stroke: "rgba(223, 213, 255, 0.96)",
-        text: "#24104d",
-      };
-    case "new_release":
-      return {
-        fill: "rgba(110, 242, 214, 0.94)",
-        stroke: "rgba(210, 255, 246, 0.98)",
-        text: "#05342b",
-      };
-    case "discontinued":
-      return {
-        fill: "rgba(255, 166, 77, 0.96)",
-        stroke: "rgba(255, 223, 191, 0.98)",
-        text: "#3a1d00",
-      };
-    case "more":
-    default:
-      return {
-        fill: "rgba(32, 36, 48, 0.94)",
-        stroke: "rgba(255, 255, 255, 0.26)",
-        text: "#f8fafc",
-      };
+  if (tag === "more") {
+    return {
+      fillStart: "#394150",
+      fillEnd: "#1f2937",
+      stroke: "rgba(255,255,255,0.35)",
+      text: "#ffffff",
+      glow: "rgba(17,24,39,0.34)",
+    };
   }
+  const style = getProductSpecialTagStyle(tag);
+  return {
+    fillStart: style.gradientStart,
+    fillEnd: style.gradientEnd,
+    stroke: style.borderColor,
+    text: style.textColor,
+    glow: style.glowColor,
+  };
+}
+
+function buildProductTagCssRules() {
+  const variantRules = PRODUCT_SPECIAL_TAG_OPTIONS.map((option) => {
+    const style = getProductSpecialTagStyle(option.key);
+    return `
+      .product-tag--${option.key.replace(/_/g, "-")} {
+        background: linear-gradient(135deg, ${style.gradientStart}, ${style.gradientEnd});
+        border-color: ${style.borderColor};
+        color: ${style.textColor};
+        box-shadow: 0 10px 20px ${style.glowColor};
+      }
+    `;
+  }).join("\n");
+
+  return `
+    ${variantRules}
+    .product-tag--more {
+      background: linear-gradient(135deg, #394150, #1f2937);
+      border-color: rgba(255,255,255,0.35);
+      color: #ffffff;
+      box-shadow: 0 10px 20px rgba(17,24,39,0.34);
+    }
+  `;
 }
 
 function normalizeSheetRows(data: any[]): SheetRow[] {
@@ -1373,14 +1373,33 @@ function getMaxQualityImageUrl(rawUrl: string) {
 }
 
 function getPrimaryImageCandidates(row: SheetRow) {
-  const firstUrl = String(row.product?.image_urls?.[0] ?? "").trim();
-  if (!firstUrl) return [] as string[];
+  const spec = getPrimaryImageSpec(row);
+  if (!spec) return [] as string[];
   // Export must always use only the product's first photo / thumbnail source.
-  return [firstUrl];
+  return [spec.src];
 }
 
 function hasPrimaryImage(row: SheetRow) {
   return getPrimaryImageCandidates(row).length > 0;
+}
+
+function getPrimaryImageSpec(row: SheetRow) {
+  const rawUrl = String(row.product?.image_urls?.[0] ?? "").trim();
+  if (!rawUrl) return null;
+  const parsed = parseImageCrop(rawUrl);
+  return {
+    rawUrl,
+    src: parsed.src,
+    crop: parsed.crop,
+  };
+}
+
+function getInlineCropStyleAttr(crop?: ImageCrop | null) {
+  const style = cropStyle(crop);
+  if (!style?.transform) return "";
+  return ` style="${escapeHtml(
+    `transform: ${style.transform}; transform-origin: ${style.transformOrigin ?? "center"};`
+  )}"`;
 }
 
 function drawRoundedRect(
@@ -1505,9 +1524,14 @@ function drawProductTagBadge(
   ctx.font = options.font;
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
+  const dotSize = Math.max(4, Math.round(options.height * 0.23));
+  const dotGap = Math.max(4, Math.round(options.height * 0.18));
   const maxTextWidth = Math.max(
     12,
-    (options.maxWidth ?? Number.POSITIVE_INFINITY) - options.paddingX * 2
+    (options.maxWidth ?? Number.POSITIVE_INFINITY) -
+      options.paddingX * 2 -
+      dotSize -
+      dotGap
   );
   const fittedLabel = Number.isFinite(maxTextWidth)
     ? truncateText(ctx, label, maxTextWidth)
@@ -1515,19 +1539,32 @@ function drawProductTagBadge(
   const textWidth = ctx.measureText(fittedLabel).width;
   const width = Math.max(
     options.height,
-    textWidth + options.paddingX * 2
+    textWidth + options.paddingX * 2 + dotSize + dotGap
   );
-  ctx.shadowColor = "rgba(0,0,0,0.22)";
-  ctx.shadowBlur = 12;
-  ctx.fillStyle = palette.fill;
+  ctx.shadowColor = palette.glow;
+  ctx.shadowBlur = 16;
+  const fill = ctx.createLinearGradient(x, y, x + width, y + options.height);
+  fill.addColorStop(0, palette.fillStart);
+  fill.addColorStop(1, palette.fillEnd);
+  ctx.fillStyle = fill;
   ctx.strokeStyle = palette.stroke;
   ctx.lineWidth = options.lineWidth ?? 1.5;
   drawRoundedRect(ctx, x, y, width, options.height, options.height / 2);
   ctx.fill();
   ctx.shadowColor = "transparent";
   ctx.stroke();
+  const dotX = x + options.paddingX + dotSize / 2;
+  const dotY = y + options.height / 2;
+  ctx.fillStyle = "rgba(255,255,255,0.96)";
+  ctx.beginPath();
+  ctx.arc(dotX, dotY, dotSize / 2, 0, Math.PI * 2);
+  ctx.fill();
   ctx.fillStyle = palette.text;
-  ctx.fillText(fittedLabel, x + options.paddingX, y + options.height / 2 + 0.5);
+  ctx.fillText(
+    fittedLabel,
+    x + options.paddingX + dotSize + dotGap,
+    y + options.height / 2 + 0.5
+  );
   ctx.restore();
   return width;
 }
@@ -1578,6 +1615,41 @@ function drawCoverImage(
   const drawX = x + (width - drawWidth) / 2;
   const drawY = y + (height - drawHeight) / 2;
   ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+}
+
+function drawCoverImageWithCrop(
+  ctx: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  crop?: ImageCrop | null
+) {
+  const imgWidth =
+    (image as HTMLImageElement).naturalWidth ||
+    (image as ImageBitmap).width ||
+    width;
+  const imgHeight =
+    (image as HTMLImageElement).naturalHeight ||
+    (image as ImageBitmap).height ||
+    height;
+  const scale = Math.max(width / imgWidth, height / imgHeight);
+  const drawWidth = imgWidth * scale;
+  const drawHeight = imgHeight * scale;
+  const centerX = x + width / 2;
+  const centerY = y + height / 2;
+  const offsetX = ((crop?.x ?? 0) / 100) * width;
+  const offsetY = ((crop?.y ?? 0) / 100) * height;
+  const zoom = crop?.zoom ?? 1;
+  const rotation = (((crop?.rotate ?? 0) % 360) * Math.PI) / 180;
+
+  ctx.save();
+  ctx.translate(centerX + offsetX, centerY + offsetY);
+  if (rotation) ctx.rotate(rotation);
+  if (zoom !== 1) ctx.scale(zoom, zoom);
+  ctx.drawImage(image, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+  ctx.restore();
 }
 
 function canvasToBlob(canvas: HTMLCanvasElement, type = "image/png", quality = 0.92) {
@@ -1683,6 +1755,7 @@ function renderCardCanvas(
   image: CanvasImageSource | null
 ) {
   const size = CARD_EXPORT_SIZE;
+  const primaryImageSpec = getPrimaryImageSpec(row);
   ctx.clearRect(0, 0, size, size);
 
   const bg = ctx.createLinearGradient(0, 0, 0, size);
@@ -1744,7 +1817,7 @@ function renderCardCanvas(
   ctx.restore();
 
   const panelWidth = Math.round(size * 0.82);
-  const panelHeight = Math.round(size * 0.58);
+  const panelHeight = Math.round(panelWidth / PRODUCT_CARD_IMAGE_ASPECT);
   const panelX = Math.round((size - panelWidth) / 2);
   const panelY = 150;
 
@@ -1773,7 +1846,7 @@ function renderCardCanvas(
     ctx.beginPath();
     drawRoundedRect(ctx, imgX, imgY, imgW, imgH, 32);
     ctx.clip();
-    drawCoverImage(ctx, image, imgX, imgY, imgW, imgH);
+    drawCoverImageWithCrop(ctx, image, imgX, imgY, imgW, imgH, primaryImageSpec?.crop);
     ctx.restore();
   } else {
     ctx.save();
@@ -1800,22 +1873,22 @@ function renderCardCanvas(
         tagY,
         {
           tag,
-          font: '800 22px "Segoe UI", Arial, sans-serif',
-          height: 42,
-          paddingX: 18,
+          font: '800 24px "Segoe UI", Arial, sans-serif',
+          height: 46,
+          paddingX: 20,
           maxWidth: imgW - 48,
           lineWidth: 2,
         }
       );
-      tagY += 54;
+      tagY += 58;
     }
     const extraCount = cardTags.length - visibleTags.length;
     if (extraCount > 0) {
       drawProductTagBadge(ctx, `+${extraCount} MORE`, imgX + 24, tagY, {
         tag: "more",
-        font: '800 22px "Segoe UI", Arial, sans-serif',
-        height: 42,
-        paddingX: 18,
+        font: '800 24px "Segoe UI", Arial, sans-serif',
+        height: 46,
+        paddingX: 20,
         maxWidth: imgW - 48,
         lineWidth: 2,
       });
@@ -1963,6 +2036,7 @@ function renderEightUpCanvas(
     const y = gridY + rowIdx * (cardH + gap);
     const row = rows[i];
     const image = images[i] ?? null;
+    const primaryImageSpec = row ? getPrimaryImageSpec(row) : null;
 
     ctx.save();
     ctx.shadowColor = "rgba(0,0,0,0.45)";
@@ -2005,7 +2079,7 @@ function renderEightUpCanvas(
     ctx.restore();
     cursorY += 16;
 
-    const metaHeight = 16;
+    const metaHeight = 24;
     const metaY = y + cardH - pad - metaHeight;
     const titleLines = wrapText(ctx, formatName(row), innerW, 2);
     const lineHeight = 14;
@@ -2014,9 +2088,11 @@ function renderEightUpCanvas(
     const variantsGap = row.variant_count > 1 ? 2 : 0;
     const spacingAfterImage = 6;
     const availableHeight = metaY - 6 - cursorY;
+    const maxImageHeight =
+      availableHeight - titleHeight - variantsHeight - variantsGap - spacingAfterImage;
     const imageHeight = Math.max(
       110,
-      availableHeight - titleHeight - variantsHeight - variantsGap - spacingAfterImage
+      Math.min(Math.round(innerW / PRODUCT_CARD_IMAGE_ASPECT), maxImageHeight)
     );
     const imageY = cursorY;
     ctx.save();
@@ -2030,7 +2106,15 @@ function renderEightUpCanvas(
       ctx.beginPath();
       drawRoundedRect(ctx, innerX, imageY, innerW, imageHeight, 10);
       ctx.clip();
-      drawContainImage(ctx, image, innerX, imageY, innerW, imageHeight);
+      drawCoverImageWithCrop(
+        ctx,
+        image,
+        innerX,
+        imageY,
+        innerW,
+        imageHeight,
+        primaryImageSpec?.crop
+      );
       ctx.restore();
     } else {
       ctx.save();
@@ -2054,22 +2138,22 @@ function renderEightUpCanvas(
           tagY,
           {
             tag,
-            font: '800 8px "Segoe UI", Arial, sans-serif',
-            height: 16,
-            paddingX: 6,
+            font: '800 9px "Segoe UI", Arial, sans-serif',
+            height: 18,
+            paddingX: 7,
             maxWidth: innerW - 16,
             lineWidth: 1,
           }
         );
-        tagY += 19;
+        tagY += 21;
       }
       const extraCount = exportTags.length - visibleTags.length;
       if (extraCount > 0) {
         drawProductTagBadge(ctx, `+${extraCount} more`, innerX + 8, tagY, {
           tag: "more",
-          font: '800 8px "Segoe UI", Arial, sans-serif',
-          height: 16,
-          paddingX: 6,
+          font: '800 9px "Segoe UI", Arial, sans-serif',
+          height: 18,
+          paddingX: 7,
           maxWidth: innerW - 16,
           lineWidth: 1,
         });
@@ -2100,42 +2184,42 @@ function renderEightUpCanvas(
 
     const condition = formatExportCondition(row);
     ctx.save();
-    ctx.font = '700 9px "Segoe UI", Arial, sans-serif';
+    ctx.font = '800 11px "Segoe UI", Arial, sans-serif';
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
-    const pillPadding = 6;
+    const pillPadding = 10;
     const pillHeight = metaHeight;
-    const pillWidth = Math.max(ctx.measureText(condition).width + pillPadding * 2, 44);
+    const pillWidth = Math.max(ctx.measureText(condition).width + pillPadding * 2, 66);
     drawRoundedRect(ctx, innerX, metaY, pillWidth, pillHeight, pillHeight / 2);
-    ctx.fillStyle = "rgba(255,180,90,0.12)";
+    ctx.fillStyle = "rgba(255,180,90,0.18)";
     ctx.fill();
-    ctx.strokeStyle = "rgba(255,180,90,0.45)";
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255,205,140,0.72)";
+    ctx.lineWidth = 1.5;
     ctx.stroke();
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.fillStyle = "#fff4de";
     ctx.fillText(condition, innerX + pillPadding, metaY + pillHeight / 2);
     ctx.restore();
 
     const price = formatExportPrice(row);
     ctx.save();
-    ctx.font = '700 13px "Segoe UI", Arial, sans-serif';
+    ctx.font = '900 18px "Arial Black", Impact, sans-serif';
     const priceWidth = ctx.measureText(price).width;
-    const circleRadius = 9;
+    const circleRadius = 11;
     const circleX = innerX + innerW - priceWidth - 6 - circleRadius * 2;
     const circleY = metaY + pillHeight / 2;
     ctx.fillStyle = "rgba(255,184,92,0.14)";
-    ctx.strokeStyle = "rgba(255,184,92,0.45)";
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255,205,140,0.62)";
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.arc(circleX + circleRadius, circleY, circleRadius, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = "#ffb85c";
-    ctx.font = '700 9px "Segoe UI", Arial, sans-serif';
+    ctx.font = '700 11px "Segoe UI", Arial, sans-serif';
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("🛒", circleX + circleRadius, circleY + 0.5);
-    ctx.font = '700 13px "Segoe UI", Arial, sans-serif';
+    ctx.font = '900 18px "Arial Black", Impact, sans-serif';
     ctx.textAlign = "left";
     ctx.fillText(price, circleX + circleRadius * 2 + 6, circleY + 0.5);
     ctx.restore();
@@ -3341,15 +3425,10 @@ export default function InventorySheetPage() {
               const imageCell = photo
                 ? `<img src="${photo}" alt=""/>`
                 : `<span class="no-image">No image</span>`;
-              const tagsCell = (() => {
-                const tags = getRowProductTagLabels(row);
-                if (!tags.length) return `<span class="muted">-</span>`;
-                return `<div class="sheet-tags">${tags
-                  .map(
-                    (tag) => `<span class="sheet-tag">${escapeHtml(tag)}</span>`
-                  )
-                  .join("")}</div>`;
-              })();
+              const tagsCell =
+                renderProductTagBadgesHtml(row, {
+                  containerClassName: "product-tags product-tags--table",
+                }) || `<span class="muted">-</span>`;
               return `
                 <tr>
                   <td class="photo">${imageCell}</td>
@@ -3476,24 +3555,46 @@ export default function InventorySheetPage() {
       .muted {
         color: var(--muted);
       }
-      .sheet-tags {
+      .product-tags {
         display: flex;
         flex-wrap: wrap;
+        gap: 7px;
+      }
+      .product-tags--table {
         gap: 6px;
       }
-      .sheet-tag {
+      .product-tag {
         display: inline-flex;
         align-items: center;
-        min-height: 22px;
-        padding: 3px 9px;
+        gap: 7px;
+        max-width: 100%;
+        min-height: 26px;
+        padding: 5px 12px;
         border-radius: 999px;
-        border: 1px solid rgba(255,255,255,0.14);
-        background: rgba(255,255,255,0.06);
-        color: var(--text);
+        border: 1.5px solid rgba(255,255,255,0.22);
+        color: #fff;
         font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.14em;
         line-height: 1;
+        text-transform: uppercase;
         white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
+      .product-tag__dot {
+        width: 7px;
+        height: 7px;
+        flex: 0 0 auto;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.96);
+        box-shadow: 0 0 0 1px rgba(255,255,255,0.38);
+      }
+      .product-tag__label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      ${buildProductTagCssRules()}
       .num {
         text-align: right;
       }
@@ -3656,8 +3757,12 @@ export default function InventorySheetPage() {
             if (!row) {
               return `<div class="card empty"></div>`;
             }
+            const primaryImageSpec = getPrimaryImageSpec(row);
             const imageCandidates = getPrimaryImageCandidates(row);
-            const primaryUrl = imageCandidates[0] ? escapeHtml(imageCandidates[0]) : "";
+            const primaryUrl = primaryImageSpec?.src
+              ? escapeHtml(primaryImageSpec.src)
+              : "";
+            const cropStyleAttr = getInlineCropStyleAttr(primaryImageSpec?.crop);
             const fallbackSources = escapeHtml(
               JSON.stringify(imageCandidates.slice(1))
             );
@@ -3665,7 +3770,7 @@ export default function InventorySheetPage() {
               ? ` data-fallback-index="0" data-fallback-sources="${fallbackSources}" onerror="window.__owFallbackImage && window.__owFallbackImage(this)"`
               : "";
             const imageCell = primaryUrl
-              ? `<img src="${primaryUrl}" alt="" loading="lazy" decoding="async" width="${EXPORT_THUMB_WIDTH}" height="${EXPORT_THUMB_HEIGHT}" data-load-retries="0" data-load-max-retries="3"${fallbackAttr}/>`
+              ? `<img src="${primaryUrl}" alt="" loading="lazy" decoding="async" width="${EXPORT_THUMB_WIDTH}" height="${EXPORT_THUMB_HEIGHT}" data-load-retries="0" data-load-max-retries="3"${cropStyleAttr}${fallbackAttr}/>`
               : `<div class="img-placeholder">No image</div>`;
             const cardBrand = escapeHtml(formatBrand(row).toUpperCase());
             const titleText = escapeHtml(formatName(row));
@@ -3837,20 +3942,21 @@ export default function InventorySheetPage() {
         font-weight: 700;
       }
       .card-image {
-        background: #ffffff;
-        border-radius: 10px;
-        flex: 1 1 0;
-        min-height: 0;
+        background: #fffdf8;
+        border-radius: 16px;
+        border: 1px solid rgba(255,255,255,0.30);
+        width: 100%;
+        aspect-ratio: 4 / 3;
+        flex: none;
         position: relative;
-        display: grid;
-        place-items: center;
         overflow: hidden;
-        box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+        box-shadow: 0 12px 25px rgba(0,0,0,0.18);
       }
       .card-image img {
         width: 100%;
         height: 100%;
-        object-fit: contain;
+        object-fit: cover;
+        object-position: center;
         display: block;
         image-rendering: auto;
         transform: translateZ(0);
@@ -3863,68 +3969,49 @@ export default function InventorySheetPage() {
       .product-tags {
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 8px;
       }
       .product-tags--card {
         position: absolute;
-        top: 8px;
-        left: 8px;
-        right: 8px;
+        top: 10px;
+        left: 10px;
+        right: 10px;
         z-index: 2;
         pointer-events: none;
       }
       .product-tag {
         width: fit-content;
         max-width: 100%;
-        min-height: 20px;
-        padding: 4px 9px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 24px;
+        padding: 5px 12px;
         border-radius: 999px;
-        border: 1px solid rgba(255,255,255,0.18);
-        box-shadow: 0 8px 18px rgba(0,0,0,0.22);
-        font-size: 8px;
+        border: 1.5px solid rgba(255,255,255,0.22);
+        box-shadow: 0 10px 20px rgba(0,0,0,0.26);
+        font-size: 9px;
         line-height: 1;
         font-weight: 800;
-        letter-spacing: 0.12em;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .product-tag--exclusive {
-        background: rgba(255, 191, 105, 0.94);
-        border-color: rgba(255, 227, 173, 0.96);
-        color: #2c1600;
+      .product-tag__dot {
+        width: 6px;
+        height: 6px;
+        flex: 0 0 auto;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.96);
+        box-shadow: 0 0 0 1px rgba(255,255,255,0.38);
       }
-      .product-tag--limited-edition {
-        background: rgba(127, 179, 255, 0.94);
-        border-color: rgba(207, 226, 255, 0.96);
-        color: #0d1c3f;
+      .product-tag__label {
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
-      .product-tag--chase {
-        background: rgba(255, 122, 122, 0.94);
-        border-color: rgba(255, 208, 208, 0.96);
-        color: #3c0909;
-      }
-      .product-tag--rare {
-        background: rgba(181, 154, 255, 0.94);
-        border-color: rgba(223, 213, 255, 0.96);
-        color: #24104d;
-      }
-      .product-tag--new-release {
-        background: rgba(110, 242, 214, 0.94);
-        border-color: rgba(210, 255, 246, 0.98);
-        color: #05342b;
-      }
-      .product-tag--discontinued {
-        background: rgba(255, 166, 77, 0.96);
-        border-color: rgba(255, 223, 191, 0.98);
-        color: #3a1d00;
-      }
-      .product-tag--more {
-        background: rgba(32, 36, 48, 0.94);
-        border-color: rgba(255,255,255,0.22);
-        color: #f8fafc;
-      }
+      ${buildProductTagCssRules()}
       .card-title {
         font-size: 12px;
         line-height: 1.25;
@@ -3944,37 +4031,41 @@ export default function InventorySheetPage() {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 8px;
+        gap: 12px;
         margin-top: auto;
       }
       .card-condition {
-        font-size: 9px;
+        font-size: 12px;
         text-transform: uppercase;
-        letter-spacing: 0.08em;
-        padding: 3px 6px;
+        letter-spacing: 0.12em;
+        padding: 6px 12px;
         border-radius: 999px;
-        border: 1px solid rgba(255,180,90,0.45);
-        background: rgba(255,180,90,0.12);
-        color: rgba(255,255,255,0.85);
+        border: 1.5px solid rgba(255,205,140,0.62);
+        background: rgba(255,180,90,0.18);
+        color: #fff4de;
+        font-weight: 800;
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
       }
       .card-price {
-        font-size: 13px;
-        font-weight: 700;
+        font-size: 20px;
+        font-weight: 900;
+        letter-spacing: 0.01em;
         color: #ffb85c;
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 8px;
+        text-shadow: 0 1px 0 rgba(0,0,0,0.35);
       }
       .card-cart {
-        width: 18px;
-        height: 18px;
+        width: 24px;
+        height: 24px;
         border-radius: 50%;
         background: rgba(255,184,92,0.14);
-        border: 1px solid rgba(255,184,92,0.45);
+        border: 1.5px solid rgba(255,205,140,0.52);
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        font-size: 10px;
+        font-size: 12px;
       }
     </style>
   </head>

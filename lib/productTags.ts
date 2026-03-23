@@ -10,9 +10,90 @@ export const PRODUCT_SPECIAL_TAG_OPTIONS = [
 export type ProductSpecialTag =
   (typeof PRODUCT_SPECIAL_TAG_OPTIONS)[number]["key"];
 
+export type ProductSpecialTagStyle = {
+  displayClassName: string;
+  pickerClassName: string;
+  gradientStart: string;
+  gradientEnd: string;
+  borderColor: string;
+  textColor: string;
+  glowColor: string;
+};
+
 const PRODUCT_SPECIAL_TAG_LABELS = new Map(
   PRODUCT_SPECIAL_TAG_OPTIONS.map((option) => [option.key, option.label] as const)
 );
+const PRODUCT_SPECIAL_TAG_STYLES: Record<
+  ProductSpecialTag,
+  ProductSpecialTagStyle
+> = {
+  exclusive: {
+    displayClassName:
+      "border-white/85 bg-[linear-gradient(135deg,#1ed4c6_0%,#0f8f83_100%)] text-white shadow-[0_10px_22px_rgba(15,143,131,0.34)]",
+    pickerClassName:
+      "border-white/85 bg-[linear-gradient(135deg,#1ed4c6_0%,#0f8f83_100%)] text-white shadow-[0_10px_18px_rgba(15,143,131,0.28)] hover:brightness-105",
+    gradientStart: "#1ed4c6",
+    gradientEnd: "#0f8f83",
+    borderColor: "rgba(255,255,255,0.86)",
+    textColor: "#ffffff",
+    glowColor: "rgba(15,143,131,0.34)",
+  },
+  limited_edition: {
+    displayClassName:
+      "border-white/85 bg-[linear-gradient(135deg,#f7bc2a_0%,#db7b08_100%)] text-white shadow-[0_10px_22px_rgba(219,123,8,0.34)]",
+    pickerClassName:
+      "border-white/85 bg-[linear-gradient(135deg,#f7bc2a_0%,#db7b08_100%)] text-white shadow-[0_10px_18px_rgba(219,123,8,0.28)] hover:brightness-105",
+    gradientStart: "#f7bc2a",
+    gradientEnd: "#db7b08",
+    borderColor: "rgba(255,247,237,0.9)",
+    textColor: "#ffffff",
+    glowColor: "rgba(219,123,8,0.34)",
+  },
+  chase: {
+    displayClassName:
+      "border-white/85 bg-[linear-gradient(135deg,#fb7185_0%,#be123c_100%)] text-white shadow-[0_10px_22px_rgba(190,24,93,0.34)]",
+    pickerClassName:
+      "border-white/85 bg-[linear-gradient(135deg,#fb7185_0%,#be123c_100%)] text-white shadow-[0_10px_18px_rgba(190,24,93,0.28)] hover:brightness-105",
+    gradientStart: "#fb7185",
+    gradientEnd: "#be123c",
+    borderColor: "rgba(255,228,230,0.9)",
+    textColor: "#ffffff",
+    glowColor: "rgba(190,24,93,0.34)",
+  },
+  rare: {
+    displayClassName:
+      "border-white/85 bg-[linear-gradient(135deg,#8b5cf6_0%,#6d28d9_100%)] text-white shadow-[0_10px_22px_rgba(109,40,217,0.34)]",
+    pickerClassName:
+      "border-white/85 bg-[linear-gradient(135deg,#8b5cf6_0%,#6d28d9_100%)] text-white shadow-[0_10px_18px_rgba(109,40,217,0.28)] hover:brightness-105",
+    gradientStart: "#8b5cf6",
+    gradientEnd: "#6d28d9",
+    borderColor: "rgba(243,232,255,0.9)",
+    textColor: "#ffffff",
+    glowColor: "rgba(109,40,217,0.34)",
+  },
+  new_release: {
+    displayClassName:
+      "border-white/85 bg-[linear-gradient(135deg,#4ee7b6_0%,#138a67_100%)] text-white shadow-[0_10px_22px_rgba(19,138,103,0.34)]",
+    pickerClassName:
+      "border-white/85 bg-[linear-gradient(135deg,#4ee7b6_0%,#138a67_100%)] text-white shadow-[0_10px_18px_rgba(19,138,103,0.28)] hover:brightness-105",
+    gradientStart: "#4ee7b6",
+    gradientEnd: "#138a67",
+    borderColor: "rgba(209,250,229,0.9)",
+    textColor: "#ffffff",
+    glowColor: "rgba(19,138,103,0.34)",
+  },
+  discontinued: {
+    displayClassName:
+      "border-white/85 bg-[linear-gradient(135deg,#94a3b8_0%,#475569_100%)] text-white shadow-[0_10px_22px_rgba(71,85,105,0.34)]",
+    pickerClassName:
+      "border-white/85 bg-[linear-gradient(135deg,#94a3b8_0%,#475569_100%)] text-white shadow-[0_10px_18px_rgba(71,85,105,0.28)] hover:brightness-105",
+    gradientStart: "#94a3b8",
+    gradientEnd: "#475569",
+    borderColor: "rgba(241,245,249,0.9)",
+    textColor: "#ffffff",
+    glowColor: "rgba(71,85,105,0.34)",
+  },
+};
 const PRODUCT_SPECIAL_TAG_ALIAS_MAP = new Map<string, ProductSpecialTag>([
   ["exclusive", "exclusive"],
   ["limited", "limited_edition"],
@@ -76,6 +157,10 @@ export function normalizeProductSpecialTags(
 
 export function getProductSpecialTagLabel(tag: ProductSpecialTag) {
   return PRODUCT_SPECIAL_TAG_LABELS.get(tag) ?? tag;
+}
+
+export function getProductSpecialTagStyle(tag: ProductSpecialTag) {
+  return PRODUCT_SPECIAL_TAG_STYLES[tag];
 }
 
 export function inferProductSpecialTags(input: {

@@ -47,6 +47,11 @@ import {
   recommendLbcPackage,
   shipCountsFromLines,
 } from "@/lib/shipping/logic";
+import {
+  formatInternationalContainerLabel,
+  INTERNATIONAL_COUNTRY_OPTIONS,
+  quoteInternationalAirParcel,
+} from "@/lib/shipping/international";
 import { suggestedInsuranceFee } from "@/lib/shipping/config";
 import { getFreeShippingEligibility } from "@/lib/shipping/freeShipping";
 import { resolveEffectivePrice } from "@/lib/pricing";
@@ -57,20 +62,28 @@ import {
   type VoucherWallet,
 } from "@/lib/vouchers";
 
-type ShippingMethod = "LALAMOVE" | "JNT" | "LBC" | "PICKUP";
+type ShippingMethod =
+  | "LALAMOVE"
+  | "JNT"
+  | "LBC"
+  | "PICKUP"
+  | "INTERNATIONAL";
 const SHIPPING_METHODS: ShippingMethod[] = [
   "LBC",
+  "INTERNATIONAL",
   "JNT",
   "LALAMOVE",
   "PICKUP",
 ];
 const SHIPPING_METHOD_LABELS: Record<ShippingMethod, string> = {
   LBC: "LBC Pickup",
+  INTERNATIONAL: "International",
   JNT: "J&T",
   LALAMOVE: "Lalamove",
   PICKUP: "Store",
 };
 const PHONE_LENGTH = PHONE_MAX_LENGTH;
+const INTERNATIONAL_PHONE_MAX_LENGTH = 20;
 
 type VoucherWalletRow = Omit<VoucherWallet, "voucher"> & {
   voucher: Voucher | Voucher[] | null;
@@ -123,6 +136,30 @@ function formatPhoneError(value: string, show: boolean): string | undefined {
   return validatePhone11(digits)
     ? undefined
     : "Use an 11-digit PH mobile number (09XXXXXXXXX).";
+}
+
+function sanitizeInternationalPhone(value: string) {
+  return value.replace(/[^\d+]/g, "").replace(/(?!^)\+/g, "");
+}
+
+function normalizeInternationalPhone(value: string) {
+  const sanitized = sanitizeInternationalPhone(value).trim();
+  if (!sanitized) return "";
+  const digits = sanitized.replace(/\D/g, "");
+  if (!digits) return "";
+  return sanitized.startsWith("+") ? `+${digits}` : `+${digits.replace(/^0+/, "")}`;
+}
+
+function formatInternationalPhoneError(
+  value: string,
+  show: boolean,
+): string | undefined {
+  const digits = normalizeInternationalPhone(value).replace(/\D/g, "");
+  if (!show || !digits) return undefined;
+  if (digits.length < 7 || digits.length > 15) {
+    return "Use an international number with country code (7-15 digits).";
+  }
+  return undefined;
 }
 
 function isLalamoveWindowKey(value: string): value is LalamoveWindowKey {
@@ -492,6 +529,7 @@ function formatCourierLabel(value: string | null | undefined) {
   if (!raw) return "";
   if (raw === "JNT" || raw === "J&T") return "J&T";
   if (raw === "LBC") return "LBC";
+  if (raw === "INTERNATIONAL") return "International";
   if (raw === "LALAMOVE") return "Lalamove";
   return raw;
 }
@@ -856,6 +894,18 @@ function CheckoutContent() {
   const [lbcPackageChoice, setLbcPackageChoice] =
     React.useState<LbcPackage>("N_SAKTO");
 
+  // International
+  const [internationalCountry, setInternationalCountry] = React.useState("");
+  const [internationalAddressLine1, setInternationalAddressLine1] =
+    React.useState("");
+  const [internationalAddressLine2, setInternationalAddressLine2] =
+    React.useState("");
+  const [internationalCity, setInternationalCity] = React.useState("");
+  const [internationalStateProvince, setInternationalStateProvince] =
+    React.useState("");
+  const [internationalPostalCode, setInternationalPostalCode] =
+    React.useState("");
+
   // Lalamove
   const [lalamoveAddress, setLalamoveAddress] = React.useState("");
   const [lalamoveImageUrl, setLalamoveImageUrl] = React.useState<string>("");
@@ -883,7 +933,10 @@ function CheckoutContent() {
   const [notes, setNotes] = React.useState("");
   const [saveAsDefault, setSaveAsDefault] = React.useState(false);
 
-  const phoneError = formatPhoneError(phone, phoneTouched || submitAttempted);
+  const phoneError =
+    shippingMethod === "INTERNATIONAL"
+      ? formatInternationalPhoneError(phone, phoneTouched || submitAttempted)
+      : formatPhoneError(phone, phoneTouched || submitAttempted);
 
   // Priority shipping UI can stay, but DB may not have columns (we handle in lib/orders.ts)
   const priorityAvailable = Boolean(settings?.priority_shipping_available);
@@ -1157,6 +1210,12 @@ function CheckoutContent() {
       setLalamoveSlotError(null);
       setLalamovePinError(null);
       setLalamovePinLoading(false);
+      setInternationalCountry("");
+      setInternationalAddressLine1("");
+      setInternationalAddressLine2("");
+      setInternationalCity("");
+      setInternationalStateProvince("");
+      setInternationalPostalCode("");
     }
 
     if (shippingMethod === "LBC") {
@@ -1182,6 +1241,12 @@ function CheckoutContent() {
       setLalamoveSlotError(null);
       setLalamovePinError(null);
       setLalamovePinLoading(false);
+      setInternationalCountry("");
+      setInternationalAddressLine1("");
+      setInternationalAddressLine2("");
+      setInternationalCity("");
+      setInternationalStateProvince("");
+      setInternationalPostalCode("");
     }
 
     if (shippingMethod === "LALAMOVE") {
@@ -1213,6 +1278,43 @@ function CheckoutContent() {
       setLbcLastName("");
       setLbcBranchName("");
       setLbcBranchCity("");
+      setInternationalCountry("");
+      setInternationalAddressLine1("");
+      setInternationalAddressLine2("");
+      setInternationalCity("");
+      setInternationalStateProvince("");
+      setInternationalPostalCode("");
+    }
+
+    if (shippingMethod === "INTERNATIONAL") {
+      setName(sd.international?.recipient_name ?? name);
+      setPhone(sd.international?.contact_number ?? "");
+      setInternationalCountry(sd.international?.country ?? "");
+      setInternationalAddressLine1(sd.international?.address_line1 ?? "");
+      setInternationalAddressLine2(sd.international?.address_line2 ?? "");
+      setInternationalCity(sd.international?.city ?? "");
+      setInternationalStateProvince(sd.international?.state_or_province ?? "");
+      setInternationalPostalCode(sd.international?.postal_code ?? "");
+      setNotes(sd.international?.notes ?? "");
+
+      setJtHouseStreetUnit("");
+      setJtBarangay("");
+      setJtCity("");
+      setJtProvince("");
+      setJtPostalCode("");
+      setJtLocationQuery("");
+      setLbcFirstName("");
+      setLbcLastName("");
+      setLbcBranchName("");
+      setLbcBranchCity("");
+      setLalamoveAddress("");
+      setLalamoveImageUrl("");
+      setLalamoveMapLink("");
+      setLalamoveMapCoords(null);
+      setLalamoveSlots([]);
+      setLalamoveSlotError(null);
+      setLalamovePinError(null);
+      setLalamovePinLoading(false);
     }
 
     if (shippingMethod === "PICKUP") {
@@ -1234,6 +1336,12 @@ function CheckoutContent() {
       setLbcLastName("");
       setLbcBranchName("");
       setLbcBranchCity("");
+      setInternationalCountry("");
+      setInternationalAddressLine1("");
+      setInternationalAddressLine2("");
+      setInternationalCity("");
+      setInternationalStateProvince("");
+      setInternationalPostalCode("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shippingMethod, JSON.stringify(defaults)]);
@@ -1407,6 +1515,7 @@ function CheckoutContent() {
     return unique.filter(
       (value): value is ShippingMethod =>
         value === "LBC" ||
+        value === "INTERNATIONAL" ||
         value === "JNT" ||
         value === "LALAMOVE" ||
         value === "PICKUP",
@@ -1423,6 +1532,7 @@ function CheckoutContent() {
     return intersection.filter(
       (value): value is ShippingMethod =>
         value === "LBC" ||
+        value === "INTERNATIONAL" ||
         value === "JNT" ||
         value === "LALAMOVE" ||
         value === "PICKUP",
@@ -1645,6 +1755,31 @@ function CheckoutContent() {
       };
     }
 
+    if (shippingMethod === "INTERNATIONAL") {
+      const quote = quoteInternationalAirParcel({
+        country: internationalCountry,
+        counts,
+      });
+      if (!quote.ok) {
+        return { ok: false as const, error: quote.reason };
+      }
+      const boxLabel = formatInternationalContainerLabel(quote.boxType);
+      return {
+        ok: true as const,
+        label: `International Air Parcel - ${quote.country}`,
+        fee: quote.fee,
+        pack: quote.pack,
+        country: quote.country,
+        rate: quote.rate,
+        boxType: quote.boxType,
+        boxLabel,
+        billableWeightKg: quote.billableWeightKg,
+        volumetricWeightKg: quote.volumetricWeightKg,
+        boxUsage: quote.boxUsage,
+        additionalHalfKgSteps: quote.additionalHalfKgSteps,
+      };
+    }
+
     if (shippingMethod === "PICKUP") {
       return { ok: true as const, label: "Store pickup", fee: 0, pack: null };
     }
@@ -1662,6 +1797,7 @@ function CheckoutContent() {
     jntRestrictionsActive,
     effectiveJntPouches,
     availableShippingMethods,
+    internationalCountry,
   ]);
 
   // ✅ COP => shipping fee is paid at branch, so DO NOT include shipping fee in total
@@ -1812,6 +1948,21 @@ function CheckoutContent() {
       }
     }
 
+    if (shippingMethod === "INTERNATIONAL") {
+      if (shippingMeta.ok) {
+        out.push({
+          label: `Shipping fee (${(shippingMeta as any).country}, ${(shippingMeta as any).billableWeightKg}kg billable)`,
+          amount: fees.shipping_fee,
+        });
+      } else {
+        out.push({
+          label: "International shipping",
+          amount: 0,
+          muted: true,
+        });
+      }
+    }
+
     if (shippingMethod === "PICKUP") {
       out.push({
         label: "Pickup (store)",
@@ -1851,6 +2002,7 @@ function CheckoutContent() {
     shippingMethod,
     region,
     fees,
+    shippingMeta,
     shippingDiscount,
     shippingDiscountLabel,
     insuranceSelected,
@@ -1880,12 +2032,23 @@ function CheckoutContent() {
     }
 
     const sanitizedPhone = sanitizePhone(phone);
-    if (!sanitizedPhone) return setMsg("Please fill in Contact Number.");
-    if (!validatePhone11(sanitizedPhone))
-      return setMsg("Use an 11-digit PH mobile number (09XXXXXXXXX).");
+    const normalizedInternationalPhone = normalizeInternationalPhone(phone);
+    if (shippingMethod === "INTERNATIONAL") {
+      const digits = normalizedInternationalPhone.replace(/\D/g, "");
+      if (!digits) return setMsg("Please fill in Contact Number.");
+      if (digits.length < 7 || digits.length > 15) {
+        return setMsg("Use a valid international number with country code.");
+      }
+    } else {
+      if (!sanitizedPhone) return setMsg("Please fill in Contact Number.");
+      if (!validatePhone11(sanitizedPhone)) {
+        return setMsg("Use an 11-digit PH mobile number (09XXXXXXXXX).");
+      }
+    }
 
     if (
       shippingMethod === "JNT" ||
+      shippingMethod === "INTERNATIONAL" ||
       shippingMethod === "LALAMOVE" ||
       shippingMethod === "PICKUP"
     ) {
@@ -1914,6 +2077,24 @@ function CheckoutContent() {
       if (!lalamoveSlots.length) {
         setLalamoveSlotError("Please select at least one Lalamove time slot.");
         return;
+      }
+    }
+
+    if (shippingMethod === "INTERNATIONAL") {
+      if (!internationalCountry.trim()) {
+        return setMsg("Please select a destination country.");
+      }
+      if (!internationalAddressLine1.trim()) {
+        return setMsg("Address line 1 is required for international shipping.");
+      }
+      if (!internationalCity.trim()) {
+        return setMsg("City is required for international shipping.");
+      }
+      if (!internationalStateProvince.trim()) {
+        return setMsg("State / Province is required for international shipping.");
+      }
+      if (!internationalPostalCode.trim()) {
+        return setMsg("Postal code is required for international shipping.");
       }
     }
 
@@ -1972,6 +2153,25 @@ function CheckoutContent() {
         .filter(Boolean)
         .join(", ");
 
+      const internationalCountryTrimmed = internationalCountry.trim();
+      const internationalAddressLine1Trimmed = internationalAddressLine1.trim();
+      const internationalAddressLine2Trimmed = internationalAddressLine2.trim();
+      const internationalCityTrimmed = internationalCity.trim();
+      const internationalStateProvinceTrimmed =
+        internationalStateProvince.trim();
+      const internationalPostalCodeTrimmed = internationalPostalCode.trim();
+      const internationalFullAddress = [
+        internationalAddressLine1Trimmed,
+        internationalAddressLine2Trimmed,
+        internationalCityTrimmed,
+        internationalStateProvinceTrimmed,
+        internationalPostalCodeTrimmed,
+        internationalCountryTrimmed,
+      ]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join(", ");
+
       let shipping_details: Record<string, any>;
       if (shippingMethod === "JNT") {
         shipping_details = {
@@ -2003,6 +2203,36 @@ function CheckoutContent() {
           pay_at_branch: lbcCop, // explicit flag
           package: shippingMeta.ok ? shippingMeta.pack : null,
           warning: (shippingMeta as any).warning ?? null,
+          notes: notes.trim() || null,
+        };
+      } else if (shippingMethod === "INTERNATIONAL") {
+        shipping_details = {
+          method: "INTERNATIONAL",
+          receiver_name: name.trim(),
+          receiver_phone: normalizedInternationalPhone,
+          address_line1: internationalAddressLine1Trimmed,
+          address_line2: internationalAddressLine2Trimmed || null,
+          city: internationalCityTrimmed,
+          state_or_province: internationalStateProvinceTrimmed,
+          postal_code: internationalPostalCodeTrimmed,
+          country: internationalCountryTrimmed,
+          full_address: internationalFullAddress,
+          package: shippingMeta.ok ? shippingMeta.pack : null,
+          box_type: shippingMeta.ok ? (shippingMeta as any).boxType : null,
+          billable_weight_kg:
+            shippingMeta.ok ? (shippingMeta as any).billableWeightKg : null,
+          volumetric_weight_kg:
+            shippingMeta.ok ? (shippingMeta as any).volumetricWeightKg : null,
+          first_kg_rate:
+            shippingMeta.ok ? (shippingMeta as any).rate?.firstKg ?? null : null,
+          additional_500g_rate:
+            shippingMeta.ok
+              ? (shippingMeta as any).rate?.every500g ?? null
+              : null,
+          weight_limit_kg:
+            shippingMeta.ok
+              ? (shippingMeta as any).rate?.weightLimitKg ?? null
+              : null,
           notes: notes.trim() || null,
         };
       } else if (shippingMethod === "PICKUP") {
@@ -2077,6 +2307,22 @@ function CheckoutContent() {
               map_lng: lalamoveMapCoords?.lng ?? null,
             },
           });
+        } else if (shippingMethod === "INTERNATIONAL") {
+          nextDefaults = normalizeShippingDefaults({
+            ...defaults,
+            international: {
+              ...defaults.international,
+              recipient_name: name.trim(),
+              contact_number: normalizedInternationalPhone,
+              address_line1: internationalAddressLine1Trimmed,
+              address_line2: internationalAddressLine2Trimmed,
+              city: internationalCityTrimmed,
+              state_or_province: internationalStateProvinceTrimmed,
+              postal_code: internationalPostalCodeTrimmed,
+              country: internationalCountryTrimmed,
+              notes: notes.trim() || "",
+            },
+          });
         }
       }
 
@@ -2088,6 +2334,8 @@ function CheckoutContent() {
           shipping_region:
             shippingMethod === "LALAMOVE" || shippingMethod === "PICKUP"
               ? null
+              : shippingMethod === "INTERNATIONAL"
+                ? internationalCountryTrimmed || null
               : region,
           shipping_details,
           fees,
@@ -2256,12 +2504,33 @@ function CheckoutContent() {
                 <Input
                   label="Contact Number"
                   value={phone}
-                  onChange={(e) => setPhone(sanitizePhone(e.target.value))}
+                  onChange={(e) =>
+                    setPhone(
+                      shippingMethod === "INTERNATIONAL"
+                        ? sanitizeInternationalPhone(e.target.value)
+                        : sanitizePhone(e.target.value),
+                    )
+                  }
                   onBlur={() => setPhoneTouched(true)}
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  maxLength={PHONE_LENGTH}
+                  inputMode={
+                    shippingMethod === "INTERNATIONAL" ? "text" : "numeric"
+                  }
+                  pattern={
+                    shippingMethod === "INTERNATIONAL"
+                      ? "[+0-9 ]*"
+                      : "[0-9]*"
+                  }
+                  maxLength={
+                    shippingMethod === "INTERNATIONAL"
+                      ? INTERNATIONAL_PHONE_MAX_LENGTH
+                      : PHONE_LENGTH
+                  }
                   error={phoneError}
+                  hint={
+                    shippingMethod === "INTERNATIONAL"
+                      ? "Include country code. Example: +1 415 555 2671"
+                      : undefined
+                  }
                 />
               </div>
             ) : (
@@ -2379,6 +2648,82 @@ function CheckoutContent() {
                     </div>
                   </div>
                 </label>
+              </div>
+            ) : null}
+
+            {shippingMethod === "INTERNATIONAL" ? (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-white/10 bg-bg-900/20 p-4 text-sm text-white/70">
+                  PhilPost air parcel is computed from the cart's small-box /
+                  medium-box fill.
+                  <span className="block mt-2 text-white/55">
+                    Small box rules: 30 Mini GT, 20 Kaido / Pop Race / Acrylic,
+                    and 1 blister = 3 Mini GT. Medium box = double the small
+                    box.
+                  </span>
+                </div>
+
+                <Select
+                  label="Destination country"
+                  value={internationalCountry}
+                  onChange={(e) => setInternationalCountry(e.target.value)}
+                >
+                  <option value="">Select a country</option>
+                  {INTERNATIONAL_COUNTRY_OPTIONS.map((country) => (
+                    <option key={country} value={country}>
+                      {country}
+                    </option>
+                  ))}
+                </Select>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <Input
+                    label="Address line 1"
+                    value={internationalAddressLine1}
+                    onChange={(e) => setInternationalAddressLine1(e.target.value)}
+                  />
+                  <Input
+                    label="Address line 2 (optional)"
+                    value={internationalAddressLine2}
+                    onChange={(e) => setInternationalAddressLine2(e.target.value)}
+                  />
+                  <Input
+                    label="City"
+                    value={internationalCity}
+                    onChange={(e) => setInternationalCity(e.target.value)}
+                  />
+                  <Input
+                    label="State / Province"
+                    value={internationalStateProvince}
+                    onChange={(e) =>
+                      setInternationalStateProvince(e.target.value)
+                    }
+                  />
+                  <Input
+                    label="Postal code"
+                    value={internationalPostalCode}
+                    onChange={(e) => setInternationalPostalCode(e.target.value)}
+                  />
+                </div>
+
+                {shippingMeta.ok ? (
+                  <div className="rounded-xl border border-white/10 bg-bg-900/20 p-4 text-sm text-white/75">
+                    <div>
+                      {`${(shippingMeta as any).boxLabel} | ${(shippingMeta as any).volumetricWeightKg}kg volumetric | ${(shippingMeta as any).billableWeightKg}kg billable`}
+                    </div>
+                    <div className="mt-1 text-xs text-white/50">
+                      Rate: {formatPHP((shippingMeta as any).rate.firstKg)} first
+                      kg, +{formatPHP((shippingMeta as any).rate.every500g)} per
+                      additional 500g. Weight limit:{" "}
+                      {(shippingMeta as any).rate.weightLimitKg}kg.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-white/10 bg-bg-900/20 p-4 text-sm text-white/50">
+                    Select a supported country to compute the international air
+                    parcel fee.
+                  </div>
+                )}
               </div>
             ) : null}
 
