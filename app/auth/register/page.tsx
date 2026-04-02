@@ -4,11 +4,22 @@ import * as React from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase/browser";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
+import { CountryCodePicker } from "@/components/auth/CountryCodePicker";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { useRouter, useSearchParams } from "next/navigation";
 import { isSupabaseConfigured } from "@/lib/env";
-import { PHONE_MAX_LENGTH, sanitizePhone, validatePhone11 } from "@/lib/phone";
+import {
+  formatPhoneForRegistrationError,
+  getPhoneExampleLocalNumber,
+  getPhoneLocalMaxLength,
+  normalizePhoneInputForCountry,
+  normalizePhoneForStorage,
+} from "@/lib/phone";
+import {
+  findPhoneCountryFromInternationalPhone,
+  getPhoneCountryByIso,
+} from "@/lib/phoneCountries";
 
 function RegisterContent() {
   const router = useRouter();
@@ -19,19 +30,40 @@ function RegisterContent() {
   const emailRedirectTo = "https://www.odd-wheels.com/";
   const [fullName, setFullName] = React.useState("");
   const [username, setUsername] = React.useState("");
+  const [phoneCountryIso2, setPhoneCountryIso2] = React.useState("PH");
   const [contactNumber, setContactNumber] = React.useState("");
-  const [address, setAddress] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [acceptedTerms, setAcceptedTerms] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
+  const [phoneTouched, setPhoneTouched] = React.useState(false);
+  const [submitAttempted, setSubmitAttempted] = React.useState(false);
+
+  const selectedPhoneCountry =
+    getPhoneCountryByIso(phoneCountryIso2) ??
+    getPhoneCountryByIso("PH")!;
+  const normalizedCallingCode = selectedPhoneCountry.dialCode;
+  const phonePlaceholder =
+    getPhoneExampleLocalNumber(selectedPhoneCountry.iso2) || "Phone number";
+  const phoneError = formatPhoneForRegistrationError(
+    selectedPhoneCountry.iso2,
+    contactNumber,
+    phoneTouched || submitAttempted
+  );
+
+  React.useEffect(() => {
+    setContactNumber((current) =>
+      normalizePhoneInputForCountry(selectedPhoneCountry.iso2, current)
+    );
+  }, [selectedPhoneCountry.iso2]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setNotice(null);
+    setSubmitAttempted(true);
 
     if (!isSupabaseConfigured()) {
       setError("Supabase is not configured. Fill .env.local first.");
@@ -46,14 +78,23 @@ function RegisterContent() {
     const trimmedName = fullName.trim();
     const trimmedUsername = username.trim();
     const trimmedEmail = email.trim().toLowerCase();
-    const sanitizedContact = sanitizePhone(contactNumber);
+    const submitPhoneError = formatPhoneForRegistrationError(
+      selectedPhoneCountry.iso2,
+      contactNumber,
+      true
+    );
+    const normalizedContact = normalizePhoneForStorage(
+      selectedPhoneCountry.iso2,
+      normalizedCallingCode,
+      contactNumber
+    );
 
-    if (!trimmedUsername || !sanitizedContact || !trimmedEmail) {
+    if (!trimmedUsername || !normalizedContact || !trimmedEmail) {
       setError("Username, phone number, and email are required.");
       return;
     }
-    if (!validatePhone11(sanitizedContact)) {
-      setError("Use an 11-digit PH mobile number (09XXXXXXXXX).");
+    if (submitPhoneError) {
+      setError(submitPhoneError);
       return;
     }
     if (!acceptedTerms) {
@@ -66,7 +107,7 @@ function RegisterContent() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         username: trimmedUsername,
-        contact_number: sanitizedContact,
+        contact_number: normalizedContact,
         email: trimmedEmail,
       }),
     });
@@ -96,8 +137,9 @@ function RegisterContent() {
         data: {
           full_name: trimmedName,
           username: trimmedUsername,
-          contact_number: sanitizedContact,
-          address: address.trim(),
+          contact_number: normalizedContact,
+          contact_country_code: normalizedCallingCode,
+          contact_country_iso2: selectedPhoneCountry.iso2,
         },
       },
     });
@@ -137,17 +179,88 @@ function RegisterContent() {
               required
               hint="Shown on your profile and receipts."
             />
-            <Input
-              label="Contact Number"
-              value={contactNumber}
-              onChange={(e) => setContactNumber(sanitizePhone(e.target.value))}
-              required
-              inputMode="numeric"
-              pattern="[0-9]*"
-              maxLength={PHONE_MAX_LENGTH}
-              hint="For delivery updates. 11-digit PH mobile number."
-            />
-            <Input label="Address (optional)" value={address} onChange={(e) => setAddress(e.target.value)} />
+            <div className="block">
+              <div className="mb-1 text-sm text-white/80">Contact Number</div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
+                <label className="block">
+                  <div className="mb-1 text-xs uppercase tracking-[0.18em] text-white/45">
+                    Country
+                  </div>
+                  <CountryCodePicker
+                    value={phoneCountryIso2}
+                    onChange={(country) => setPhoneCountryIso2(country.iso2)}
+                    error={phoneError}
+                  />
+                </label>
+                <label className="block">
+                  <div className="mb-1 text-xs uppercase tracking-[0.18em] text-white/45">
+                    Number
+                  </div>
+                  <input
+                    value={contactNumber}
+                    onChange={(e) =>
+                      setContactNumber(
+                        normalizePhoneInputForCountry(
+                          selectedPhoneCountry.iso2,
+                          e.target.value
+                        )
+                      )
+                    }
+                    onPaste={(e) => {
+                      const pasted = e.clipboardData.getData("text");
+                      const detectedCountry =
+                        findPhoneCountryFromInternationalPhone(
+                          pasted,
+                          phoneCountryIso2
+                        );
+                      const nextCountryIso2 =
+                        detectedCountry?.iso2 ?? selectedPhoneCountry.iso2;
+                      if (detectedCountry) {
+                        setPhoneCountryIso2(detectedCountry.iso2);
+                      }
+                      e.preventDefault();
+                      setContactNumber(
+                        normalizePhoneInputForCountry(
+                          nextCountryIso2,
+                          pasted
+                        )
+                      );
+                    }}
+                    onBlur={() => {
+                      setPhoneTouched(true);
+                      setContactNumber((current) => {
+                        const trimmed = current.trim();
+                        const detectedCountry =
+                          findPhoneCountryFromInternationalPhone(
+                            trimmed,
+                            phoneCountryIso2
+                          );
+                        if (detectedCountry) {
+                          setPhoneCountryIso2(detectedCountry.iso2);
+                        }
+                        return normalizePhoneInputForCountry(
+                          detectedCountry?.iso2 ?? selectedPhoneCountry.iso2,
+                          trimmed
+                        );
+                      });
+                    }}
+                    required
+                    type="tel"
+                    autoComplete="tel"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={getPhoneLocalMaxLength(selectedPhoneCountry.iso2)}
+                    placeholder={phonePlaceholder}
+                    className={`w-full rounded-xl border bg-bg-800 px-4 py-2 text-white placeholder:text-white/30 focus:outline-none focus:ring-2 ${
+                      phoneError
+                        ? "border-red-500/60 focus:ring-red-500/40"
+                        : "border-white/10 focus:ring-accent-500/60"
+                    }`}
+                  />
+                </label>
+              </div>
+              {phoneError ? <div className="mt-1 text-sm text-red-400">{phoneError}</div> : null}
+            </div>
             <Input label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
             <Input label="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required hint="Use at least 8 characters." />
 

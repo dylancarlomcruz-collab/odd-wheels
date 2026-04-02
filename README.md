@@ -114,6 +114,10 @@ Manual image upload is handled by:
 Username/phone login resolution uses:
 - `POST /api/auth/resolve-email` (requires `SUPABASE_SERVICE_ROLE_KEY`)
 
+Auth email branding files live in:
+- `supabase/email-templates/`
+- `scripts/build-supabase-auth-email-config.mjs`
+
 Google search lookup is available:
 - `GET /api/google/lookup?q=...`
 - Configure `GOOGLE_API_KEY` and `GOOGLE_CSE_ID` for Google Custom Search JSON API.

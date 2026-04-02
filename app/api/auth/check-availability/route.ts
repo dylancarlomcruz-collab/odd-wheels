@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { sanitizePhone } from "@/lib/phone";
+import { arePhonesEquivalent, buildPhoneLookupVariants } from "@/lib/phone";
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
@@ -21,17 +21,18 @@ export async function POST(req: Request) {
 
   try {
     const sb = supabaseAdmin();
-    const normalizedPhone = sanitizePhone(contactRaw);
+    const phoneVariants = buildPhoneLookupVariants(contactRaw);
+    const filters = [
+      `username.ilike.${escapeValue(username)}`,
+      ...phoneVariants.map((value) => `contact_number.eq.${escapeValue(value)}`),
+      `email.ilike.${escapeValue(email)}`,
+    ].join(",");
 
     const { data, error } = await sb
       .from("profiles")
       .select("username, contact_number, email")
-      .or(
-        `username.ilike.${escapeValue(username)},contact_number.eq.${escapeValue(
-          normalizedPhone
-        )},contact_number.eq.${escapeValue(contactRaw)},email.ilike.${escapeValue(email)}`
-      )
-      .limit(5);
+      .or(filters)
+      .limit(Math.max(5, phoneVariants.length + 2));
 
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 200 });
@@ -45,9 +46,7 @@ export async function POST(req: Request) {
       (row) => (row.username ?? "").toLowerCase() === usernameLower
     );
     const phoneTaken = rows.some(
-      (row) =>
-        row.contact_number === normalizedPhone ||
-        row.contact_number === contactRaw
+      (row) => arePhonesEquivalent(row.contact_number ?? "", contactRaw)
     );
     const emailTaken = rows.some(
       (row) => (row.email ?? "").toLowerCase() === emailLower

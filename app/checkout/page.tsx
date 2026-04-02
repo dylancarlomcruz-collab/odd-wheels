@@ -108,6 +108,10 @@ const LEGACY_LALAMOVE_WINDOW_MAP: Record<string, LalamoveWindowKey> = {
   "3-6": "15_18",
   "6-9": "18_21",
 };
+const LALAMOVE_ALLOWED_REGIONS: Region[] = ["LUZON"];
+const LALAMOVE_REGION_NOTE = "Lalamove is available for Luzon orders only.";
+const LALAMOVE_DELIVERY_FEE_NOTE =
+  "Lalamove delivery fee will be paid by the recipient upon delivery.";
 
 const LeafletMapPreview = dynamic(
   () => import("@/components/lalamove/LeafletMap"),
@@ -1509,6 +1513,7 @@ function CheckoutContent() {
     [selectedLines],
   );
   const hasLalamoveOnly = shipCounts.LALAMOVE > 0;
+  const lalamoveAllowedInRegion = LALAMOVE_ALLOWED_REGIONS.includes(region);
   const allowedCourierValues = React.useMemo(() => {
     const raw = normalizeSettingListUpper(settings?.allowed_couriers ?? null);
     const unique = Array.from(new Set(raw));
@@ -1550,6 +1555,9 @@ function CheckoutContent() {
   );
   const availableShippingMethods = React.useMemo(() => {
     let base = [...SHIPPING_METHODS];
+    if (!lalamoveAllowedInRegion) {
+      base = base.filter((method) => method !== "LALAMOVE");
+    }
     if (courierRestricted) {
       base = base.filter((method) => allowedCourierSet.has(method));
     }
@@ -1569,9 +1577,14 @@ function CheckoutContent() {
     itemCourierRestricted,
     itemCourierSet,
     hasLalamoveOnly,
+    lalamoveAllowedInRegion,
   ]);
+  const lalamoveRequiredButRegionBlocked =
+    hasLalamoveOnly && !lalamoveAllowedInRegion;
   const lalamoveRequiredButDisabled =
-    hasLalamoveOnly && !availableShippingMethods.includes("LALAMOVE");
+    hasLalamoveOnly &&
+    lalamoveAllowedInRegion &&
+    !availableShippingMethods.includes("LALAMOVE");
 
   const allowedLbcPackages = React.useMemo(() => {
     const raw = normalizeSettingListUpper(
@@ -1970,6 +1983,13 @@ function CheckoutContent() {
         muted: true,
       });
     }
+    if (shippingMethod === "LALAMOVE") {
+      out.push({
+        label: "Lalamove delivery fee - paid by recipient upon delivery",
+        amount: 0,
+        muted: true,
+      });
+    }
 
     if (shippingDiscount > 0) {
       out.push({ label: shippingDiscountLabel, amount: -shippingDiscount });
@@ -2070,6 +2090,9 @@ function CheckoutContent() {
     }
 
     if (shippingMethod === "LALAMOVE") {
+      if (!lalamoveAllowedInRegion) {
+        return setMsg(LALAMOVE_REGION_NOTE);
+      }
       if (!lalamoveAddress.trim())
         return setMsg(
           "Please enter your Lalamove drop-off address / landmark details.",
@@ -2251,6 +2274,7 @@ function CheckoutContent() {
           method: "LALAMOVE",
           receiver_name: name.trim(),
           receiver_phone: sanitizedPhone,
+          region,
           dropoff_address: lalamoveAddress.trim(),
           map_image_url: lalamoveImageUrl || null,
           map_url: lalamoveMapLink || null,
@@ -2258,6 +2282,8 @@ function CheckoutContent() {
           map_lng: lalamoveMapCoords?.lng ?? null,
           lalamove: lalamoveSlotsPayload[0] ?? null,
           lalamove_slots: lalamoveSlotsPayload,
+          delivery_fee_paid_by: "RECIPIENT_ON_DELIVERY",
+          delivery_fee_note: LALAMOVE_DELIVERY_FEE_NOTE,
           notes: notes.trim() || null,
         };
       }
@@ -2332,11 +2358,11 @@ function CheckoutContent() {
           payment_method: paymentMethod,
           shipping_method: shippingMethod,
           shipping_region:
-            shippingMethod === "LALAMOVE" || shippingMethod === "PICKUP"
+            shippingMethod === "PICKUP"
               ? null
               : shippingMethod === "INTERNATIONAL"
                 ? internationalCountryTrimmed || null
-              : region,
+                : region,
           shipping_details,
           fees,
           voucher_id: selectedVoucher?.voucher.id ?? null,
@@ -2474,17 +2500,31 @@ function CheckoutContent() {
                 Figures &amp; Diorama class requires Lalamove delivery.
               </div>
             ) : null}
+            {lalamoveRequiredButRegionBlocked ? (
+              <div className="text-xs text-red-200">{LALAMOVE_REGION_NOTE}</div>
+            ) : null}
             {lalamoveRequiredButDisabled ? (
               <div className="text-xs text-red-200">
                 Lalamove is required for these items but is disabled in Settings.
               </div>
             ) : null}
 
-            {shippingMethod === "JNT" || shippingMethod === "LBC" ? (
+            {shippingMethod === "JNT" ||
+            shippingMethod === "LBC" ||
+            shippingMethod === "LALAMOVE" ? (
               <Select
-                label="Region (for shipping fee table)"
+                label={
+                  shippingMethod === "LALAMOVE"
+                    ? "Region"
+                    : "Region (for shipping fee table)"
+                }
                 value={region}
                 onChange={(e) => setRegion(e.target.value as Region)}
+                hint={
+                  shippingMethod === "LALAMOVE"
+                    ? LALAMOVE_REGION_NOTE
+                    : undefined
+                }
               >
                 <option value="METRO_MANILA">Metro Manila</option>
                 <option value="LUZON">Luzon</option>
@@ -2729,6 +2769,13 @@ function CheckoutContent() {
 
             {shippingMethod === "LALAMOVE" ? (
               <div className="space-y-4">
+                <div className="rounded-xl border border-white/10 bg-bg-900/20 p-4 text-sm text-white/70">
+                  {LALAMOVE_DELIVERY_FEE_NOTE}
+                  <span className="mt-1 block text-xs text-white/50">
+                    The checkout total only includes the Lalamove convenience fee.
+                  </span>
+                </div>
+
                 <Textarea
                   label="Lalamove Drop-off Address / Landmark"
                   rows={3}
@@ -2807,7 +2854,7 @@ function CheckoutContent() {
                   error={lalamoveSlotError}
                   helperText={`Lalamove adds a ${formatPHP(
                     FEES.LALAMOVE_CONVENIENCE,
-                  )} convenience fee.`}
+                  )} convenience fee at checkout. Delivery fee is paid by the recipient upon delivery.`}
                 />
               </div>
             ) : null}

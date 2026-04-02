@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:#efebe5;font-family:Arial,Helvetica,sans-serif;color:#171717;">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">
+      You have been invited to Odd Wheels.
+    </div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#efebe5;">
+      <tr>
+        <td align="center" style="padding:24px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#111111;border:1px solid #2e2a27;border-radius:18px;overflow:hidden;">
+            <tr>
+              <td style="padding:28px 28px 20px;border-top:6px solid #c86a24;">
+                <div style="font-size:11px;letter-spacing:0.22em;text-transform:uppercase;color:#f1c5a1;margin-bottom:12px;">
+                  Odd Wheels
+                </div>
+                <div style="font-size:28px;line-height:1.2;font-weight:700;color:#ffffff;margin:0 0 12px;">
+                  You are invited
+                </div>
+                <div style="font-size:15px;line-height:1.7;color:#d1ccc6;">
+                  An invitation was created for you to access Odd Wheels. Use the button below to accept it and continue.
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:8px 28px 0;">
+                <a
+                  href="{{ .ConfirmationURL }}"
+                  style="display:inline-block;background:#c86a24;color:#111111;text-decoration:none;font-size:15px;font-weight:700;padding:14px 22px;border-radius:999px;"
+                >
+                  Accept invite
+                </a>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:22px 28px 8px;font-size:13px;line-height:1.7;color:#a9a29b;">
+                If you were not expecting this invitation, you can ignore this email.
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:8px 28px 28px;">
+                <div style="font-size:12px;line-height:1.7;color:#8f8880;">
+                  If the button does not work, copy and paste this link into your browser:
+                </div>
+                <div style="margin-top:8px;font-size:12px;line-height:1.6;word-break:break-all;color:#d8d2cc;">
+                  {{ .ConfirmationURL }}
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

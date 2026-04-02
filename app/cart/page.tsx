@@ -57,6 +57,12 @@ function formatCourierLabel(value: string) {
   }
 }
 
+function parseNumberInput(value: string) {
+  const cleaned = String(value ?? "").replace(/[^0-9.]/g, "");
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 type CartInvoiceItem = {
   name: string;
   qty: number;
@@ -73,6 +79,8 @@ type CartInvoicePayload = {
   items: CartInvoiceItem[];
   totalQty: number;
   totalLines: number;
+  subtotalAmount: number;
+  discountAmount: number;
   totalAmount: number;
 };
 
@@ -351,7 +359,7 @@ async function buildAdminCartInvoicePdfBlob(
     }
   }
 
-  if (y + 88 > pageHeight - marginBottom) {
+  if (y + 104 > pageHeight - marginBottom) {
     doc.addPage();
     drawMeta(true);
     y = 158;
@@ -369,10 +377,25 @@ async function buildAdminCartInvoicePdfBlob(
   doc.setFontSize(10);
   doc.text(`Total qty: ${payload.totalQty}`, marginX, y + 48);
   doc.text(`Total lines: ${payload.totalLines}`, marginX, y + 64);
-  doc.text(`Total amount: ${pdfMoney(payload.totalAmount)}`, pageWidth - marginX, y + 30, {
+  doc.text(`Subtotal: ${pdfMoney(payload.subtotalAmount)}`, pageWidth - marginX, y + 30, {
     align: "right",
   });
+  if (payload.discountAmount > 0) {
+    doc.text(`Discount: -${pdfMoney(payload.discountAmount)}`, pageWidth - marginX, y + 46, {
+      align: "right",
+    });
+  }
+  doc.setFont("helvetica", "bold");
+  doc.text(
+    `Total amount: ${pdfMoney(payload.totalAmount)}`,
+    pageWidth - marginX,
+    y + (payload.discountAmount > 0 ? 64 : 48),
+    {
+      align: "right",
+    }
+  );
 
+  doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.setTextColor(120, 120, 120);
   doc.text(
@@ -445,6 +468,10 @@ function CartContent() {
   const [fbCustomerName, setFbCustomerName] = React.useState("");
   const [fbShippingMethod, setFbShippingMethod] = React.useState("LBC");
   const [fbShippingDetails, setFbShippingDetails] = React.useState("");
+  const [fbDiscountType, setFbDiscountType] = React.useState<"AMOUNT" | "PERCENT">(
+    "AMOUNT"
+  );
+  const [fbDiscountValue, setFbDiscountValue] = React.useState("");
   const [sellingAsPos, setSellingAsPos] = React.useState(false);
   const [generatingInvoice, setGeneratingInvoice] = React.useState(false);
   const [clearingCart, setClearingCart] = React.useState(false);
@@ -533,6 +560,15 @@ function CartContent() {
     );
     return acc + (lineUnitPrice(l) + addOn) * l.qty;
   }, 0);
+  const adminDiscountBase = parseNumberInput(fbDiscountValue);
+  const adminDiscountAmount =
+    fbDiscountType === "PERCENT"
+      ? Math.min(
+          selectedSubtotal,
+          Math.max(0, (selectedSubtotal * Math.min(100, adminDiscountBase)) / 100)
+        )
+      : Math.min(selectedSubtotal, Math.max(0, adminDiscountBase));
+  const adminTotalAfterDiscount = Math.max(0, selectedSubtotal - adminDiscountAmount);
   const selectedInvoiceItems = React.useMemo<CartInvoiceItem[]>(
     () =>
       selectedLines.map((line) => {
@@ -566,9 +602,9 @@ function CartContent() {
     ? `/checkout?selected=${encodeURIComponent(selectedIds.join(","))}`
     : "/checkout";
   const checkoutDisabled =
-    selectedLines.length === 0 || (hasNonSealedSelected && !unsealedAck);
+    selectedLines.length === 0 || (!isAdminMode && hasNonSealedSelected && !unsealedAck);
   const adminSoldDisabled =
-    checkoutDisabled ||
+    selectedLines.length === 0 ||
     !fbCustomerName.trim() ||
     !fbShippingMethod.trim() ||
     sellingAsPos ||
@@ -679,10 +715,14 @@ function CartContent() {
         customerName?: string;
         shippingMethod?: string;
         shippingDetails?: string;
+        discountType?: "AMOUNT" | "PERCENT";
+        discountValue?: string;
       };
       setFbCustomerName(String(parsed.customerName ?? "").trim());
       setFbShippingMethod(String(parsed.shippingMethod ?? "LBC").trim() || "LBC");
       setFbShippingDetails(String(parsed.shippingDetails ?? "").trim());
+      setFbDiscountType(parsed.discountType === "PERCENT" ? "PERCENT" : "AMOUNT");
+      setFbDiscountValue(String(parsed.discountValue ?? "").trim());
     } catch {
       // ignore bad local state
     }
@@ -696,9 +736,11 @@ function CartContent() {
         customerName: fbCustomerName,
         shippingMethod: fbShippingMethod,
         shippingDetails: fbShippingDetails,
+        discountType: fbDiscountType,
+        discountValue: fbDiscountValue,
       })
     );
-  }, [isAdminMode, fbCustomerName, fbShippingMethod, fbShippingDetails]);
+  }, [isAdminMode, fbCustomerName, fbShippingMethod, fbShippingDetails, fbDiscountType, fbDiscountValue]);
 
   function openPreview(line: CartLine) {
     setPreviewLine(line);
@@ -765,7 +807,9 @@ function CartContent() {
         items: selectedInvoiceItems,
         totalQty: selectedLines.reduce((sum, line) => sum + Math.max(1, Number(line.qty ?? 0)), 0),
         totalLines: selectedLines.length,
-        totalAmount: selectedSubtotal,
+        subtotalAmount: selectedSubtotal,
+        discountAmount: adminDiscountAmount,
+        totalAmount: adminTotalAfterDiscount,
       };
       await exportAdminCartInvoicePdf(payload, invoiceImageCacheRef.current);
     } catch (e: any) {
@@ -849,7 +893,14 @@ function CartContent() {
         shipping_notes: shippingText || null,
         source: "admin_cart_checkout",
         admin_cart_checkout: true,
-        discount: null,
+        discount:
+          adminDiscountAmount > 0
+            ? {
+                type: fbDiscountType,
+                value: adminDiscountBase,
+                amount: adminDiscountAmount,
+              }
+            : null,
       };
       const items = selectedLines.map((line) => ({
         variant_id: line.variant_id,
@@ -875,6 +926,18 @@ function CartContent() {
       const orderId = resolveOrderId(data);
       if (!orderId) {
         throw new Error("POS order created, but order id is missing.");
+      }
+
+      if (adminDiscountAmount > 0) {
+        const { error: discountError } = await supabase
+          .from("orders")
+          .update({
+            discount_total: adminDiscountAmount,
+            discount: adminDiscountAmount,
+            total: adminTotalAfterDiscount,
+          })
+          .eq("id", orderId);
+        if (discountError) throw discountError;
       }
 
       const shouldMarkToShip = shippingMethod.toUpperCase() !== "PICKUP";
@@ -1020,6 +1083,25 @@ function CartContent() {
                 placeholder="Address, branch, booking ref, or notes"
                 value={fbShippingDetails}
                 onChange={(e) => setFbShippingDetails(e.target.value)}
+              />
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <Select
+                label="Discount type"
+                value={fbDiscountType}
+                onChange={(e) =>
+                  setFbDiscountType(e.target.value as "AMOUNT" | "PERCENT")
+                }
+              >
+                <option value="AMOUNT">Amount (PHP)</option>
+                <option value="PERCENT">Percent (%)</option>
+              </Select>
+              <Input
+                label={fbDiscountType === "PERCENT" ? "Discount (%)" : "Discount (PHP)"}
+                placeholder="0"
+                value={fbDiscountValue}
+                onChange={(e) => setFbDiscountValue(e.target.value)}
+                inputMode="decimal"
               />
             </div>
           </CardBody>
@@ -1422,7 +1504,7 @@ function CartContent() {
         </CardBody>
       </Card>
 
-      {hasNonSealedInCart ? (
+      {!isAdminMode && hasNonSealedInCart ? (
         <div className="rounded-xl border border-amber-300/50 bg-amber-50 p-4 text-xs text-amber-900/80 space-y-2 dark:border-white/10 dark:bg-bg-900/30 dark:text-white/70">
           <div className="text-sm text-amber-900 dark:text-white/80">
             Quick note: Unsealed items may show light signs of handling or
@@ -1451,12 +1533,29 @@ function CartContent() {
 
       <Card>
         <CardBody className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div>
-            <div className="text-sm text-white/60">Selected subtotal</div>
-            <div className="text-xl text-price">
-              {formatPHP(selectedSubtotal)}
+          {isAdminMode ? (
+            <div className="grid flex-1 gap-3 sm:grid-cols-3">
+              <div>
+                <div className="text-sm text-white/60">Selected subtotal</div>
+                <div className="text-xl text-price">{formatPHP(selectedSubtotal)}</div>
+              </div>
+              <div>
+                <div className="text-sm text-white/60">Discount</div>
+                <div className="text-xl text-white">-{formatPHP(adminDiscountAmount)}</div>
+              </div>
+              <div>
+                <div className="text-sm text-white/60">Total after discount</div>
+                <div className="text-xl text-price">{formatPHP(adminTotalAfterDiscount)}</div>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div>
+              <div className="text-sm text-white/60">Selected subtotal</div>
+              <div className="text-xl text-price">
+                {formatPHP(selectedSubtotal)}
+              </div>
+            </div>
+          )}
           {isAdminMode ? (
             <div className="flex flex-wrap items-center gap-2">
               <Button

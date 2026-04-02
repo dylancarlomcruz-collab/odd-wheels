@@ -183,6 +183,8 @@ function buildShippingSections(order: any, details: Record<string, any>) {
       .join(", ") || null;
   const mapUrl = details.map_url || details.map || details.map_image_url;
   const notes = details.notes || details.note || null;
+  const deliveryFeeNote =
+    details.delivery_fee_note || details.shipping_fee_note || null;
   const pack = details.package || details.package_size || null;
   const cop = details.cop ?? details.cash_on_pickup;
 
@@ -260,6 +262,9 @@ function buildShippingSections(order: any, details: Record<string, any>) {
 
   const extraItems: { label: string; value: React.ReactNode }[] = [];
   if (pack) extraItems.push({ label: "Package", value: pack });
+  if (deliveryFeeNote) {
+    extraItems.push({ label: "Delivery fee", value: deliveryFeeNote });
+  }
   if (notes) extraItems.push({ label: "Notes", value: notes });
   if (cop !== null && cop !== undefined) {
     extraItems.push({

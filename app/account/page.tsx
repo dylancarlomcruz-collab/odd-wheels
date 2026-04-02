@@ -9,7 +9,14 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { LalamoveMapPickerModal } from "@/components/lalamove/LalamoveMapPickerModal";
-import { PHONE_MAX_LENGTH, sanitizePhone, validatePhone11 } from "@/lib/phone";
+import {
+  PHONE_MAX_LENGTH,
+  normalizePhoneLookupKey,
+  normalizePhilippineMobile,
+  sanitizePhone,
+  validateInternationalPhone,
+  validatePhone11,
+} from "@/lib/phone";
 import {
   mergeShippingDefaults,
   normalizeShippingDefaults,
@@ -34,6 +41,32 @@ function formatPhoneError(value: string, show: boolean): string | undefined {
   return validatePhone11(digits)
     ? undefined
     : "Use an 11-digit PH mobile number (09XXXXXXXXX).";
+}
+
+function normalizeProfilePhone(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return trimmed.startsWith("+") || trimmed.startsWith("00")
+    ? normalizePhoneLookupKey(trimmed)
+    : normalizePhilippineMobile(trimmed);
+}
+
+function formatProfilePhoneError(
+  value: string,
+  show: boolean
+): string | undefined {
+  const trimmed = value.trim();
+  if (!show || !trimmed) return undefined;
+
+  if (trimmed.startsWith("+") || trimmed.startsWith("00")) {
+    return validateInternationalPhone(trimmed)
+      ? undefined
+      : "Use a valid international number with country code (7-15 digits).";
+  }
+
+  return /^09\d{9}$/.test(normalizePhilippineMobile(trimmed))
+    ? undefined
+    : "Use a valid PH mobile number (09XXXXXXXXX), or include + country code.";
 }
 
 export default function AccountPage() {
@@ -100,7 +133,9 @@ export default function AccountPage() {
       );
       setUsername(row?.username ?? user.user_metadata?.username ?? "");
       setContactNumber(
-        sanitizePhone(row?.contact ?? user.user_metadata?.contact_number ?? "")
+        normalizeProfilePhone(
+          row?.contact ?? user.user_metadata?.contact_number ?? ""
+        )
       );
       setEmail(user.email ?? "");
       const rawDefaults = row?.shipping_defaults ?? {};
@@ -122,16 +157,19 @@ export default function AccountPage() {
     setSaveAttempted(true);
 
     try {
-      const sanitizedContact = sanitizePhone(contactNumber);
+      const normalizedContact = normalizeProfilePhone(contactNumber);
       const normalizedDefaults = normalizeShippingDefaults(shippingDefaults);
-      const invalidPhones = [
-        sanitizedContact,
+      const profilePhoneValidationError = formatProfilePhoneError(
+        contactNumber,
+        true
+      );
+      const invalidShippingPhones = [
         normalizedDefaults.jnt.contact_number,
         normalizedDefaults.lbc.contact_number,
         normalizedDefaults.lalamove.recipient_phone,
       ].some((value) => value.length > 0 && !validatePhone11(value));
 
-      if (invalidPhones) {
+      if (profilePhoneValidationError || invalidShippingPhones) {
         setMsg("Please fix the highlighted contact numbers.");
         setSaving(false);
         return;
@@ -161,7 +199,7 @@ export default function AccountPage() {
         id: user.id,
         name: name.trim() || null,
         username: username.trim() || null,
-        contact: sanitizedContact || null,
+        contact: normalizedContact || null,
         shipping_defaults: mergedDefaults ?? {},
       };
 
@@ -175,7 +213,7 @@ export default function AccountPage() {
       if (saved) {
         setName(saved.name ?? "");
         setUsername(saved.username ?? "");
-        setContactNumber(sanitizePhone(saved.contact ?? ""));
+        setContactNumber(normalizeProfilePhone(saved.contact ?? ""));
         const savedDefaults = normalizeShippingDefaults(
           (saved.shipping_defaults as ShippingDefaults) ?? {}
         );
@@ -189,14 +227,14 @@ export default function AccountPage() {
           id: user.id,
           full_name: name.trim() || null,
           username: username.trim() || null,
-          contact_number: sanitizedContact || null,
+          contact_number: normalizedContact || null,
         });
 
       await supabase.auth.updateUser({
         data: {
           full_name: name.trim() || null,
           username: username.trim() || null,
-          contact_number: sanitizedContact || null,
+          contact_number: normalizedContact || null,
         },
       });
 
@@ -315,7 +353,7 @@ export default function AccountPage() {
     if (ok) setLalamoveMapPickerOpen(false);
   }
 
-  const profilePhoneError = formatPhoneError(
+  const profilePhoneError = formatProfilePhoneError(
     contactNumber,
     phoneTouched.profile || saveAttempted
   );
@@ -379,12 +417,13 @@ export default function AccountPage() {
             <Input
               label="Contact Number"
               value={contactNumber}
-              onChange={(e) => setContactNumber(sanitizePhone(e.target.value))}
+              onChange={(e) => setContactNumber(e.target.value)}
               onBlur={() => setPhoneTouched((p) => ({ ...p, profile: true }))}
-              inputMode="numeric"
-              pattern="[0-9]*"
-              maxLength={PHONE_LENGTH}
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
               error={profilePhoneError}
+              hint="Use 0917... for PH, or include + country code for international."
             />
             <Input label="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>

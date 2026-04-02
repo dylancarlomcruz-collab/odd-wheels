@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { sanitizePhone } from "@/lib/phone";
+import { arePhonesEquivalent, buildPhoneLookupVariants } from "@/lib/phone";
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
@@ -18,25 +18,33 @@ export async function POST(req: Request) {
 
   try {
     const sb = supabaseAdmin();
-    const normalizedPhone = sanitizePhone(identifier);
+    const phoneVariants = buildPhoneLookupVariants(identifier);
+    const filters = [
+      `username.ilike.${escapeValue(identifier)}`,
+      ...phoneVariants.map((value) => `contact_number.eq.${escapeValue(value)}`),
+    ].join(",");
 
-    // Look up email by username OR contact number
     const { data, error } = await sb
       .from("profiles")
-      .select("email")
-      .or(
-        `username.ilike.${escapeValue(identifier)},contact_number.eq.${escapeValue(
-          identifier
-        )},contact_number.eq.${escapeValue(normalizedPhone)}`
-      )
-      .limit(1)
-      .maybeSingle();
+      .select("email, username, contact_number")
+      .or(filters)
+      .limit(Math.max(5, phoneVariants.length + 1));
 
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 200 });
     }
 
-    const email = (data as any)?.email as string | undefined;
+    const rows =
+      (data as
+        | { email: string | null; username: string | null; contact_number: string | null }[]
+        | null) ?? [];
+    const identifierLower = identifier.toLowerCase();
+    const match = rows.find(
+      (row) =>
+        (row.username ?? "").toLowerCase() === identifierLower ||
+        arePhonesEquivalent(row.contact_number ?? "", identifier)
+    );
+    const email = match?.email ?? undefined;
     if (!email) {
       return NextResponse.json({ ok: false, error: "No account found for that identifier." }, { status: 200 });
     }

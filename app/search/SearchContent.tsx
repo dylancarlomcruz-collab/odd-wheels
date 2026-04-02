@@ -12,6 +12,10 @@ import { useCart } from "@/hooks/useCart";
 import { useSearchProducts } from "@/hooks/useSearchProducts";
 import { formatConditionLabel } from "@/lib/conditions";
 import { resolveEffectivePrice } from "@/lib/pricing";
+import {
+  PRODUCT_SPECIAL_TAG_OPTIONS,
+  type ProductSpecialTag,
+} from "@/lib/productTags";
 import { readRecentViews } from "@/lib/recentViews";
 import { buildSearchOr } from "@/lib/search";
 import { SHOP_CATEGORY_OPTIONS, matchesShopCategory } from "@/lib/shopCategories";
@@ -33,6 +37,7 @@ type SearchFilterState = {
   sortBy: string;
   brandFilter: string;
   conditionFilter: string;
+  rarityFilter: string;
   modelFilter: string;
   scaleFilter: string;
   minPrice: string;
@@ -45,6 +50,7 @@ function getDefaultSearchFilters(): SearchFilterState {
     sortBy: "relevance",
     brandFilter: "all",
     conditionFilter: "all",
+    rarityFilter: "all",
     modelFilter: "",
     scaleFilter: "all",
     minPrice: "",
@@ -297,6 +303,7 @@ export default function SearchContent() {
     () => includeCurrentValue(scaleOptions, draftFilters.scaleFilter),
     [draftFilters.scaleFilter, scaleOptions]
   );
+  const raritySelectOptions = PRODUCT_SPECIAL_TAG_OPTIONS;
 
   const filteredProducts = React.useMemo(() => {
     const minimumPrice = parsePriceValue(filters.minPrice);
@@ -335,6 +342,14 @@ export default function SearchContent() {
           (option) =>
             option.condition.toLowerCase() ===
             filters.conditionFilter.toLowerCase()
+        )
+      );
+    }
+
+    if (filters.rarityFilter !== "all") {
+      list = list.filter((product) =>
+        (product.special_tags ?? []).includes(
+          filters.rarityFilter as ProductSpecialTag
         )
       );
     }
@@ -500,6 +515,7 @@ export default function SearchContent() {
     let count = filters.categories.length;
     if (filters.brandFilter !== "all") count += 1;
     if (filters.conditionFilter !== "all") count += 1;
+    if (filters.rarityFilter !== "all") count += 1;
     if (filters.scaleFilter !== "all") count += 1;
     if (filters.modelFilter.trim()) count += 1;
     if (filters.minPrice.trim() || filters.maxPrice.trim()) count += 1;
@@ -528,6 +544,15 @@ export default function SearchContent() {
         label: formatConditionLabel(filters.conditionFilter),
       });
     }
+    if (filters.rarityFilter !== "all") {
+      pills.push({
+        key: "rarity",
+        label:
+          raritySelectOptions.find(
+            (option) => option.key === filters.rarityFilter
+          )?.label ?? filters.rarityFilter,
+      });
+    }
     if (filters.scaleFilter !== "all") {
       pills.push({ key: "scale", label: filters.scaleFilter });
     }
@@ -539,7 +564,7 @@ export default function SearchContent() {
     }
 
     return pills;
-  }, [filters]);
+  }, [filters, raritySelectOptions]);
 
   const resultSummary = React.useMemo(() => {
     if (loading) return "Searching...";
@@ -630,7 +655,7 @@ export default function SearchContent() {
                   <div>
                     <div className="text-lg font-semibold">Filter Results</div>
                     <div className="text-xs text-white/45">
-                      Category and price filters aligned with the shop page
+                      Category, price, and rarity filters aligned with the shop page
                     </div>
                   </div>
                   <button
@@ -820,6 +845,24 @@ export default function SearchContent() {
                         {conditionSelectOptions.map((condition) => (
                           <option key={condition.value} value={condition.value}>
                             {condition.label}
+                          </option>
+                        ))}
+                      </Select>
+
+                      <Select
+                        label="Rarity"
+                        value={draftFilters.rarityFilter}
+                        onChange={(event) =>
+                          setDraftFilters((current) => ({
+                            ...current,
+                            rarityFilter: event.target.value,
+                          }))
+                        }
+                      >
+                        <option value="all">All rarity tags</option>
+                        {raritySelectOptions.map((rarity) => (
+                          <option key={rarity.key} value={rarity.key}>
+                            {rarity.label}
                           </option>
                         ))}
                       </Select>

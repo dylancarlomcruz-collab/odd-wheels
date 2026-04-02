@@ -17,6 +17,11 @@ import {
   matchesSearchText,
   normalizeSearchTerm,
 } from "@/lib/search";
+import {
+  PRODUCT_SPECIAL_TAG_OPTIONS,
+  getProductSpecialTagStyle,
+  type ProductSpecialTag,
+} from "@/lib/productTags";
 import { SHOP_CATEGORY_OPTIONS, matchesShopCategory } from "@/lib/shopCategories";
 import { useProfile } from "@/hooks/useProfile";
 import { InventoryEditorDrawer } from "@/components/admin/InventoryEditorDrawer";
@@ -60,6 +65,81 @@ const FILTER_CHIP_STYLES = {
   idle:
     "border-white/10 bg-bg-950/50 text-white/70 hover:bg-bg-950/70 hover:text-white",
 };
+type FilterChipToneStyles = {
+  active: string;
+  idle: string;
+  dot: string;
+};
+
+const CONDITION_FILTER_CHIP_STYLES: Record<string, FilterChipToneStyles> = {
+  sealed: {
+    active:
+      "border-emerald-300/75 bg-emerald-400/20 text-emerald-50 shadow-[0_10px_18px_rgba(16,185,129,0.22)]",
+    idle:
+      "border-emerald-400/30 bg-emerald-500/10 text-emerald-100/85 hover:border-emerald-300/45 hover:bg-emerald-500/16 hover:text-emerald-50",
+    dot: "bg-emerald-300",
+  },
+  unsealed: {
+    active:
+      "border-sky-300/75 bg-sky-400/20 text-sky-50 shadow-[0_10px_18px_rgba(56,189,248,0.22)]",
+    idle:
+      "border-sky-400/30 bg-sky-500/10 text-sky-100/85 hover:border-sky-300/45 hover:bg-sky-500/16 hover:text-sky-50",
+    dot: "bg-sky-300",
+  },
+  near_mint: {
+    active:
+      "border-teal-300/75 bg-teal-400/20 text-teal-50 shadow-[0_10px_18px_rgba(45,212,191,0.22)]",
+    idle:
+      "border-teal-400/30 bg-teal-500/10 text-teal-100/85 hover:border-teal-300/45 hover:bg-teal-500/16 hover:text-teal-50",
+    dot: "bg-teal-300",
+  },
+  with_issues: {
+    active:
+      "border-rose-300/75 bg-rose-400/18 text-rose-50 shadow-[0_10px_18px_rgba(244,63,94,0.22)]",
+    idle:
+      "border-rose-400/30 bg-rose-500/10 text-rose-100/85 hover:border-rose-300/45 hover:bg-rose-500/16 hover:text-rose-50",
+    dot: "bg-rose-300",
+  },
+};
+const RARITY_FILTER_CHIP_STYLES: Record<ProductSpecialTag, FilterChipToneStyles> =
+  {
+    exclusive: {
+      active: getProductSpecialTagStyle("exclusive").pickerClassName,
+      idle:
+        "border-teal-300/30 bg-teal-400/10 text-teal-100/85 hover:border-teal-200/45 hover:bg-teal-400/16 hover:text-white",
+      dot: "bg-[#1ed4c6]",
+    },
+    limited_edition: {
+      active: getProductSpecialTagStyle("limited_edition").pickerClassName,
+      idle:
+        "border-amber-300/30 bg-amber-400/10 text-amber-100/85 hover:border-amber-200/45 hover:bg-amber-400/16 hover:text-white",
+      dot: "bg-[#f7bc2a]",
+    },
+    chase: {
+      active: getProductSpecialTagStyle("chase").pickerClassName,
+      idle:
+        "border-rose-300/30 bg-rose-400/10 text-rose-100/85 hover:border-rose-200/45 hover:bg-rose-400/16 hover:text-white",
+      dot: "bg-[#fb7185]",
+    },
+    rare: {
+      active: getProductSpecialTagStyle("rare").pickerClassName,
+      idle:
+        "border-violet-300/30 bg-violet-400/10 text-violet-100/85 hover:border-violet-200/45 hover:bg-violet-400/16 hover:text-white",
+      dot: "bg-[#8b5cf6]",
+    },
+    new_release: {
+      active: getProductSpecialTagStyle("new_release").pickerClassName,
+      idle:
+        "border-emerald-300/30 bg-emerald-400/10 text-emerald-100/85 hover:border-emerald-200/45 hover:bg-emerald-400/16 hover:text-white",
+      dot: "bg-[#4ee7b6]",
+    },
+    discontinued: {
+      active: getProductSpecialTagStyle("discontinued").pickerClassName,
+      idle:
+        "border-slate-300/30 bg-slate-400/10 text-slate-100/85 hover:border-slate-200/45 hover:bg-slate-400/16 hover:text-white",
+      dot: "bg-[#94a3b8]",
+    },
+  };
 const FILTER_SECTION_CARD_STYLES =
   "panel panel-muted relative h-full min-w-0 overflow-hidden rounded-[22px] border-white/12 px-3 py-3 shadow-[0_18px_40px_rgba(0,0,0,0.16)]";
 const FILTER_SECTION_HEADER_STYLES =
@@ -79,6 +159,7 @@ type TourStep = {
 type ShopDrawerFilterState = {
   categories: string[];
   conditions: string[];
+  rarities: string[];
   minPrice: string;
   maxPrice: string;
 };
@@ -112,10 +193,23 @@ function getBrandButtonClasses(active: boolean, joined: boolean) {
   ].join(" ");
 }
 
-function getFilterChipClasses(active: boolean) {
+function getFilterChipClasses(active: boolean, styles?: FilterChipToneStyles) {
   return [
     "inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold leading-none transition",
-    active ? FILTER_CHIP_STYLES.active : FILTER_CHIP_STYLES.idle,
+    styles
+      ? active
+        ? styles.active
+        : styles.idle
+      : active
+      ? FILTER_CHIP_STYLES.active
+      : FILTER_CHIP_STYLES.idle,
+  ].join(" ");
+}
+
+function getFilterChipDotClasses(styles: FilterChipToneStyles) {
+  return [
+    "h-1.5 w-1.5 rounded-full shadow-[0_0_0_1px_rgba(255,255,255,0.24)]",
+    styles.dot,
   ].join(" ");
 }
 
@@ -130,6 +224,7 @@ function getDefaultDrawerFilters(): ShopDrawerFilterState {
   return {
     categories: [],
     conditions: [],
+    rarities: [],
     minPrice: "",
     maxPrice: "",
   };
@@ -194,6 +289,7 @@ export default function ShopPageClient() {
   const [selectedConditions, setSelectedConditions] = React.useState<string[]>(
     []
   );
+  const [selectedRarities, setSelectedRarities] = React.useState<string[]>([]);
   const [minPriceFilter, setMinPriceFilter] = React.useState("");
   const [maxPriceFilter, setMaxPriceFilter] = React.useState("");
   const [draftFilters, setDraftFilters] = React.useState<ShopDrawerFilterState>(
@@ -646,6 +742,7 @@ export default function ShopPageClient() {
   );
 
   const categoryOptions = SHOP_CATEGORY_OPTIONS;
+  const rarityOptions = PRODUCT_SPECIAL_TAG_OPTIONS;
 
   const productById = React.useMemo(() => {
     const map = new Map<string, (typeof shopProducts)[number]>();
@@ -704,7 +801,10 @@ export default function ShopPageClient() {
   }, [brandStats]);
 
   const activeFilterCount = React.useMemo(() => {
-    let count = selectedCategories.length + selectedConditions.length;
+    let count =
+      selectedCategories.length +
+      selectedConditions.length +
+      selectedRarities.length;
     if (minPriceFilter.trim() || maxPriceFilter.trim()) {
       count += 1;
     }
@@ -714,6 +814,7 @@ export default function ShopPageClient() {
     minPriceFilter,
     selectedCategories.length,
     selectedConditions.length,
+    selectedRarities.length,
   ]);
 
   const maxVisibleBrands = React.useMemo(() => {
@@ -846,6 +947,9 @@ export default function ShopPageClient() {
     const conditionKeys = selectedConditions.length
       ? new Set(selectedConditions)
       : null;
+    const rarityKeys = selectedRarities.length
+      ? new Set(selectedRarities)
+      : null;
     const categoryKeys = selectedCategories.length
       ? new Set(selectedCategories)
       : null;
@@ -871,6 +975,12 @@ export default function ShopPageClient() {
         );
         if (!matchesCondition) return false;
       }
+      if (rarityKeys) {
+        const matchesRarity = (p.special_tags ?? []).some((tag) =>
+          rarityKeys.has(tag)
+        );
+        if (!matchesRarity) return false;
+      }
       if (categoryKeys) {
         const matchesCategoryFilter = Array.from(categoryKeys).some((key) =>
           matchesShopCategory(p, key)
@@ -894,6 +1004,7 @@ export default function ShopPageClient() {
     selectedBrands,
     selectedCategories,
     selectedConditions,
+    selectedRarities,
   ]);
 
   const sortedFiltered = React.useMemo(() => {
@@ -1182,6 +1293,7 @@ export default function ShopPageClient() {
     setDraftFilters({
       categories: [...selectedCategories],
       conditions: [...selectedConditions],
+      rarities: [...selectedRarities],
       minPrice: minPriceFilter,
       maxPrice: maxPriceFilter,
     });
@@ -1191,6 +1303,7 @@ export default function ShopPageClient() {
   function clearAppliedFilters() {
     setSelectedCategories([]);
     setSelectedConditions([]);
+    setSelectedRarities([]);
     setMinPriceFilter("");
     setMaxPriceFilter("");
     setDraftFilters(getDefaultDrawerFilters());
@@ -1203,6 +1316,7 @@ export default function ShopPageClient() {
   function applyDraftFilters() {
     setSelectedCategories([...draftFilters.categories]);
     setSelectedConditions([...draftFilters.conditions]);
+    setSelectedRarities([...draftFilters.rarities]);
     setMinPriceFilter(draftFilters.minPrice);
     setMaxPriceFilter(draftFilters.maxPrice);
     setFiltersOpen(false);
@@ -1369,6 +1483,7 @@ export default function ShopPageClient() {
     sortBy === "relevance" &&
     selectedCategories.length === 0 &&
     selectedConditions.length === 0 &&
+    selectedRarities.length === 0 &&
     !minPriceFilter.trim() &&
     !maxPriceFilter.trim() &&
     selectedBrands.length === 0;
@@ -1401,6 +1516,7 @@ export default function ShopPageClient() {
     selectedBrands,
     selectedCategories,
     selectedConditions,
+    selectedRarities,
     minPriceFilter,
     maxPriceFilter,
     sortBy,
@@ -1756,7 +1872,7 @@ export default function ShopPageClient() {
                   </div>
                 </div>
 
-                <div className="mt-3 grid gap-3 border-t border-white/10 pt-3 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,0.95fr)_250px] lg:items-stretch">
+                <div className="mt-3 grid gap-3 border-t border-white/10 pt-3 lg:grid-cols-2 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,0.95fr)_minmax(0,1fr)_250px] xl:items-stretch">
                   <section className={FILTER_SECTION_CARD_STYLES}>
                     <div className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-amber-400/35 to-transparent" />
                     <div className={FILTER_SECTION_HEADER_STYLES}>
@@ -1809,26 +1925,79 @@ export default function ShopPageClient() {
                       </span>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-1.5">
-                      {conditionOptions.map((condition) => (
-                        <button
-                          key={condition.key}
-                          type="button"
-                          className={getFilterChipClasses(
-                            draftFilters.conditions.includes(condition.key)
-                          )}
-                          onClick={() =>
-                            setDraftFilters((current) => ({
-                              ...current,
-                              conditions: toggleValue(
-                                current.conditions,
-                                condition.key
-                              ),
-                            }))
-                          }
-                        >
-                          <span>{condition.label}</span>
-                        </button>
-                      ))}
+                      {conditionOptions.map((condition) => {
+                        const chipStyles =
+                          CONDITION_FILTER_CHIP_STYLES[condition.key];
+                        return (
+                          <button
+                            key={condition.key}
+                            type="button"
+                            className={getFilterChipClasses(
+                              draftFilters.conditions.includes(condition.key),
+                              chipStyles
+                            )}
+                            onClick={() =>
+                              setDraftFilters((current) => ({
+                                ...current,
+                                conditions: toggleValue(
+                                  current.conditions,
+                                  condition.key
+                                ),
+                              }))
+                            }
+                          >
+                            {chipStyles ? (
+                              <span
+                                className={getFilterChipDotClasses(chipStyles)}
+                              />
+                            ) : null}
+                            <span>{condition.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+
+                  <section className={FILTER_SECTION_CARD_STYLES}>
+                    <div className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-fuchsia-400/30 to-transparent" />
+                    <div className={FILTER_SECTION_HEADER_STYLES}>
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/45">
+                        Rarity
+                      </div>
+                      <span className={FILTER_SECTION_BADGE_STYLES}>
+                        {draftFilters.rarities.length
+                          ? `${draftFilters.rarities.length} selected`
+                          : "Any"}
+                      </span>
+                    </div>
+                    <div className="mt-3 flex max-h-28 flex-wrap gap-1.5 overflow-y-auto pr-1">
+                      {rarityOptions.map((rarity) => {
+                        const chipStyles = RARITY_FILTER_CHIP_STYLES[rarity.key];
+                        return (
+                          <button
+                            key={rarity.key}
+                            type="button"
+                            className={getFilterChipClasses(
+                              draftFilters.rarities.includes(rarity.key),
+                              chipStyles
+                            )}
+                            onClick={() =>
+                              setDraftFilters((current) => ({
+                                ...current,
+                                rarities: toggleValue(
+                                  current.rarities,
+                                  rarity.key
+                                ),
+                              }))
+                            }
+                          >
+                            <span
+                              className={getFilterChipDotClasses(chipStyles)}
+                            />
+                            <span>{rarity.label}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </section>
 

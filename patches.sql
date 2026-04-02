@@ -79,6 +79,13 @@ alter table public.orders
 alter table public.orders
   add column if not exists rush_fee numeric not null default 0;
 
+alter table public.orders
+  add column if not exists priority_requested boolean not null default false,
+  add column if not exists priority_fee numeric not null default 0,
+  add column if not exists priority_approved boolean not null default false,
+  add column if not exists insurance_selected boolean not null default false,
+  add column if not exists insurance_fee numeric not null default 0;
+
 create or replace function public.fn_set_shipping_preparing(p_order_id uuid)
 returns jsonb
 language plpgsql

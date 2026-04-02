@@ -119,6 +119,7 @@ function buildShippingSummary(order: any) {
       .filter(Boolean)
       .join(", ") || "";
   const notes = details.notes || details.note || "";
+  const deliveryFeeNote = details.delivery_fee_note || details.shipping_fee_note || "";
   const pickupDay =
     typeof details.pickup_day === "string"
       ? formatPickupDayLabel(details.pickup_day)
@@ -136,6 +137,7 @@ function buildShippingSummary(order: any) {
     const slot = [pickupDay, pickupSlot].filter(Boolean).join(" ");
     lines.push(`Pickup: ${slot}`);
   }
+  if (deliveryFeeNote) lines.push(`Delivery fee: ${deliveryFeeNote}`);
   if (notes) lines.push(`Notes: ${notes}`);
 
   return {
@@ -158,6 +160,8 @@ function getItemTitle(it: any) {
 }
 
 function getItemThumb(it: any): string | null {
+  const snapshot = String(it?.image_url ?? "").trim();
+  if (snapshot) return snapshot;
   const urls = it?.product_variant?.product?.image_urls;
   if (Array.isArray(urls) && urls.length) return String(urls[0]);
   return null;
@@ -183,6 +187,27 @@ function getItemPrice(it: any): number {
   if (variantPrice !== null && variantPrice > 0) return variantPrice;
 
   return direct ?? lineTotal ?? 0;
+}
+
+function getItemCostEach(it: any): number {
+  const pickMoney = (value: any) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const direct = pickMoney(it?.cost_each);
+  if (direct !== null && direct > 0) return direct;
+
+  const variantCost = pickMoney(it?.product_variant?.cost);
+  if (variantCost !== null && variantCost > 0) return variantCost;
+
+  return direct ?? variantCost ?? 0;
+}
+
+function getItemLineTotal(it: any): number {
+  const n = Number(it?.line_total);
+  if (Number.isFinite(n) && n > 0) return n;
+  return getItemPrice(it) * Math.max(1, Number(it?.qty ?? 1));
 }
 
 function emitCartUpdated() {
@@ -253,6 +278,7 @@ export default function AdminSalesPage() {
       channel: string;
       revenue: number;
       cogs: number;
+      itemsSold: number;
       discount_total: number;
       shipping_discount: number;
     }>
@@ -282,6 +308,7 @@ export default function AdminSalesPage() {
   const [totals, setTotals] = React.useState({
     sales: 0,
     count: 0,
+    itemsSold: 0,
     aov: 0,
     cogs: 0,
     grossProfit: 0,
@@ -364,6 +391,7 @@ export default function AdminSalesPage() {
         setTotals({
           sales: 0,
           count: 0,
+          itemsSold: 0,
           aov: 0,
           cogs: 0,
           grossProfit: 0,
@@ -409,7 +437,10 @@ export default function AdminSalesPage() {
         string,
         { key: string; name: string; qty: number; sales: number; cogs: number; profit: number }
       >();
-      const orderRaw = new Map<string, { revenue: number; cogs: number }>();
+      const orderRaw = new Map<
+        string,
+        { revenue: number; cogs: number; itemsSold: number }
+      >();
       const itemEntries: Array<{
         orderId: string;
         key: string;
@@ -462,23 +493,38 @@ export default function AdminSalesPage() {
           cogs: itemCogs,
         });
 
-        const curOrder = orderRaw.get(orderId) ?? { revenue: 0, cogs: 0 };
+        const curOrder = orderRaw.get(orderId) ?? {
+          revenue: 0,
+          cogs: 0,
+          itemsSold: 0,
+        };
         curOrder.revenue += sales;
         curOrder.cogs += itemCogs;
+        curOrder.itemsSold += qty;
         orderRaw.set(orderId, curOrder);
       }
 
-      const orderAdjusted = new Map<string, { revenue: number; cogs: number; factor: number }>();
+      const orderAdjusted = new Map<
+        string,
+        { revenue: number; cogs: number; factor: number; itemsSold: number }
+      >();
       let revenueTotal = 0;
       let cogsTotal = 0;
+      let itemsSoldTotal = 0;
 
       for (const [orderId, cur] of orderRaw.entries()) {
         const discount = Math.min(discountByOrder.get(orderId) ?? 0, cur.revenue);
         const revenue = cur.revenue - discount;
         const factor = cur.revenue > 0 ? revenue / cur.revenue : 1;
-        orderAdjusted.set(orderId, { revenue, cogs: cur.cogs, factor });
+        orderAdjusted.set(orderId, {
+          revenue,
+          cogs: cur.cogs,
+          factor,
+          itemsSold: cur.itemsSold,
+        });
         revenueTotal += revenue;
         cogsTotal += cur.cogs;
+        itemsSoldTotal += cur.itemsSold;
       }
 
       const summaries = list.map((row) => {
@@ -490,6 +536,7 @@ export default function AdminSalesPage() {
           channel: String(row.channel ?? "WEB").toUpperCase(),
           revenue: adjusted?.revenue ?? 0,
           cogs: adjusted?.cogs ?? 0,
+          itemsSold: adjusted?.itemsSold ?? 0,
           discount_total: num(row?.discount_total),
           shipping_discount: num(row?.shipping_discount),
         };
@@ -521,6 +568,7 @@ export default function AdminSalesPage() {
       setTotals({
         sales: revenueTotal,
         count,
+        itemsSold: itemsSoldTotal,
         aov: count ? revenueTotal / count : 0,
         cogs: cogsTotal,
         grossProfit,
@@ -592,6 +640,20 @@ export default function AdminSalesPage() {
     () => daily.find((d) => d.date === selectedDailyDate) ?? null,
     [daily, selectedDailyDate]
   );
+  const selectedOrderRevenueFactor = React.useMemo(() => {
+    const rawValueTotal = selectedOrderItems.reduce(
+      (sum, item) => sum + getItemLineTotal(item),
+      0
+    );
+    if (!(rawValueTotal > 0)) return 1;
+
+    const discountTotal = Number(selectedOrder?.discount_total ?? 0);
+    const shippingDiscount = Number(selectedOrder?.shipping_discount ?? 0);
+    const itemDiscount = Math.max(0, discountTotal - shippingDiscount);
+    const adjustedRevenue = Math.max(0, rawValueTotal - Math.min(itemDiscount, rawValueTotal));
+
+    return adjustedRevenue / rawValueTotal;
+  }, [selectedOrder, selectedOrderItems]);
 
   React.useEffect(() => {
     if (!selectedOrderId) {
@@ -608,7 +670,7 @@ export default function AdminSalesPage() {
         const { data: order, error: orderError } = await supabase
           .from("orders")
           .select(
-            "id,created_at,total,subtotal,shipping_fee,discount_total,shipping_method,shipping_details,payment_status,status,channel,customer_name,customer_phone,contact,address"
+            "id,created_at,total,subtotal,shipping_fee,discount_total,shipping_discount,shipping_method,shipping_details,payment_status,status,channel,customer_name,customer_phone,contact,address"
           )
           .eq("id", selectedOrderId)
           .single();
@@ -617,14 +679,57 @@ export default function AdminSalesPage() {
         const { data: items, error: itemsError } = await supabase
           .from("order_items")
           .select(
-            "order_id,variant_id,item_id,item_name,product_title,qty,line_total,unit_price,price_each,condition,issue_notes,product_variant:product_variants(id,barcode,condition,issue_notes,public_notes,price,qty,product:products(id,title,brand,model,variation,image_urls))"
+            "order_id,variant_id,item_id,item_name,product_title,image_url,qty,line_total,unit_price,price_each,cost_each,condition,issue_notes,product_variant:product_variants(id,barcode,condition,issue_notes,public_notes,cost,price,qty,product:products(id,title,brand,model,variation,image_urls))"
           )
           .eq("order_id", selectedOrderId)
           .limit(200);
         if (itemsError) throw itemsError;
 
+        const rawItems = (items as any[]) ?? [];
+        const missingVariantIds = Array.from(
+          new Set(
+            rawItems
+              .filter((it) => !it?.product_variant)
+              .map((it) => String(it?.variant_id ?? it?.item_id ?? "").trim())
+              .filter(Boolean)
+          )
+        );
+
+        const fallbackVariants = new Map<string, any>();
+        if (missingVariantIds.length) {
+          const { data: vRows, error: vErr } = await supabase
+            .from("product_variants")
+            .select(
+              "id,barcode,condition,issue_notes,public_notes,cost,price,qty,product:products(id,title,brand,model,variation,image_urls)"
+            )
+            .in("id", missingVariantIds)
+            .limit(1000);
+          if (vErr) throw vErr;
+          (vRows as any[] | null)?.forEach((v) => {
+            if (v?.id) fallbackVariants.set(String(v.id), v);
+          });
+        }
+
+        const hydratedItems = rawItems.map((it) => {
+          const fallback =
+            it?.product_variant ??
+            fallbackVariants.get(String(it?.variant_id ?? "").trim()) ??
+            fallbackVariants.get(String(it?.item_id ?? "").trim()) ??
+            null;
+          const next = fallback ? { ...it, product_variant: fallback } : it;
+          const lineTotal = getItemLineTotal(next);
+          const costEach = getItemCostEach(next);
+
+          return {
+            ...next,
+            variant_id: next?.variant_id ?? fallback?.id ?? next?.item_id ?? null,
+            cost_each: costEach > 0 ? costEach : next?.cost_each ?? null,
+            line_total: lineTotal > 0 ? lineTotal : next?.line_total ?? 0,
+          };
+        });
+
         setSelectedOrder(order ?? null);
-        setSelectedOrderItems((items as any[]) ?? []);
+        setSelectedOrderItems(hydratedItems);
       } catch (err: any) {
         setOrderDetailsError(err?.message ?? "Failed to load order details.");
       } finally {
@@ -1175,6 +1280,7 @@ export default function AdminSalesPage() {
               <div className="flex flex-wrap items-center gap-3">
                 <div>Total Sales: <span className="font-semibold">{peso(totals.sales)}</span></div>
                 <div>Orders: <span className="font-semibold">{totals.count}</span></div>
+                <div>Items Sold: <span className="font-semibold">{totals.itemsSold}</span></div>
                 <div>AOV: <span className="font-semibold">{peso(totals.aov)}</span></div>
                 <div>COGS: <span className="font-semibold">{peso(totals.cogs)}</span></div>
                 <div>Profit: <span className="font-semibold">{peso(totals.grossProfit)}</span></div>
@@ -1245,7 +1351,7 @@ export default function AdminSalesPage() {
                               {time} · {o.channel}
                             </div>
                             <div className="text-xs text-white/60">
-                              Item discount: {peso(itemDiscount)}
+                              Items sold: {o.itemsSold} Â· Item discount: {peso(itemDiscount)}
                             </div>
                           </div>
                           <div className="text-right text-sm">
@@ -1311,7 +1417,7 @@ export default function AdminSalesPage() {
                           {time} · {o.channel}
                         </div>
                         <div className="text-xs text-white/60">
-                          Item discount: {peso(itemDiscount)}
+                              Items sold: {o.itemsSold} Â· Item discount: {peso(itemDiscount)}
                         </div>
                       </div>
                       <div className="text-right text-sm">
@@ -1490,8 +1596,13 @@ export default function AdminSalesPage() {
                       const title = getItemTitle(it);
                       const thumb = getItemThumb(it);
                       const unit = getItemPrice(it);
+                      const costEach = getItemCostEach(it);
                       const qty = Number(it?.qty ?? 1);
-                      const line = Number(it?.line_total ?? unit * qty);
+                      const grossLine = getItemLineTotal(it);
+                      const line = grossLine * selectedOrderRevenueFactor;
+                      const lineDiscount = Math.max(0, grossLine - line);
+                      const cogs = costEach * qty;
+                      const profit = line - cogs;
                       const notes = String(
                         it?.product_variant?.public_notes ??
                           it?.issue_notes ??
@@ -1516,7 +1627,22 @@ export default function AdminSalesPage() {
                           <div className="min-w-0 flex-1">
                             <div className="font-medium truncate">{title}</div>
                             <div className="text-xs text-white/60">
-                              {qty} x {peso(unit)} | Line: {peso(line)}
+                              {qty} x {peso(unit)} | Value: {peso(line)}
+                            </div>
+                            {lineDiscount > 0 ? (
+                              <div className="text-xs text-amber-300">
+                                Discount: -{peso(lineDiscount)}
+                              </div>
+                            ) : null}
+                            <div className="text-xs text-white/60">
+                              COGS: {peso(cogs)} |{" "}
+                              <span
+                                className={
+                                  profit >= 0 ? "text-emerald-300" : "text-red-300"
+                                }
+                              >
+                                Profit: {peso(profit)}
+                              </span>
                             </div>
                             {notes ? (
                               <div className="mt-1 text-xs text-white/60">

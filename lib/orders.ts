@@ -1,6 +1,7 @@
 "use client";
 
 import { supabase } from "@/lib/supabase/browser";
+import { insertSingleRowWithSchemaFallback } from "@/lib/supabase/insertWithSchemaFallback";
 import type { CartLine } from "@/hooks/useCart";
 import { resolveEffectivePrice } from "@/lib/pricing";
 import { protectorUnitFee } from "@/lib/addons";
@@ -177,13 +178,24 @@ export async function createOrderFromCart(
     inventory_deducted: false,
   };
 
-  const { data: order, error: orderError } = await supabase
-    .from("orders")
-    .insert(insertRow)
-    .select("*")
-    .single();
+  const {
+    data: order,
+    error: orderError,
+    removedColumns,
+  } = await insertSingleRowWithSchemaFallback(
+    supabase,
+    "orders",
+    insertRow,
+    "*"
+  );
 
   if (orderError) throw orderError;
+  if (removedColumns.length) {
+    console.warn(
+      "Inserted checkout order after dropping unknown columns:",
+      removedColumns
+    );
+  }
 
   // ✅ Insert order items with schema fallbacks
   const itemsV2 = cartLines.map((l) => {

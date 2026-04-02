@@ -19,6 +19,7 @@ import { useAllOrders } from "@/hooks/useAllOrders";
 import { useNotices } from "@/hooks/useNotices";
 import { useProfile } from "@/hooks/useProfile";
 import { supabase } from "@/lib/supabase/browser";
+import { insertSingleRowWithSchemaFallback } from "@/lib/supabase/insertWithSchemaFallback";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
@@ -34,6 +35,13 @@ const SHIPPING_TABS = [
   { key: "COMPLETED", label: "Completed" },
 ] as const;
 
+const LBC_PACKAGE_OPTIONS = [
+  { value: "MINIBOX", label: "Minibox" },
+  { value: "N_SAKTO", label: "N-Sakto" },
+  { value: "SLIM_BOX", label: "Slim Box" },
+  { value: "SMALL_BOX", label: "Small Box" },
+] as const;
+
 type ShippingTabKey = (typeof SHIPPING_TABS)[number]["key"];
 type ShippingStageKey = ShippingTabKey | "TO BOOK";
 type ScanMode = "tracking" | "booking_reference";
@@ -42,9 +50,21 @@ type ShippingDraft = {
   tracking: string;
   bookingReference: string;
 };
+type ManualOrderEditDraft = {
+  customerName: string;
+  shippingMethod: string;
+  lbcPackage: string;
+  bookingReference: string;
+};
 const EMPTY_SHIPPING_DRAFT: ShippingDraft = {
   courier: "",
   tracking: "",
+  bookingReference: "",
+};
+const EMPTY_MANUAL_ORDER_EDIT_DRAFT: ManualOrderEditDraft = {
+  customerName: "",
+  shippingMethod: "LBC",
+  lbcPackage: "MINIBOX",
   bookingReference: "",
 };
 
@@ -86,6 +106,18 @@ function normalizeCourier(method: string) {
   const value = String(method ?? "").trim().toUpperCase();
   if (!value) return null;
   if (value === "J&T") return "JNT";
+  return value;
+}
+
+function normalizeLbcPackage(raw: string | null | undefined) {
+  const value = String(raw ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+  if (!value) return "MINIBOX";
+  if (value === "NSAKTO") return "N_SAKTO";
+  if (value === "SLIMBOX") return "SLIM_BOX";
+  if (value === "SMALLBOX") return "SMALL_BOX";
   return value;
 }
 
@@ -155,6 +187,7 @@ function formatShippingContainer(method: string, details: any) {
   if (method === "LBC") {
     if (normalized === "N_SAKTO") return "LBC N-Sakto";
     if (normalized === "MINIBOX") return "LBC Minibox";
+    if (normalized === "SLIM_BOX" || normalized === "SLIMBOX") return "LBC Slim Box";
     if (normalized === "SMALL_BOX") return "LBC Small Box";
     if (normalized === "MEDIUM_APPROVAL") return "LBC Medium Box (approval)";
   }
@@ -293,6 +326,11 @@ function isOddWheelsInternalOrder(order: any) {
   );
 }
 
+function isManualShipmentOrder(order: any, details?: Record<string, any>) {
+  const data = details ?? (parseJsonMaybe(order?.shipping_details) ?? {});
+  return String(data?.source ?? "").trim().toLowerCase() === "shipments_manual_create";
+}
+
 function shippingStatusBadge(status: string) {
   switch (status) {
     case "TO BOOK":
@@ -303,6 +341,19 @@ function shippingStatusBadge(status: string) {
       return "border-emerald-500/30 text-emerald-200";
     default:
       return "border-yellow-500/30 text-yellow-200";
+  }
+}
+
+function shippingStageLabel(status: ShippingStageKey) {
+  switch (status) {
+    case "TO BOOK":
+      return "To book";
+    case "SHIPPED":
+      return "Shipped";
+    case "COMPLETED":
+      return "Completed";
+    default:
+      return "Preparing";
   }
 }
 
@@ -365,6 +416,16 @@ function getCustomerName(o: any, details: Record<string, any>) {
     o.customer_name ||
     "Guest"
   );
+}
+
+function buildManualOrderEditDraft(order: any): ManualOrderEditDraft {
+  const details = parseJsonMaybe(order?.shipping_details) ?? {};
+  return {
+    customerName: getCustomerName(order, details),
+    shippingMethod: getOrderShippingMethod(order, details) || "LBC",
+    lbcPackage: normalizeLbcPackage(details?.package ?? details?.package_size),
+    bookingReference: getLbcBookingReference(order, details),
+  };
 }
 
 function pickShippingDays(notices: { title: string; body: string }[]) {
@@ -730,14 +791,16 @@ export default function CashierShipmentsPage() {
   const [scanCourier, setScanCourier] = React.useState<string>("");
   const [scanMode, setScanMode] = React.useState<ScanMode>("tracking");
   const [manualCustomerName, setManualCustomerName] = React.useState<string>("");
-  const [manualContact, setManualContact] = React.useState<string>("");
   const [manualShippingMethod, setManualShippingMethod] =
     React.useState<string>("LBC");
-  const [manualShippingDetails, setManualShippingDetails] =
-    React.useState<string>("");
+  const [manualLbcPackage, setManualLbcPackage] =
+    React.useState<string>("MINIBOX");
   const [manualBookingReference, setManualBookingReference] =
     React.useState<string>("");
-  const [manualTotalRaw, setManualTotalRaw] = React.useState<string>("0");
+  const [editingManualOrderId, setEditingManualOrderId] = React.useState<string | null>(null);
+  const [manualOrderEditDraft, setManualOrderEditDraft] = React.useState<ManualOrderEditDraft>(
+    EMPTY_MANUAL_ORDER_EDIT_DRAFT
+  );
   const [creatingManualOrder, setCreatingManualOrder] =
     React.useState<boolean>(false);
   const [oddWheelsView, setOddWheelsView] = React.useState<
@@ -929,9 +992,19 @@ export default function CashierShipmentsPage() {
     );
   }, [paidOrders]);
 
+  const manualShipmentOrders = React.useMemo(
+    () => paidOrders.filter((o) => isManualShipmentOrder(o)),
+    [paidOrders]
+  );
+
+  const standardPaidOrders = React.useMemo(
+    () => paidOrders.filter((o) => !isManualShipmentOrder(o)),
+    [paidOrders]
+  );
+
   const filtered = React.useMemo(
-    () => paidOrders.filter((o) => resolveShippingStage(o) === activeTab),
-    [paidOrders, activeTab]
+    () => standardPaidOrders.filter((o) => resolveShippingStage(o) === activeTab),
+    [standardPaidOrders, activeTab]
   );
 
   const oddWheelsOrders = oddWheelsSourceOrders;
@@ -967,16 +1040,49 @@ export default function CashierShipmentsPage() {
 
   const preparingOrders = React.useMemo(
     () =>
-      paidOrders.filter(
+      standardPaidOrders.filter(
         (o) => resolveShippingStage(o) === "PREPARING TO SHIP"
       ),
-    [paidOrders]
+    [standardPaidOrders]
   );
 
   const toBookOrders = React.useMemo(
     () =>
-      paidOrders.filter((o) => resolveShippingStage(o) === "TO BOOK"),
-    [paidOrders]
+      standardPaidOrders.filter((o) => resolveShippingStage(o) === "TO BOOK"),
+    [standardPaidOrders]
+  );
+
+  const manualPanelOrders = React.useMemo(
+    () =>
+      manualShipmentOrders.filter((o) => {
+        const stage = resolveShippingStage(o);
+        if (activeTab === "PREPARING TO SHIP") {
+          return stage === "PREPARING TO SHIP" || stage === "TO BOOK";
+        }
+        return stage === activeTab;
+      }),
+    [manualShipmentOrders, activeTab]
+  );
+
+  const manualPanelCounts = React.useMemo(
+    () =>
+      manualPanelOrders.reduce(
+        (acc, o) => {
+          const stage = resolveShippingStage(o);
+          if (stage === "TO BOOK") acc.toBook += 1;
+          else if (stage === "PREPARING TO SHIP") acc.preparing += 1;
+          else if (stage === "SHIPPED") acc.shipped += 1;
+          else if (stage === "COMPLETED") acc.completed += 1;
+          return acc;
+        },
+        {
+          toBook: 0,
+          preparing: 0,
+          shipped: 0,
+          completed: 0,
+        }
+      ),
+    [manualPanelOrders]
   );
 
   const courierGroups = React.useMemo(() => {
@@ -1001,6 +1107,11 @@ export default function CashierShipmentsPage() {
         ? preparingOrders
         : courierGroups[activeCourier] ?? []
       : [];
+
+  const hasActiveTabPanels =
+    manualPanelOrders.length > 0 ||
+    (activeTab === "PREPARING TO SHIP" &&
+      (toBookOrders.length > 0 || bulkOrders.length > 0));
 
   const oddWheelsCounts = React.useMemo(() => {
     let shipped = 0;
@@ -1268,48 +1379,43 @@ export default function CashierShipmentsPage() {
       const userId = String(sessionResult.data.session?.user?.id ?? "").trim();
       if (!userId) throw new Error("Staff session not found. Please sign in again.");
 
-      const detailsText = manualShippingDetails.trim();
-      const contact = manualContact.trim();
       const bookingReference = manualBookingReference.trim();
-      const parsedTotal = Number(String(manualTotalRaw ?? "0").replace(/,/g, "").trim());
-      const total = Number.isFinite(parsedTotal) && parsedTotal > 0 ? parsedTotal : 0;
-      const address = detailsText || null;
+      const lbcPackage = normalizeLbcPackage(manualLbcPackage);
       const courier = normalizeCourier(shippingMethod);
 
       const shippingDetails: Record<string, any> = {
         method: shippingMethod,
         source: "shipments_manual_create",
         receiver_name: customerName,
-        receiver_phone: contact || null,
-      };
-      if (detailsText) {
-        shippingDetails.text = detailsText;
-        shippingDetails.full_address = detailsText;
       }
-      if (shippingMethod === "LBC" && bookingReference) {
-        shippingDetails.lbc_booking_reference = bookingReference;
-        shippingDetails.booking_reference = bookingReference;
+      if (shippingMethod === "LBC") {
+        shippingDetails.package = lbcPackage;
+        shippingDetails.package_size = lbcPackage;
+        if (bookingReference) {
+          shippingDetails.lbc_booking_reference = bookingReference;
+          shippingDetails.booking_reference = bookingReference;
+        }
       }
 
       const insertPayload = {
         user_id: userId,
         customer_id: null,
         customer_name: customerName,
-        contact: contact || null,
-        customer_phone: contact || null,
-        address,
+        contact: null,
+        customer_phone: null,
+        address: null,
         status: "PAID",
         order_status: "PAID",
         fulfillment_status: "PENDING",
         payment_method: "MANUAL",
         payment_status: "PAID",
-        subtotal: total,
+        subtotal: 0,
         shipping_fee: 0,
         discount: 0,
         voucher_id: null,
         shipping_discount: 0,
         discount_total: 0,
-        total,
+        total: 0,
         shipping_method: shippingMethod,
         shipping_region: null,
         shipping_details: shippingDetails,
@@ -1331,18 +1437,24 @@ export default function CashierShipmentsPage() {
         channel: "POS",
       };
 
-      const { data, error } = await supabase
-        .from("orders")
-        .insert(insertPayload as any)
-        .select("id")
-        .single();
+      const { data, error, removedColumns } =
+        await insertSingleRowWithSchemaFallback<{ id: string }>(
+          supabase,
+          "orders",
+          insertPayload as any,
+          "id"
+        );
       if (error) throw error;
+      if (removedColumns.length) {
+        console.warn(
+          "Inserted shipment order after dropping unknown columns:",
+          removedColumns
+        );
+      }
 
       setManualCustomerName("");
-      setManualContact("");
-      setManualShippingDetails("");
       setManualBookingReference("");
-      setManualTotalRaw("0");
+      setManualLbcPackage("MINIBOX");
 
       const createdId = String(data?.id ?? "").slice(0, 8);
       const movedToUnbooked = shippingMethod === "LBC" && !bookingReference;
@@ -1362,6 +1474,133 @@ export default function CashierShipmentsPage() {
       });
     } finally {
       setCreatingManualOrder(false);
+    }
+  }
+
+  function startEditingManualOrder(order: any) {
+    setEditingManualOrderId(String(order?.id ?? ""));
+    setManualOrderEditDraft(buildManualOrderEditDraft(order));
+    setErrorById((cur) => ({ ...cur, [String(order?.id ?? "")]: "" }));
+  }
+
+  function cancelEditingManualOrder() {
+    setEditingManualOrderId(null);
+    setManualOrderEditDraft(EMPTY_MANUAL_ORDER_EDIT_DRAFT);
+  }
+
+  function onManualOrderEditDraftChange<K extends keyof ManualOrderEditDraft>(
+    key: K,
+    value: ManualOrderEditDraft[K]
+  ) {
+    setManualOrderEditDraft((cur) => ({ ...cur, [key]: value }));
+  }
+
+  async function saveManualOrderEdits(orderId: string) {
+    const customerName = String(manualOrderEditDraft.customerName ?? "").trim();
+    if (!customerName) {
+      const message = "Customer name is required.";
+      setErrorById((cur) => ({ ...cur, [orderId]: message }));
+      toast({ intent: "error", message });
+      return;
+    }
+
+    const shippingMethod =
+      String(manualOrderEditDraft.shippingMethod ?? "").trim().toUpperCase() || "LBC";
+    const bookingReference = String(manualOrderEditDraft.bookingReference ?? "").trim();
+    const lbcPackage = normalizeLbcPackage(manualOrderEditDraft.lbcPackage);
+
+    setBusyById((cur) => ({ ...cur, [orderId]: true }));
+    setErrorById((cur) => ({ ...cur, [orderId]: "" }));
+    try {
+      const order = orders.find((entry) => String(entry.id) === String(orderId));
+      if (!order) throw new Error("Order not found.");
+
+      const details = parseJsonMaybe(order.shipping_details) ?? {};
+      const nextDetails: Record<string, any> = {
+        ...details,
+        source: "shipments_manual_create",
+        method: shippingMethod,
+        receiver_name: customerName,
+      };
+
+      if (shippingMethod === "LBC") {
+        nextDetails.package = lbcPackage;
+        nextDetails.package_size = lbcPackage;
+        if (bookingReference) {
+          nextDetails.lbc_booking_reference = bookingReference;
+          nextDetails.booking_reference = bookingReference;
+        } else {
+          delete nextDetails.lbc_booking_reference;
+          delete nextDetails.booking_reference;
+        }
+      } else {
+        delete nextDetails.package;
+        delete nextDetails.package_size;
+        delete nextDetails.lbc_booking_reference;
+        delete nextDetails.booking_reference;
+      }
+
+      const courier = normalizeCourier(shippingMethod);
+      const { error } = await supabase
+        .from("orders")
+        .update({
+          customer_name: customerName,
+          shipping_method: shippingMethod,
+          shipping_details: nextDetails,
+          carrier: courier,
+          courier,
+        })
+        .eq("id", orderId);
+      if (error) throw error;
+
+      setDrafts((cur) => ({
+        ...cur,
+        [orderId]: {
+          ...(cur[orderId] ?? EMPTY_SHIPPING_DRAFT),
+          courier: shippingMethod,
+          bookingReference,
+        },
+      }));
+      cancelEditingManualOrder();
+      toast({ intent: "success", message: "Manual order updated." });
+      await reload();
+    } catch (err: any) {
+      const message = err?.message ?? "Unable to update manual order.";
+      setErrorById((cur) => ({ ...cur, [orderId]: message }));
+      toast({ intent: "error", message });
+    } finally {
+      setBusyById((cur) => ({ ...cur, [orderId]: false }));
+    }
+  }
+
+  async function deleteManualOrder(orderId: string) {
+    const order = orders.find((entry) => String(entry.id) === String(orderId));
+    const label = String(order?.customer_name ?? "").trim() || `#${String(orderId).slice(0, 8)}`;
+    if (typeof window !== "undefined") {
+      const confirmed = window.confirm(`Delete manual order ${label}?`);
+      if (!confirmed) return;
+    }
+
+    setBusyById((cur) => ({ ...cur, [orderId]: true }));
+    setErrorById((cur) => ({ ...cur, [orderId]: "" }));
+    try {
+      const { error } = await supabase.from("orders").delete().eq("id", orderId);
+      if (error) throw error;
+
+      if (editingManualOrderId === orderId) {
+        cancelEditingManualOrder();
+      }
+      if (detailOrderId === orderId) {
+        setDetailOrderId(null);
+      }
+      toast({ intent: "success", message: "Manual order deleted." });
+      await reload();
+    } catch (err: any) {
+      const message = err?.message ?? "Unable to delete manual order.";
+      setErrorById((cur) => ({ ...cur, [orderId]: message }));
+      toast({ intent: "error", message });
+    } finally {
+      setBusyById((cur) => ({ ...cur, [orderId]: false }));
     }
   }
 
@@ -2162,36 +2401,6 @@ export default function CashierShipmentsPage() {
                   placeholder="Enter customer name"
                   className="h-9 text-sm"
                 />
-                <Input
-                  label="Contact (optional)"
-                  value={manualContact}
-                  onChange={(e) => setManualContact(e.target.value)}
-                  placeholder="09xxxxxxxxx"
-                  className="h-9 text-sm"
-                />
-              </div>
-              <div className="grid gap-2 md:grid-cols-3">
-                <Select
-                  label="Shipping method"
-                  value={manualShippingMethod}
-                  onChange={(e) => setManualShippingMethod(e.target.value)}
-                  className="h-9 text-sm"
-                >
-                  <option value="LBC">LBC</option>
-                  <option value="J&T">J&T</option>
-                  <option value="LALAMOVE">Lalamove</option>
-                  <option value="PICKUP">Pickup</option>
-                  <option value="JRS">JRS</option>
-                  <option value="NINJA VAN">Ninja Van</option>
-                  <option value="GRAB">Grab</option>
-                </Select>
-                <Input
-                  label="Order total (optional)"
-                  value={manualTotalRaw}
-                  onChange={(e) => setManualTotalRaw(e.target.value)}
-                  placeholder="0"
-                  className="h-9 text-sm"
-                />
                 {manualShippingMethod.toUpperCase() === "LBC" ? (
                   <Input
                     label="LBC booking ref (optional)"
@@ -2210,13 +2419,45 @@ export default function CashierShipmentsPage() {
                   />
                 )}
               </div>
-              <Input
-                label="Shipping details / address (optional)"
-                value={manualShippingDetails}
-                onChange={(e) => setManualShippingDetails(e.target.value)}
-                placeholder="Address, branch, notes"
-                className="h-9 text-sm"
-              />
+              <div className="grid gap-2 md:grid-cols-2">
+                <Select
+                  label="Shipping method"
+                  value={manualShippingMethod}
+                  onChange={(e) => setManualShippingMethod(e.target.value)}
+                  className="h-9 text-sm"
+                >
+                  <option value="LBC">LBC</option>
+                  <option value="J&T">J&T</option>
+                  <option value="LALAMOVE">Lalamove</option>
+                  <option value="PICKUP">Pickup</option>
+                  <option value="JRS">JRS</option>
+                  <option value="NINJA VAN">Ninja Van</option>
+                  <option value="GRAB">Grab</option>
+                </Select>
+                {manualShippingMethod.toUpperCase() === "LBC" ? (
+                  <Select
+                    label="LBC packaging"
+                    value={manualLbcPackage}
+                    onChange={(e) => setManualLbcPackage(e.target.value)}
+                    className="h-9 text-sm"
+                  >
+                    {LBC_PACKAGE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                ) : (
+                  <Select
+                    label="LBC packaging"
+                    value="MINIBOX"
+                    disabled
+                    className="h-9 text-sm opacity-60"
+                  >
+                    <option value="MINIBOX">Only for LBC</option>
+                  </Select>
+                )}
+              </div>
               <div className="flex justify-end">
                 <Button
                   type="button"
@@ -2245,6 +2486,401 @@ export default function CashierShipmentsPage() {
               );
             })}
           </div>
+
+          {manualPanelOrders.length > 0 ? (
+            <div className="rounded-2xl border border-orange-500/20 bg-orange-500/5 p-3 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold">Manual orders</div>
+                  <div className="text-xs text-white/60">
+                    Shipment orders created from this page for label printing.
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge className="border-orange-500/30 text-orange-200">
+                    {manualPanelOrders.length}{" "}
+                    {manualPanelOrders.length === 1 ? "order" : "orders"}
+                  </Badge>
+                  {activeTab === "PREPARING TO SHIP" && manualPanelCounts.toBook > 0 ? (
+                    <Badge className={shippingStatusBadge("TO BOOK")}>
+                      {manualPanelCounts.toBook} to book
+                    </Badge>
+                  ) : null}
+                  {activeTab === "PREPARING TO SHIP" && manualPanelCounts.preparing > 0 ? (
+                    <Badge className={shippingStatusBadge("PREPARING TO SHIP")}>
+                      {manualPanelCounts.preparing} ready
+                    </Badge>
+                  ) : null}
+                </div>
+              </div>
+              <div className="space-y-2">
+                {manualPanelOrders.map((o: any) => {
+                  const details = parseJsonMaybe(o.shipping_details) ?? {};
+                  const method = String(details.method ?? o.shipping_method ?? "").trim();
+                  const stage = resolveShippingStage(o, details);
+                  const customerName = getCustomerName(o, details);
+                  const customerPhone = String(
+                    details.receiver_phone ||
+                      details.phone ||
+                      o.customer_phone ||
+                      o.contact ||
+                      ""
+                  ).trim();
+                  const addressOrBranch = getAddressOrBranch(method, details, o);
+                  const shippingContainer = formatShippingContainer(method, details);
+                  const courierSummary =
+                    shippingContainer || String(o.shipping_method ?? method ?? "").trim();
+                  const orderTotalValue = Number(o.total ?? 0);
+                  const orderTotal = orderTotalValue > 0 ? peso(orderTotalValue) : "";
+                  const lbcReference = getLbcBookingReference(o, details);
+                  const draft = getDraft(o.id);
+                  const courierValue =
+                    String(draft.courier || o.shipping_method || method || "LBC").trim() ||
+                    "LBC";
+                  const canSaveBooking = draft.bookingReference.trim().length > 0;
+                  const busy = Boolean(busyById[o.id]);
+                  const isEditing = editingManualOrderId === String(o.id);
+                  const editShippingMethod =
+                    String(manualOrderEditDraft.shippingMethod ?? "").trim().toUpperCase() ||
+                    "LBC";
+                  const editIsLbc = editShippingMethod === "LBC";
+
+                  return (
+                    <div key={o.id} className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                      <div className="flex flex-wrap items-start gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="text-sm font-medium truncate">{customerName}</div>
+                            <Badge className="border-orange-500/30 text-orange-200">
+                              Manual
+                            </Badge>
+                            <Badge className={shippingStatusBadge(stage)}>
+                              {shippingStageLabel(stage)}
+                            </Badge>
+                            {shippingContainer ? <Badge>{shippingContainer}</Badge> : null}
+                          </div>
+                          <div className="mt-1 text-xs text-white/50">
+                            #{String(o.id).slice(0, 8)}
+                            {customerPhone ? ` - ${customerPhone}` : ""}
+                            {orderTotal ? ` - ${orderTotal}` : ""}
+                          </div>
+                          <div className="mt-1 text-xs text-white/70">
+                            {courierSummary || "-"}
+                            {addressOrBranch ? ` - ${addressOrBranch}` : ""}
+                          </div>
+                          {lbcReference ? (
+                            <div className="mt-1 text-xs text-white/60">
+                              Booking ref: {lbcReference}
+                            </div>
+                          ) : null}
+                          {errorById[o.id] ? (
+                            <div className="mt-1 text-xs text-red-200">{errorById[o.id]}</div>
+                          ) : null}
+                        </div>
+                        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+                          {isEditing ? (
+                            <>
+                              <Button
+                                type="button"
+                                size="sm"
+                                onClick={() => saveManualOrderEdits(o.id)}
+                                disabled={busy}
+                              >
+                                Save
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={cancelEditingManualOrder}
+                                disabled={busy}
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => deleteManualOrder(o.id)}
+                                disabled={busy}
+                              >
+                                Delete
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => onCopy(o)}
+                                className="gap-1.5"
+                              >
+                                <ClipboardCopy className="h-3.5 w-3.5" />
+                                Copy
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setDetailOrderId(String(o.id))}
+                                className="gap-1.5"
+                              >
+                                <ScrollText className="h-3.5 w-3.5" />
+                                Details
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => printShippingLabel(o)}
+                                disabled={busy || printingOrderId === o.id}
+                                className="gap-1.5"
+                              >
+                                {printingOrderId === o.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Printer className="h-3.5 w-3.5" />
+                                )}
+                                {printingOrderId === o.id ? "Printing..." : "Print label"}
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => startEditingManualOrder(o)}
+                                disabled={busy}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => deleteManualOrder(o.id)}
+                                disabled={busy}
+                              >
+                                Delete
+                              </Button>
+                              {stage === "SHIPPED" ? (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  onClick={() =>
+                                    runRpc(o.id, "fn_mark_completed_staff", {
+                                      p_order_id: o.id,
+                                    })
+                                  }
+                                  disabled={busy}
+                                >
+                                  Mark completed
+                                </Button>
+                              ) : null}
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      {isEditing ? (
+                        <div className="mt-3 space-y-2">
+                          <div className="grid gap-2 md:grid-cols-2">
+                            <Input
+                              label="Customer name"
+                              value={manualOrderEditDraft.customerName}
+                              onChange={(e) =>
+                                onManualOrderEditDraftChange("customerName", e.target.value)
+                              }
+                              placeholder="Customer name"
+                              className="h-8 text-xs"
+                            />
+                            {editIsLbc ? (
+                              <Input
+                                label="LBC booking ref (optional)"
+                                value={manualOrderEditDraft.bookingReference}
+                                onChange={(e) =>
+                                  onManualOrderEditDraftChange("bookingReference", e.target.value)
+                                }
+                                placeholder="Leave blank to send to Unbooked"
+                                className="h-8 text-xs"
+                              />
+                            ) : (
+                              <Input
+                                label="LBC booking ref"
+                                value=""
+                                disabled
+                                placeholder="Only for LBC"
+                                className="h-8 text-xs opacity-60"
+                              />
+                            )}
+                          </div>
+                          <div className="grid gap-2 md:grid-cols-2">
+                            <Select
+                              label="Shipping method"
+                              value={manualOrderEditDraft.shippingMethod}
+                              onChange={(e) =>
+                                onManualOrderEditDraftChange("shippingMethod", e.target.value)
+                              }
+                              className="h-8 text-xs"
+                            >
+                              <option value="LBC">LBC</option>
+                              <option value="J&T">J&T</option>
+                              <option value="LALAMOVE">Lalamove</option>
+                              <option value="PICKUP">Pickup</option>
+                              <option value="JRS">JRS</option>
+                              <option value="NINJA VAN">Ninja Van</option>
+                              <option value="GRAB">Grab</option>
+                            </Select>
+                            {editIsLbc ? (
+                              <Select
+                                label="LBC packaging"
+                                value={manualOrderEditDraft.lbcPackage}
+                                onChange={(e) =>
+                                  onManualOrderEditDraftChange(
+                                    "lbcPackage",
+                                    normalizeLbcPackage(e.target.value)
+                                  )
+                                }
+                                className="h-8 text-xs"
+                              >
+                                {LBC_PACKAGE_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </Select>
+                            ) : (
+                              <Select
+                                label="LBC packaging"
+                                value="MINIBOX"
+                                disabled
+                                className="h-8 text-xs opacity-60"
+                              >
+                                <option value="MINIBOX">Only for LBC</option>
+                              </Select>
+                            )}
+                          </div>
+                        </div>
+                      ) : stage === "TO BOOK" ? (
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <Select
+                            value={courierValue}
+                            onChange={(e) => {
+                              const nextMethod = e.target.value;
+                              onDraftChange(o.id, "courier", nextMethod);
+                              void saveShippingMethod(o.id, nextMethod);
+                            }}
+                            className="h-8 w-full px-2 text-xs sm:w-40"
+                            disabled={busy}
+                          >
+                            {buildCourierOptions(o.shipping_method).map((opt) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </Select>
+                          <Input
+                            value={draft.bookingReference}
+                            placeholder="LBC booking reference"
+                            onChange={(e) =>
+                              onDraftChange(o.id, "bookingReference", e.target.value)
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && canSaveBooking && !busy) {
+                                saveBookingReference(o.id, draft.bookingReference);
+                              }
+                            }}
+                            className="h-8 w-full px-3 text-xs sm:w-56"
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setScanMode("booking_reference");
+                              setScanOrderId(o.id);
+                              setScanCourier("");
+                            }}
+                            disabled={busy}
+                          >
+                            Scan
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => saveBookingReference(o.id, draft.bookingReference)}
+                            disabled={busy || !canSaveBooking}
+                          >
+                            Save booking ref
+                          </Button>
+                        </div>
+                      ) : null}
+
+                      {isEditing ? null : stage === "PREPARING TO SHIP" ? (
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <Select
+                            value={courierValue}
+                            onChange={(e) => {
+                              const nextMethod = e.target.value;
+                              onDraftChange(o.id, "courier", nextMethod);
+                              void saveShippingMethod(o.id, nextMethod);
+                            }}
+                            className="h-8 w-full px-2 text-xs sm:w-36"
+                            disabled={busy}
+                          >
+                            {buildCourierOptions(o.shipping_method).map((opt) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </Select>
+                          <Input
+                            value={draft.tracking}
+                            placeholder="Waybill / tracking"
+                            onChange={(e) => onDraftChange(o.id, "tracking", e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !busy) {
+                                const scanned = String(
+                                  (e.currentTarget as HTMLInputElement).value ?? ""
+                                ).trim();
+                                if (!scanned) return;
+                                e.preventDefault();
+                                onDraftChange(o.id, "tracking", scanned);
+                                void markShippedAndComplete(o.id, courierValue, scanned);
+                              }
+                            }}
+                            className="h-8 w-full px-3 text-xs sm:w-56"
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setScanMode("tracking");
+                              setScanCourier(courierValue);
+                              setScanOrderId(o.id);
+                            }}
+                            disabled={busy}
+                          >
+                            Scan
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() =>
+                              markShippedAndComplete(o.id, courierValue, draft.tracking)
+                            }
+                            disabled={busy}
+                          >
+                            Mark shipped
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
 
           {activeTab === "PREPARING TO SHIP" ? (
             <div className="space-y-3">
@@ -2525,8 +3161,7 @@ export default function CashierShipmentsPage() {
 
           {loading ? (
             <div className="text-white/60">Loading...</div>
-          ) : filtered.length === 0 &&
-            !(activeTab === "PREPARING TO SHIP" && toBookOrders.length > 0) ? (
+          ) : filtered.length === 0 && !hasActiveTabPanels ? (
             <div className="text-white/60">No orders in this stage.</div>
           ) : (
             <div className="space-y-3">
