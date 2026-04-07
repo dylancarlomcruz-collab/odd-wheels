@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { sendOrderEventNotification } from "@/lib/push/server";
 
 /**
  * Webhook receiver for GCash/BPI.
@@ -28,6 +29,8 @@ export async function POST(req: Request) {
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 200 });
     }
+
+    await sendOrderEventNotification(orderId, "paid").catch(() => undefined);
 
     return NextResponse.json({ ok: true, processed: true, data }, { status: 200 });
   } catch (e: any) {

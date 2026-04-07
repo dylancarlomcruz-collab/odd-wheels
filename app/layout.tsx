@@ -51,25 +51,6 @@ const pwaRegisterScript = `
 (() => {
   if (typeof window === "undefined") return;
   if (!("serviceWorker" in navigator)) return;
-  const host = String(window.location.hostname || "").toLowerCase();
-  const isLocal =
-    host === "localhost" ||
-    host === "127.0.0.1" ||
-    host === "::1" ||
-    host.endsWith(".local");
-  if (isLocal) {
-    navigator.serviceWorker
-      .getRegistrations()
-      .then((regs) => Promise.all(regs.map((reg) => reg.unregister())))
-      .catch(() => undefined);
-    if ("caches" in window) {
-      caches
-        .keys()
-        .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
-        .catch(() => undefined);
-    }
-    return;
-  }
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/sw.js").catch(() => undefined);
   });

@@ -1,4 +1,4 @@
-const CACHE_NAME = "odd-wheels-pwa-v1";
+const CACHE_NAME = "odd-wheels-pwa-v2";
 const PRECACHE_URLS = [
   "/",
   "/manifest.webmanifest",
@@ -7,6 +7,15 @@ const PRECACHE_URLS = [
   "/apple-touch-icon.png",
   "/odd-wheels-logo.png",
 ];
+
+function isLocalHost(hostname) {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname.endsWith(".local")
+  );
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -93,6 +102,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/")) return;
+  if (isLocalHost(url.hostname)) return;
 
   if (request.mode === "navigate") {
     event.respondWith(networkFirst(request));
@@ -102,4 +112,69 @@ self.addEventListener("fetch", (event) => {
   if (isCacheableAsset(request)) {
     event.respondWith(staleWhileRevalidate(request));
   }
+});
+
+self.addEventListener("push", (event) => {
+  const payload = (() => {
+    try {
+      return event.data?.json?.() ?? {};
+    } catch {
+      return {};
+    }
+  })();
+
+  const title = String(payload.title ?? "Odd Wheels").trim() || "Odd Wheels";
+  const body =
+    String(payload.body ?? "You have a new update.").trim() ||
+    "You have a new update.";
+  const url = String(payload.url ?? "/").trim() || "/";
+
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: String(payload.icon ?? "/icon-192.png"),
+      badge: String(payload.badge ?? "/icon-192.png"),
+      tag: String(payload.tag ?? "odd-wheels-notification"),
+      requireInteraction: payload.requireInteraction === true,
+      data: { url },
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+
+  event.waitUntil(
+    (async () => {
+      const requestedUrl = new URL(
+        String(event.notification?.data?.url ?? "/"),
+        self.location.origin
+      ).toString();
+      const requestedPath = new URL(requestedUrl).pathname;
+      const windowClients = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+
+      for (const client of windowClients) {
+        const clientUrl = new URL(client.url);
+        if (clientUrl.origin !== self.location.origin) continue;
+
+        if (clientUrl.pathname === requestedPath) {
+          return client.focus();
+        }
+
+        if ("navigate" in client) {
+          await client.navigate(requestedUrl).catch(() => undefined);
+          return client.focus();
+        }
+      }
+
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(requestedUrl);
+      }
+
+      return undefined;
+    })()
+  );
 });

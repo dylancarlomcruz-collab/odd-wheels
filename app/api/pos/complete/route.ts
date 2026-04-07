@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { sendOrderEventNotification } from "@/lib/push/server";
 
 function normalizeShippingDetails(raw: unknown) {
   if (raw && typeof raw === "object") {
@@ -135,6 +136,11 @@ export async function POST(req: Request) {
     if (completeError) {
       return NextResponse.json({ ok: false, error: completeError.message }, { status: 200 });
     }
+
+    await sendOrderEventNotification(
+      orderId,
+      markToShip ? "status_updated" : "completed"
+    ).catch(() => undefined);
 
     return NextResponse.json({ ok: true, orderId }, { status: 200 });
   } catch (e: any) {

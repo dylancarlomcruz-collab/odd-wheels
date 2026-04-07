@@ -43,6 +43,7 @@ import { useActiveOrderCount } from "@/hooks/useActiveOrderCount";
 import { useCart } from "@/hooks/useCart";
 import { Badge } from "@/components/ui/Badge";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
+import { PushNotificationsControl } from "@/components/PushNotificationsControl";
 import { useSettings } from "@/hooks/useSettings";
 import { supabase } from "@/lib/supabase/browser";
 import { useShopSort } from "@/hooks/useShopSort";
@@ -1039,10 +1040,11 @@ export function SiteHeader() {
                     <div className="mb-2 text-[11px] uppercase tracking-wide text-white/50">
                       Support
                     </div>
+                    <PushNotificationsControl />
                     <button
                       type="button"
                       onClick={() => setBugOpen((prev) => !prev)}
-                      className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-bg-950/30 px-3 py-2 text-sm text-white/90 hover:bg-bg-950/50"
+                      className="mt-2 flex w-full items-center justify-between rounded-xl border border-white/10 bg-bg-950/30 px-3 py-2 text-sm text-white/90 hover:bg-bg-950/50"
                     >
                       <span className="inline-flex items-center gap-2">
                         <Bug className="h-4 w-4" />

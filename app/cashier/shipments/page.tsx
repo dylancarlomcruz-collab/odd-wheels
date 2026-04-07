@@ -344,6 +344,30 @@ function shippingStatusBadge(status: string) {
   }
 }
 
+async function notifyOrderEvent(
+  orderId: string,
+  event: "shipped" | "completed" | "status_updated"
+) {
+  try {
+    const sessionResult = await supabase.auth.getSession();
+    const accessToken = String(
+      sessionResult.data.session?.access_token ?? ""
+    ).trim();
+    if (!accessToken) return;
+
+    await fetch("/api/push/order-event", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ orderId, event }),
+    }).catch(() => undefined);
+  } catch {
+    // Shipping should still succeed even if push fails.
+  }
+}
+
 function shippingStageLabel(status: ShippingStageKey) {
   switch (status) {
     case "TO BOOK":
@@ -786,6 +810,9 @@ export default function CashierShipmentsPage() {
   const [drafts, setDrafts] = React.useState<Record<string, ShippingDraft>>({});
   const [busyById, setBusyById] = React.useState<Record<string, boolean>>({});
   const [errorById, setErrorById] = React.useState<Record<string, string>>({});
+  const [bulkShipBusy, setBulkShipBusy] = React.useState<null | "manual" | "bulk">(
+    null
+  );
   const [activeCourier, setActiveCourier] = React.useState<string>("ALL");
   const [scanOrderId, setScanOrderId] = React.useState<string | null>(null);
   const [scanCourier, setScanCourier] = React.useState<string>("");
@@ -1163,28 +1190,59 @@ export default function CashierShipmentsPage() {
     }
   }
 
-  async function markShippedAndComplete(
+  function needsPaidFallback(message: string) {
+    const value = String(message ?? "").toLowerCase();
+    return (
+      value.includes("not paid") ||
+      (value.includes("payment") && value.includes("paid"))
+    );
+  }
+
+  async function markShippedDirect(
     orderId: string,
     courierRaw: string,
     trackingRaw: string
+  ) {
+    const courier = String(courierRaw ?? "").trim();
+    const tracking = String(trackingRaw ?? "").trim();
+    const { error } = await supabase
+      .from("orders")
+      .update({
+        shipping_status: "SHIPPED",
+        courier: courier || null,
+        tracking_number: tracking || null,
+        shipped_at: new Date().toISOString(),
+      })
+      .eq("id", orderId);
+    return error;
+  }
+
+  async function markShippedAndComplete(
+    orderId: string,
+    courierRaw: string,
+    trackingRaw: string,
+    options?: {
+      suppressSuccessToast?: boolean;
+      suppressErrorToast?: boolean;
+      skipReload?: boolean;
+    }
   ) {
     const tracking = String(trackingRaw ?? "").trim();
     setBusyById((cur) => ({ ...cur, [orderId]: true }));
     setErrorById((cur) => ({ ...cur, [orderId]: "" }));
     try {
       const courier = String(courierRaw ?? "").trim();
-      let { error: shipError } = await supabase.rpc("fn_mark_shipped", {
-        p_order_id: orderId,
-        p_courier: courier,
-        p_tracking_number: tracking,
-      });
+      let shipError: any = null;
 
-      if (shipError) {
-        const message = String(shipError.message ?? "").toLowerCase();
-        const needsPaidFallback =
-          message.includes("not paid") ||
-          (message.includes("payment") && message.includes("paid"));
-        if (needsPaidFallback) {
+      if (tracking) {
+        const shipRes = await supabase.rpc("fn_mark_shipped", {
+          p_order_id: orderId,
+          p_courier: courier,
+          p_tracking_number: tracking,
+        });
+        shipError = shipRes.error;
+
+        if (shipError && needsPaidFallback(shipError.message ?? "")) {
           const { error: payError } = await supabase
             .from("orders")
             .update({
@@ -1202,22 +1260,116 @@ export default function CashierShipmentsPage() {
           });
           shipError = retry.error;
         }
+
+        if (
+          shipError &&
+          String(shipError.message ?? "").toLowerCase().includes("tracking number is required")
+        ) {
+          shipError = await markShippedDirect(orderId, courier, tracking);
+        }
+      } else {
+        shipError = await markShippedDirect(orderId, courier, tracking);
       }
       if (shipError) throw shipError;
 
-      const { error: completeError } = await supabase.rpc("fn_mark_completed_staff", {
+      let { error: completeError } = await supabase.rpc("fn_mark_completed_staff", {
         p_order_id: orderId,
       });
+      if (completeError && needsPaidFallback(completeError.message ?? "")) {
+        const { error: payError } = await supabase
+          .from("orders")
+          .update({
+            payment_status: "PAID",
+            status: "PAID",
+            paid_at: new Date().toISOString(),
+          })
+          .eq("id", orderId);
+        if (payError) throw payError;
+
+        const retry = await supabase.rpc("fn_mark_completed_staff", {
+          p_order_id: orderId,
+        });
+        completeError = retry.error;
+      }
       if (completeError) throw completeError;
 
-      toast({ intent: "success", message: "Order marked shipped and completed." });
-      await reload();
+      await notifyOrderEvent(orderId, "shipped");
+
+      if (!options?.suppressSuccessToast) {
+        toast({ intent: "success", message: "Order marked shipped and completed." });
+      }
+      if (!options?.skipReload) {
+        await reload();
+      }
+      return true;
     } catch (err: any) {
       const message = err?.message ?? "Unable to mark order as shipped.";
       setErrorById((cur) => ({ ...cur, [orderId]: message }));
-      toast({ intent: "error", message });
+      if (!options?.suppressErrorToast) {
+        toast({ intent: "error", message });
+      }
+      return false;
     } finally {
       setBusyById((cur) => ({ ...cur, [orderId]: false }));
+    }
+  }
+
+  async function markAllReadyShipped(rows: any[], source: "manual" | "bulk") {
+    const readyOrders = rows.filter(
+      (order) => resolveShippingStage(order) === "PREPARING TO SHIP"
+    );
+    if (!readyOrders.length) return;
+
+    const confirmed = window.confirm(
+      `Mark ${readyOrders.length} order${readyOrders.length === 1 ? "" : "s"} as shipped and completed? Tracking numbers are optional.`
+    );
+    if (!confirmed) return;
+
+    setBulkShipBusy(source);
+    let success = 0;
+    let failed = 0;
+
+    try {
+      for (const order of readyOrders) {
+        const details = parseJsonMaybe(order.shipping_details) ?? {};
+        const draft = getDraft(order.id);
+        const courier = String(
+          draft.courier || order.shipping_method || details.method || "LBC"
+        ).trim();
+        const ok = await markShippedAndComplete(
+          String(order.id),
+          courier,
+          draft.tracking,
+          {
+            suppressSuccessToast: true,
+            suppressErrorToast: true,
+            skipReload: true,
+          }
+        );
+        if (ok) success += 1;
+        else failed += 1;
+      }
+
+      await reload();
+
+      if (success > 0 && failed === 0) {
+        toast({
+          intent: "success",
+          message: `${success} order${success === 1 ? "" : "s"} marked shipped and completed.`,
+        });
+      } else if (success > 0) {
+        toast({
+          intent: "success",
+          message: `${success} order${success === 1 ? "" : "s"} marked shipped. ${failed} failed.`,
+        });
+      } else {
+        toast({
+          intent: "error",
+          message: "Unable to mark the selected orders as shipped.",
+        });
+      }
+    } finally {
+      setBulkShipBusy(null);
     }
   }
 
@@ -1940,7 +2092,7 @@ export default function CashierShipmentsPage() {
                 />
               )}
               <Input
-                label="Tracking number"
+                label="Tracking number (optional)"
                 value={draft.tracking}
                 placeholder="Enter tracking number"
                 onChange={(e) => onDraftChange(o.id, "tracking", e.target.value)}
@@ -2511,6 +2663,18 @@ export default function CashierShipmentsPage() {
                       {manualPanelCounts.preparing} ready
                     </Badge>
                   ) : null}
+                  {activeTab === "PREPARING TO SHIP" && manualPanelCounts.preparing > 0 ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => void markAllReadyShipped(manualPanelOrders, "manual")}
+                      disabled={bulkShipBusy !== null}
+                    >
+                      {bulkShipBusy === "manual"
+                        ? "Marking all..."
+                        : "Mark all ready shipped"}
+                    </Button>
+                  ) : null}
                 </div>
               </div>
               <div className="space-y-2">
@@ -2835,14 +2999,13 @@ export default function CashierShipmentsPage() {
                           </Select>
                           <Input
                             value={draft.tracking}
-                            placeholder="Waybill / tracking"
+                            placeholder="Waybill / tracking (optional)"
                             onChange={(e) => onDraftChange(o.id, "tracking", e.target.value)}
                             onKeyDown={(e) => {
                               if (e.key === "Enter" && !busy) {
                                 const scanned = String(
                                   (e.currentTarget as HTMLInputElement).value ?? ""
                                 ).trim();
-                                if (!scanned) return;
                                 e.preventDefault();
                                 onDraftChange(o.id, "tracking", scanned);
                                 void markShippedAndComplete(o.id, courierValue, scanned);
@@ -2987,11 +3150,23 @@ export default function CashierShipmentsPage() {
                   <div>
                     <div className="text-sm font-semibold">Bulk tracking entry</div>
                     <div className="text-xs text-white/60">
-                      Type or scan a waybill number. Focus the field and scan with a barcode scanner, or use camera scan.
+                      Type or scan a waybill number if you have one. Leave it blank to mark shipped without tracking.
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge>{bulkOrders.length}</Badge>
+                    {bulkOrders.length > 0 ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => void markAllReadyShipped(bulkOrders, "bulk")}
+                        disabled={bulkShipBusy !== null}
+                      >
+                        {bulkShipBusy === "bulk"
+                          ? "Marking all..."
+                          : "Mark all shown shipped"}
+                      </Button>
+                    ) : null}
                     {labelPrintMode === "bluetooth" ? (
                       <>
                         <Button
@@ -3087,14 +3262,13 @@ export default function CashierShipmentsPage() {
                               </Select>
                               <Input
                                 value={draft.tracking}
-                                placeholder="Waybill / tracking"
+                                placeholder="Waybill / tracking (optional)"
                                 onChange={(e) => onDraftChange(o.id, "tracking", e.target.value)}
                                 onKeyDown={(e) => {
                                   if (e.key === "Enter" && !busy) {
                                     const scanned = String(
                                       (e.currentTarget as HTMLInputElement).value ?? ""
                                     ).trim();
-                                    if (!scanned) return;
                                     e.preventDefault();
                                     onDraftChange(o.id, "tracking", scanned);
                                     void markShippedAndComplete(

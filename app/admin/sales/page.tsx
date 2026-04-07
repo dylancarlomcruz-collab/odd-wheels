@@ -17,7 +17,10 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { Input } from "@/components/ui/Input";
+import { Textarea } from "@/components/ui/Textarea";
 import { supabase } from "@/lib/supabase/browser";
+import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
 
 const CART_EVENT = "oddwheels:cart-updated";
 
@@ -43,6 +46,18 @@ function ymd(d: Date) {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatDateTimeLocalInput(value: string | null | undefined) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
 }
 
 function parseJsonMaybe(v: any) {
@@ -147,6 +162,39 @@ function buildShippingSummary(order: any) {
     receiverEmail,
     address: address || "-",
     lines,
+  };
+}
+
+function buildOrderEditDraft(order: any): OrderEditDraft {
+  const details = mergeShippingDetails(order);
+  return {
+    soldAt: formatDateTimeLocalInput(order?.created_at),
+    customerName: String(
+      details.receiver_name ||
+        [details.first_name, details.last_name].filter(Boolean).join(" ") ||
+        order?.customer_name ||
+        ""
+    ).trim(),
+    customerPhone: String(
+      details.receiver_phone || details.phone || order?.customer_phone || order?.contact || ""
+    ).trim(),
+    customerEmail: String(
+      details.receiver_email || details.email || order?.customer_email || ""
+    ).trim(),
+    address: String(
+      details.full_address ||
+        details.address ||
+        details.dropoff_address ||
+        details.pickup_location ||
+        order?.address ||
+        ""
+    ).trim(),
+    paymentMethod: String(order?.payment_method ?? "").trim().toUpperCase(),
+    channel: String(order?.channel ?? "WEB").trim().toUpperCase(),
+    shippingMethod: String(details.method ?? order?.shipping_method ?? "")
+      .trim()
+      .toUpperCase(),
+    notes: String(details.notes || details.note || "").trim(),
   };
 }
 
@@ -259,6 +307,66 @@ function DetailsModal({ open, onClose, title, children }: DetailsModalProps) {
   return createPortal(content, document.body);
 }
 
+type OrderSaleItem = {
+  key: string;
+  itemKey: string;
+  title: string;
+  qty: number;
+  lineTotal: number;
+};
+
+type SoldWithItem = {
+  title: string;
+  qty: number;
+};
+
+type SoldItemOccurrence = {
+  orderId: string;
+  soldAt: string;
+  qty: number;
+  lineTotal: number;
+  channel: string;
+  payment_status: string;
+  payment_method: string;
+  shipping_method: string;
+  customer_name: string;
+  customer_phone: string;
+  customer_email: string;
+  customer_address: string;
+  soldWith: SoldWithItem[];
+};
+
+type SoldItemCard = {
+  key: string;
+  name: string;
+  brand: string;
+  model: string;
+  variation: string;
+  imageUrl: string | null;
+  unitPrice: number;
+  totalQty: number;
+  totalSales: number;
+  totalCogs: number;
+  totalProfit: number;
+  orderCount: number;
+  latestCustomer: string;
+  latestSoldAt: string;
+  soldWithTop: SoldWithItem[];
+  occurrences: SoldItemOccurrence[];
+};
+
+type OrderEditDraft = {
+  soldAt: string;
+  customerName: string;
+  customerPhone: string;
+  customerEmail: string;
+  address: string;
+  paymentMethod: string;
+  channel: string;
+  shippingMethod: string;
+  notes: string;
+};
+
 export default function AdminSalesPage() {
   const { user } = useAuth();
   const today = React.useMemo(() => new Date(), []);
@@ -288,12 +396,27 @@ export default function AdminSalesPage() {
   const [selectedOrderId, setSelectedOrderId] = React.useState<string | null>(null);
   const [selectedOrder, setSelectedOrder] = React.useState<any | null>(null);
   const [selectedOrderItems, setSelectedOrderItems] = React.useState<any[]>([]);
+  const [editingOrderDetails, setEditingOrderDetails] = React.useState(false);
+  const [savingOrderDetails, setSavingOrderDetails] = React.useState(false);
+  const [openOrderEditorOnLoad, setOpenOrderEditorOnLoad] = React.useState(false);
+  const [orderEditDraft, setOrderEditDraft] = React.useState<OrderEditDraft>({
+    soldAt: "",
+    customerName: "",
+    customerPhone: "",
+    customerEmail: "",
+    address: "",
+    paymentMethod: "",
+    channel: "",
+    shippingMethod: "",
+    notes: "",
+  });
   const [itemSummaries, setItemSummaries] = React.useState<
     Array<{ key: string; name: string; qty: number; sales: number; cogs: number; profit: number }>
   >([]);
   const [selectedChannel, setSelectedChannel] = React.useState<string | null>(null);
   const [orderDetailsLoading, setOrderDetailsLoading] = React.useState(false);
   const [orderDetailsError, setOrderDetailsError] = React.useState<string | null>(null);
+  const [orderSaveError, setOrderSaveError] = React.useState<string | null>(null);
   const [revertingOrderId, setRevertingOrderId] = React.useState<string | null>(
     null
   );
@@ -304,6 +427,11 @@ export default function AdminSalesPage() {
   const [topItems, setTopItems] = React.useState<
     { key: string; name: string; qty: number; sales: number; cogs: number; profit: number }[]
   >([]);
+  const [soldItems, setSoldItems] = React.useState<SoldItemCard[]>([]);
+  const [selectedSoldItemKey, setSelectedSoldItemKey] = React.useState<string | null>(
+    null
+  );
+  const [soldItemQuery, setSoldItemQuery] = React.useState("");
   const [channelBreakdown, setChannelBreakdown] = React.useState<Record<string, { count: number; sales: number }>>({});
   const [totals, setTotals] = React.useState({
     sales: 0,
@@ -337,12 +465,12 @@ export default function AdminSalesPage() {
       };
       const startISO = `${from}T00:00:00`;
       const endISO = `${to}T23:59:59`;
+      const orderSelect =
+        "id,created_at,total,channel,payment_status,payment_method,shipping_method,shipping_details,customer_name,customer_phone,contact,address,discount_total,shipping_discount";
 
       let { data: o, error } = await supabase
         .from("orders")
-        .select(
-          "id,created_at,total,channel,payment_status,discount_total,shipping_discount"
-        )
+        .select(orderSelect)
         .or("payment_status.eq.PAID,channel.eq.POS")
         .not("status", "in", "(VOIDED,CANCELLED)")
         .gte("created_at", startISO)
@@ -353,9 +481,7 @@ export default function AdminSalesPage() {
       if (error && String(error.message ?? "").includes("channel")) {
         const retry = await supabase
           .from("orders")
-          .select(
-            "id,created_at,total,channel,payment_status,discount_total,shipping_discount"
-          )
+          .select(orderSelect)
           .eq("payment_status", "PAID")
           .not("status", "in", "(VOIDED,CANCELLED)")
           .gte("created_at", startISO)
@@ -384,6 +510,7 @@ export default function AdminSalesPage() {
       const ids = list.map((x) => x.id);
       if (!ids.length) {
         setTopItems([]);
+        setSoldItems([]);
         setDaily([]);
         setChannelBreakdown({});
         setOrderSummaries([]);
@@ -415,8 +542,8 @@ export default function AdminSalesPage() {
       const missingVariantIds = Array.from(
         new Set(
           rows
-            .filter((it) => !it?.product_variant && it?.item_id)
-            .map((it) => String(it.item_id))
+            .filter((it) => !it?.product_variant)
+            .map((it) => String(it?.variant_id ?? it?.item_id ?? "").trim())
             .filter(Boolean)
         )
       );
@@ -441,57 +568,91 @@ export default function AdminSalesPage() {
         string,
         { revenue: number; cogs: number; itemsSold: number }
       >();
-      const itemEntries: Array<{
-        orderId: string;
-        key: string;
-        name: string;
-        qty: number;
-        sales: number;
-        cogs: number;
-      }> = [];
+      const orderItemsMap = new Map<string, Map<string, OrderSaleItem>>();
+      const itemOrderMap = new Map<
+        string,
+        {
+          orderId: string;
+          key: string;
+          name: string;
+          qty: number;
+          sales: number;
+          cogs: number;
+          unitPrice: number;
+          imageUrl: string | null;
+          brand: string;
+          model: string;
+          variation: string;
+        }
+      >();
       let missingOrderCounter = 0;
 
       for (const it of rows) {
-        const name = buildItemLabel(it);
-        const qtyRaw = num(it.qty ?? 0);
+        const fallbackVariant =
+          it?.product_variant ??
+          fallbackVariants.get(String(it?.variant_id ?? "").trim()) ??
+          fallbackVariants.get(String(it?.item_id ?? "").trim()) ??
+          null;
+        const next =
+          fallbackVariant && !it?.product_variant
+            ? { ...it, product_variant: fallbackVariant }
+            : it;
+        const name = buildItemLabel(next);
+        const qtyRaw = num(next.qty ?? 0);
         const qty = Number.isFinite(qtyRaw) ? qtyRaw : 0;
-        const lineTotalRaw = num(it.line_total ?? 0);
+        const lineTotalRaw = num(next.line_total ?? 0);
         const unitRaw = num(
-          it?.price_each ??
-            it?.unit_price ??
-            it?.product_variant?.price ??
-            fallbackVariants.get(String(it?.item_id ?? ""))?.price ??
-            0
+          next?.price_each ?? next?.unit_price ?? next?.product_variant?.price ?? 0
         );
         const safeUnit = Number.isFinite(unitRaw) ? unitRaw : 0;
+        const unitPrice = safeUnit > 0 ? safeUnit : getItemPrice(next);
         const sales =
           Number.isFinite(lineTotalRaw) && lineTotalRaw > 0
             ? lineTotalRaw
             : safeUnit * qty;
-        const costEachRaw = num(
-          it?.cost_each ??
-            it?.product_variant?.cost ??
-            fallbackVariants.get(String(it?.item_id ?? ""))?.cost ??
-            0
-        );
+        const costEachRaw = num(next?.cost_each ?? next?.product_variant?.cost ?? 0);
         const costEach = Number.isFinite(costEachRaw) ? costEachRaw : 0;
         const itemCogs = qty * costEach;
+        const product = next?.product_variant?.product;
+        const brand = String(product?.brand ?? "").trim();
+        const model = String(product?.model ?? "").trim();
+        const variation = String(product?.variation ?? "").trim();
+        const imageUrl = getItemThumb(next);
 
-        const variantId = it?.variant_id ? String(it.variant_id) : "";
+        const variantId = next?.variant_id ? String(next.variant_id) : "";
         const key = variantId ? `variant:${variantId}` : `name:${name}`;
-        let orderId = it?.order_id ? String(it.order_id) : "";
+        let orderId = next?.order_id ? String(next.order_id) : "";
         if (!orderId) {
           orderId = `missing-${missingOrderCounter++}`;
         }
 
-        itemEntries.push({
+        const itemOrderKey = `${orderId}::${key}`;
+        const currentItemOrder = itemOrderMap.get(itemOrderKey) ?? {
           orderId,
           key,
           name,
-          qty,
-          sales,
-          cogs: itemCogs,
-        });
+          qty: 0,
+          sales: 0,
+          cogs: 0,
+          unitPrice,
+          imageUrl,
+          brand,
+          model,
+          variation,
+        };
+        currentItemOrder.qty += qty;
+        currentItemOrder.sales += sales;
+        currentItemOrder.cogs += itemCogs;
+        if (!(currentItemOrder.unitPrice > 0) && unitPrice > 0) {
+          currentItemOrder.unitPrice = unitPrice;
+        }
+        if (!currentItemOrder.imageUrl && imageUrl) currentItemOrder.imageUrl = imageUrl;
+        if (!currentItemOrder.brand && brand) currentItemOrder.brand = brand;
+        if (!currentItemOrder.model && model) currentItemOrder.model = model;
+        if (!currentItemOrder.variation && variation) {
+          currentItemOrder.variation = variation;
+        }
+        itemOrderMap.set(itemOrderKey, currentItemOrder);
 
         const curOrder = orderRaw.get(orderId) ?? {
           revenue: 0,
@@ -502,6 +663,19 @@ export default function AdminSalesPage() {
         curOrder.cogs += itemCogs;
         curOrder.itemsSold += qty;
         orderRaw.set(orderId, curOrder);
+
+        const currentItems = orderItemsMap.get(orderId) ?? new Map<string, OrderSaleItem>();
+        const currentOrderItem = currentItems.get(key) ?? {
+          key: `${orderId}:${key}`,
+          itemKey: key,
+          title: name,
+          qty: 0,
+          lineTotal: 0,
+        };
+        currentOrderItem.qty += qty;
+        currentOrderItem.lineTotal += sales;
+        currentItems.set(key, currentOrderItem);
+        orderItemsMap.set(orderId, currentItems);
       }
 
       const orderAdjusted = new Map<
@@ -527,6 +701,7 @@ export default function AdminSalesPage() {
         itemsSoldTotal += cur.itemsSold;
       }
 
+      const itemEntries = Array.from(itemOrderMap.values());
       const summaries = list.map((row) => {
         const id = String(row.id);
         const adjusted = orderAdjusted.get(id);
@@ -542,6 +717,136 @@ export default function AdminSalesPage() {
         };
       });
       setOrderSummaries(summaries);
+      const orderMetaById = new Map(
+        list.map((row) => {
+          const id = String(row.id);
+          const shipping = buildShippingSummary(row);
+          const channel = String(row.channel ?? "WEB").toUpperCase();
+          const shippingMethodRaw = String(
+            shipping.method ?? row.shipping_method ?? ""
+          ).trim();
+          const shippingMethod = shippingMethodRaw
+            ? shippingMethodRaw.toUpperCase()
+            : channel === "POS"
+            ? "WALK-IN"
+            : "-";
+
+          return [
+            id,
+            {
+              soldAt: String(row.created_at ?? ""),
+              channel,
+              payment_status:
+                String(row.payment_status ?? "").trim().toUpperCase() || "-",
+              payment_method:
+                String(row.payment_method ?? "").trim().toUpperCase() || "-",
+              shipping_method: shippingMethod,
+              customer_name: String(shipping.receiverName ?? "Guest"),
+              customer_phone: String(shipping.receiverPhone ?? "-"),
+              customer_email: String(shipping.receiverEmail ?? "").trim(),
+              customer_address: String(shipping.address ?? "-"),
+            },
+          ] as const;
+        })
+      );
+      const soldItemMap = new Map<string, SoldItemCard>();
+
+      for (const entry of itemEntries) {
+        const factor = orderAdjusted.get(entry.orderId)?.factor ?? 1;
+        const adjustedSales = entry.sales * factor;
+        const orderMeta = orderMetaById.get(entry.orderId);
+        if (!orderMeta) continue;
+
+        const soldWith = Array.from(
+          (orderItemsMap.get(entry.orderId) ?? new Map<string, OrderSaleItem>()).values()
+        )
+          .filter((item) => item.itemKey !== entry.key)
+          .map((item) => ({
+            title: item.title,
+            qty: item.qty,
+          }))
+          .sort((a, b) => b.qty - a.qty || a.title.localeCompare(b.title));
+
+        const current = soldItemMap.get(entry.key) ?? {
+          key: entry.key,
+          name: entry.name,
+          brand: entry.brand,
+          model: entry.model,
+          variation: entry.variation,
+          imageUrl: entry.imageUrl,
+          unitPrice: entry.unitPrice,
+          totalQty: 0,
+          totalSales: 0,
+          totalCogs: 0,
+          totalProfit: 0,
+          orderCount: 0,
+          latestCustomer: "",
+          latestSoldAt: "",
+          soldWithTop: [],
+          occurrences: [],
+        };
+
+        current.totalQty += entry.qty;
+        current.totalSales += adjustedSales;
+        current.totalCogs += entry.cogs;
+        current.totalProfit = current.totalSales - current.totalCogs;
+        if (!current.imageUrl && entry.imageUrl) current.imageUrl = entry.imageUrl;
+        if (!(current.unitPrice > 0) && entry.unitPrice > 0) {
+          current.unitPrice = entry.unitPrice;
+        }
+        if (!current.brand && entry.brand) current.brand = entry.brand;
+        if (!current.model && entry.model) current.model = entry.model;
+        if (!current.variation && entry.variation) current.variation = entry.variation;
+        current.occurrences.push({
+          orderId: entry.orderId,
+          soldAt: orderMeta.soldAt,
+          qty: entry.qty,
+          lineTotal: adjustedSales,
+          channel: orderMeta.channel,
+          payment_status: orderMeta.payment_status,
+          payment_method: orderMeta.payment_method,
+          shipping_method: orderMeta.shipping_method,
+          customer_name: orderMeta.customer_name,
+          customer_phone: orderMeta.customer_phone,
+          customer_email: orderMeta.customer_email,
+          customer_address: orderMeta.customer_address,
+          soldWith,
+        });
+        soldItemMap.set(entry.key, current);
+      }
+
+      const soldCards = Array.from(soldItemMap.values())
+        .map((item) => {
+          const occurrences = [...item.occurrences].sort((a, b) =>
+            String(b.soldAt).localeCompare(String(a.soldAt))
+          );
+          const companionMap = new Map<string, number>();
+          occurrences.forEach((occurrence) => {
+            occurrence.soldWith.forEach((other) => {
+              companionMap.set(
+                other.title,
+                (companionMap.get(other.title) ?? 0) + other.qty
+              );
+            });
+          });
+          return {
+            ...item,
+            orderCount: occurrences.length,
+            latestCustomer: occurrences[0]?.customer_name ?? "Guest",
+            latestSoldAt: occurrences[0]?.soldAt ?? "",
+            soldWithTop: Array.from(companionMap.entries())
+              .map(([title, qty]) => ({ title, qty }))
+              .sort((a, b) => b.qty - a.qty || a.title.localeCompare(b.title))
+              .slice(0, 3),
+            occurrences,
+          };
+        })
+        .sort(
+          (a, b) =>
+            String(b.latestSoldAt).localeCompare(String(a.latestSoldAt)) ||
+            b.totalSales - a.totalSales
+        );
+      setSoldItems(soldCards);
 
       for (const entry of itemEntries) {
         const factor = orderAdjusted.get(entry.orderId)?.factor ?? 1;
@@ -632,6 +937,33 @@ export default function AdminSalesPage() {
       (o) => String(o.channel ?? "WEB").toUpperCase() === selectedChannel
     );
   }, [orderSummarySorted, selectedChannel]);
+  const filteredSoldItems = React.useMemo(() => {
+    const query = soldItemQuery.trim().toLowerCase();
+    if (!query) return soldItems;
+    return soldItems.filter((item) => {
+      const soldWith = item.soldWithTop.map((entry) => entry.title).join(" ");
+      const customers = item.occurrences
+        .map((occurrence) => occurrence.customer_name)
+        .join(" ");
+      return [
+        item.name,
+        item.brand,
+        item.model,
+        item.variation,
+        item.latestCustomer,
+        soldWith,
+        customers,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    });
+  }, [soldItemQuery, soldItems]);
+  const visibleSoldItems = filteredSoldItems;
+  const selectedSoldItem = React.useMemo(
+    () => soldItems.find((item) => item.key === selectedSoldItemKey) ?? null,
+    [soldItems, selectedSoldItemKey]
+  );
   const selectedDailyOrders = React.useMemo(() => {
     if (!selectedDailyDate) return [];
     return orders.filter((o) => ymd(new Date(o.created_at)) === selectedDailyDate);
@@ -660,6 +992,10 @@ export default function AdminSalesPage() {
       setSelectedOrder(null);
       setSelectedOrderItems([]);
       setOrderDetailsError(null);
+      setOrderSaveError(null);
+      setEditingOrderDetails(false);
+      setSavingOrderDetails(false);
+      setOpenOrderEditorOnLoad(false);
       return;
     }
 
@@ -670,7 +1006,7 @@ export default function AdminSalesPage() {
         const { data: order, error: orderError } = await supabase
           .from("orders")
           .select(
-            "id,created_at,total,subtotal,shipping_fee,discount_total,shipping_discount,shipping_method,shipping_details,payment_status,status,channel,customer_name,customer_phone,contact,address"
+            "id,created_at,total,subtotal,shipping_fee,discount_total,shipping_discount,shipping_method,shipping_details,payment_status,payment_method,status,channel,customer_name,customer_phone,contact,address"
           )
           .eq("id", selectedOrderId)
           .single();
@@ -730,6 +1066,7 @@ export default function AdminSalesPage() {
 
         setSelectedOrder(order ?? null);
         setSelectedOrderItems(hydratedItems);
+        setOrderSaveError(null);
       } catch (err: any) {
         setOrderDetailsError(err?.message ?? "Failed to load order details.");
       } finally {
@@ -739,6 +1076,113 @@ export default function AdminSalesPage() {
 
     loadDetails();
   }, [selectedOrderId]);
+
+  React.useEffect(() => {
+    if (!selectedOrder) {
+      setOrderEditDraft({
+        soldAt: "",
+        customerName: "",
+        customerPhone: "",
+        customerEmail: "",
+        address: "",
+        paymentMethod: "",
+        channel: "",
+        shippingMethod: "",
+        notes: "",
+      });
+      return;
+    }
+
+    setOrderEditDraft(buildOrderEditDraft(selectedOrder));
+    setEditingOrderDetails(openOrderEditorOnLoad);
+    if (openOrderEditorOnLoad) {
+      setOpenOrderEditorOnLoad(false);
+    }
+  }, [selectedOrder]);
+
+  async function saveOrderDetails() {
+    if (!selectedOrder?.id) return;
+
+    const existingDetails = mergeShippingDetails(selectedOrder);
+    const soldAtValue = orderEditDraft.soldAt.trim();
+    const soldAtDate = soldAtValue ? new Date(soldAtValue) : new Date(selectedOrder.created_at);
+    if (Number.isNaN(soldAtDate.getTime())) {
+      setOrderSaveError("Invalid sold date.");
+      return;
+    }
+    const customerName = orderEditDraft.customerName.trim();
+    const customerPhone = orderEditDraft.customerPhone.trim();
+    const customerEmail = orderEditDraft.customerEmail.trim();
+    const address = orderEditDraft.address.trim();
+    const paymentMethod =
+      orderEditDraft.paymentMethod.trim().toUpperCase() ||
+      String(selectedOrder.payment_method ?? "").trim().toUpperCase() ||
+      "GCASH";
+    const channel =
+      orderEditDraft.channel.trim().toUpperCase() ||
+      String(selectedOrder.channel ?? "WEB").trim().toUpperCase() ||
+      "WEB";
+    const shippingMethod =
+      orderEditDraft.shippingMethod.trim().toUpperCase() ||
+      String(existingDetails.method ?? selectedOrder.shipping_method ?? "")
+        .trim()
+        .toUpperCase() ||
+      "PICKUP";
+    const notes = orderEditDraft.notes.trim();
+
+    const nextShippingDetails: Record<string, any> = {
+      ...existingDetails,
+      method: shippingMethod,
+      receiver_name: customerName || null,
+      receiver_phone: customerPhone || null,
+      phone: customerPhone || null,
+      receiver_email: customerEmail || null,
+      email: customerEmail || null,
+      full_address: address || null,
+      address: address || null,
+      notes: notes || null,
+    };
+
+    if (shippingMethod === "PICKUP") {
+      nextShippingDetails.pickup_location = address || null;
+    }
+    if (shippingMethod === "LBC" || shippingMethod === "LALAMOVE") {
+      nextShippingDetails.dropoff_address = address || null;
+    }
+
+    setSavingOrderDetails(true);
+    setOrderSaveError(null);
+    try {
+      const { data, error } = await supabase
+        .from("orders")
+        .update({
+          created_at: soldAtDate.toISOString(),
+          customer_name: customerName || null,
+          customer_phone: customerPhone || null,
+          contact: customerPhone || null,
+          address: address || null,
+          payment_method: paymentMethod,
+          channel,
+          shipping_method: shippingMethod,
+          shipping_details: nextShippingDetails,
+        })
+        .eq("id", selectedOrder.id)
+        .select(
+          "id,created_at,total,subtotal,shipping_fee,discount_total,shipping_discount,shipping_method,shipping_details,payment_status,payment_method,status,channel,customer_name,customer_phone,contact,address"
+        )
+        .single();
+
+      if (error) throw error;
+
+      setSelectedOrder(data ?? null);
+      setEditingOrderDetails(false);
+      await run();
+    } catch (err: any) {
+      setOrderSaveError(err?.message ?? "Failed to save order details.");
+    } finally {
+      setSavingOrderDetails(false);
+    }
+  }
 
   async function addVariantsToCurrentCart(
     variantQtyToRestore: Map<string, number>
@@ -1128,36 +1572,418 @@ export default function AdminSalesPage() {
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-              <div className="flex items-center gap-2 font-semibold">
-                <TrendingUp className="h-4 w-4 text-violet-200" />
-                Top-Selling Items
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 font-semibold">
+                    <TrendingUp className="h-4 w-4 text-violet-200" />
+                    Sold Item Browse
+                  </div>
+                  <div className="text-sm text-white/60">
+                    Visual sold-item cards. Click a card to see who bought it and what it was sold together with.
+                  </div>
+                </div>
+                <div className="text-xs text-white/50">
+                  Showing {visibleSoldItems.length} of {filteredSoldItems.length}
+                  {soldItemQuery.trim() ? ` filtered from ${soldItems.length}` : ""}
+                </div>
               </div>
-              <div className="mt-3 space-y-2">
-                {topItems.length === 0 ? (
-                  <div className="text-sm text-white/60">No items.</div>
-                ) : (
-                  topItems.map((it) => (
-                    <div
-                      key={it.key}
-                      className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-paper/5 px-3 py-2"
-                    >
-                      <div className="min-w-0">
-                        <div className="font-medium truncate">{it.name}</div>
-                        <div className="text-xs text-white/60">
-                          Units {it.qty} | Revenue {peso(it.sales)} | COGS {peso(it.cogs)} | Profit {peso(it.profit)}
+
+              <div className="mt-4 rounded-2xl border border-white/10 bg-paper/5 p-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <input
+                    type="text"
+                    value={soldItemQuery}
+                    onChange={(e) => setSoldItemQuery(e.target.value)}
+                    placeholder="Search sold item, buyer, or sold-with item..."
+                    className="min-w-[240px] flex-1 rounded-xl border border-white/10 bg-bg-800 px-4 py-2 text-sm text-white outline-none focus:border-white/20"
+                  />
+                  <Button
+                    variant="ghost"
+                    onClick={() => setSoldItemQuery("")}
+                    disabled={!soldItemQuery}
+                  >
+                    Clear
+                  </Button>
+                </div>
+                {topItems.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-white/70">
+                    {topItems.slice(0, 3).map((item) => (
+                      <div
+                        key={item.key}
+                        className="rounded-full border border-white/10 bg-black/20 px-3 py-1"
+                      >
+                        Hot: {item.name} ({item.qty})
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+              {visibleSoldItems.length === 0 ? (
+                <div className="mt-4 text-sm text-white/60">No sold items found.</div>
+              ) : (
+                <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  {visibleSoldItems.map((item) => {
+                    const subtitle =
+                      [item.brand, item.model, item.variation].filter(Boolean).join(" • ") ||
+                      "Sold item";
+                    const soldAt = item.latestSoldAt
+                      ? new Date(item.latestSoldAt).toLocaleString("en-PH", {
+                          month: "short",
+                          day: "2-digit",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })
+                      : "-";
+                    const priceLabel =
+                      item.unitPrice > 0
+                        ? peso(item.unitPrice)
+                        : item.totalQty > 0
+                        ? peso(item.totalSales / item.totalQty)
+                        : peso(0);
+                    const soldWithPreview = item.soldWithTop.slice(0, 2);
+
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => setSelectedSoldItemKey(item.key)}
+                        className="group h-full overflow-hidden rounded-xl border border-white/10 bg-paper/5 text-left shadow-sm transition hover:border-accent-500/40 hover:shadow-accent-500/10"
+                      >
+                        <div className="aspect-[4/3] overflow-hidden bg-black/10">
+                          {item.imageUrl ? (
+                            (() => {
+                              const preview = parseImageCrop(item.imageUrl);
+                              return (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={preview.src}
+                                  alt={item.name}
+                                  className="h-full w-full object-contain bg-neutral-50"
+                                  style={cropStyle(preview.crop)}
+                                />
+                              );
+                            })()
+                          ) : (
+                            <div className="flex h-full items-center justify-center text-sm text-white/60">
+                              No image
+                            </div>
+                          )}
                         </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-semibold">{peso(it.sales)}</div>
-                        <div className={`text-xs ${it.profit >= 0 ? "text-emerald-300" : "text-red-300"}`}>{peso(it.profit)}</div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
+
+                        <div className="space-y-3 p-3 sm:p-4">
+                          <div className="flex items-start gap-2">
+                            <Badge className="border-red-400/40 bg-red-500/10 text-red-100">
+                              SOLD
+                            </Badge>
+                            <Badge className="ml-auto border-white/10 bg-white/5 text-white/70">
+                              {item.orderCount} orders
+                            </Badge>
+                          </div>
+
+                          <div className="font-semibold text-white line-clamp-2">
+                            {item.name}
+                          </div>
+                          <div className="line-clamp-1 text-xs text-white/60">
+                            {subtitle}
+                          </div>
+
+                          <div className="flex items-center justify-between pt-1">
+                            <div className="text-price">{priceLabel}</div>
+                            <div className="text-xs text-white/60">{item.totalQty} sold</div>
+                          </div>
+
+                          <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                            <div className="text-[11px] uppercase tracking-wide text-white/50">
+                              Latest Sale
+                            </div>
+                            <div className="mt-1 truncate text-sm text-white/80">
+                              {item.latestCustomer || "Guest"}
+                            </div>
+                            <div className="text-xs text-white/60">{soldAt}</div>
+                          </div>
+
+                          <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                            <div className="text-[11px] uppercase tracking-wide text-white/50">
+                              Sold With
+                            </div>
+                            {soldWithPreview.length === 0 ? (
+                              <div className="mt-1 text-sm text-white/60">Usually sold alone.</div>
+                            ) : (
+                              <div className="mt-1 space-y-1">
+                                {soldWithPreview.map((other) => (
+                                  <div
+                                    key={`${item.key}-${other.title}`}
+                                    className="truncate text-sm text-white/80"
+                                  >
+                                    {other.title} x{other.qty}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex items-center justify-between text-xs text-white/60">
+                            <div>Revenue {peso(item.totalSales)}</div>
+                            <div
+                              className={
+                                item.totalProfit >= 0 ? "text-emerald-300" : "text-red-300"
+                              }
+                            >
+                              {peso(item.totalProfit)}
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
             </div>
           </CardBody>
         </Card>
+
+        <DetailsModal
+          open={Boolean(selectedSoldItemKey)}
+          onClose={() => setSelectedSoldItemKey(null)}
+          title={selectedSoldItem ? selectedSoldItem.name : "Sold item details"}
+        >
+          {!selectedSoldItem ? (
+            <div className="text-sm text-white/60">Sold item not found.</div>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid gap-4 lg:grid-cols-[240px,1fr]">
+                <div className="overflow-hidden rounded-2xl border border-white/10 bg-paper/5">
+                  <div className="aspect-[4/3] overflow-hidden bg-black/10">
+                    {selectedSoldItem.imageUrl ? (
+                      (() => {
+                        const preview = parseImageCrop(selectedSoldItem.imageUrl);
+                        return (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={preview.src}
+                            alt={selectedSoldItem.name}
+                            className="h-full w-full object-contain bg-neutral-50"
+                            style={cropStyle(preview.crop)}
+                          />
+                        );
+                      })()
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-sm text-white/60">
+                        No image
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <div className="text-xl font-semibold text-white">
+                      {selectedSoldItem.name}
+                    </div>
+                    <div className="text-sm text-white/60">
+                      {[selectedSoldItem.brand, selectedSoldItem.model, selectedSoldItem.variation]
+                        .filter(Boolean)
+                        .join(" • ") || "Sold item"}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                      <div className="text-[11px] uppercase tracking-wide text-white/50">
+                        Units Sold
+                      </div>
+                      <div className="mt-1 text-lg font-semibold text-white">
+                        {selectedSoldItem.totalQty}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                      <div className="text-[11px] uppercase tracking-wide text-white/50">
+                        Orders
+                      </div>
+                      <div className="mt-1 text-lg font-semibold text-white">
+                        {selectedSoldItem.orderCount}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                      <div className="text-[11px] uppercase tracking-wide text-white/50">
+                        Revenue
+                      </div>
+                      <div className="mt-1 text-lg font-semibold text-white">
+                        {peso(selectedSoldItem.totalSales)}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                      <div className="text-[11px] uppercase tracking-wide text-white/50">
+                        Profit
+                      </div>
+                      <div
+                        className={`mt-1 text-lg font-semibold ${
+                          selectedSoldItem.totalProfit >= 0
+                            ? "text-emerald-300"
+                            : "text-red-300"
+                        }`}
+                      >
+                        {peso(selectedSoldItem.totalProfit)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                      <div className="text-[11px] uppercase tracking-wide text-white/50">
+                        Latest Buyer
+                      </div>
+                      <div className="mt-1 font-medium text-white">
+                        {selectedSoldItem.latestCustomer || "Guest"}
+                      </div>
+                      <div className="text-sm text-white/60">
+                        {selectedSoldItem.latestSoldAt
+                          ? new Date(selectedSoldItem.latestSoldAt).toLocaleString("en-PH")
+                          : "-"}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                      <div className="text-[11px] uppercase tracking-wide text-white/50">
+                        Most Sold With
+                      </div>
+                      {selectedSoldItem.soldWithTop.length === 0 ? (
+                        <div className="mt-1 text-sm text-white/60">Usually sold alone.</div>
+                      ) : (
+                        <div className="mt-1 space-y-1 text-sm text-white/80">
+                          {selectedSoldItem.soldWithTop.map((other) => (
+                            <div key={`${selectedSoldItem.key}-${other.title}`}>
+                              {other.title} x{other.qty}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {selectedSoldItem.occurrences.map((occurrence) => (
+                  <div
+                    key={`${selectedSoldItem.key}-${occurrence.orderId}`}
+                    className="rounded-2xl border border-white/10 bg-paper/5 p-4"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="font-medium text-white">
+                          {occurrence.customer_name || "Guest"}
+                        </div>
+                        <div className="text-xs text-white/60">
+                          {new Date(occurrence.soldAt).toLocaleString("en-PH")} | Order #
+                          {occurrence.orderId.slice(0, 8)}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            setSelectedSoldItemKey(null);
+                            setSelectedOrderId(occurrence.orderId);
+                          }}
+                        >
+                          Open order
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={() => {
+                            setOpenOrderEditorOnLoad(true);
+                            setSelectedSoldItemKey(null);
+                            setSelectedOrderId(occurrence.orderId);
+                          }}
+                        >
+                          Edit details
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      <div className="rounded-xl border border-white/10 bg-bg-900/30 p-3">
+                        <div className="text-[11px] uppercase tracking-wide text-white/50">
+                          Sold To
+                        </div>
+                        <div className="mt-1 text-sm text-white/80">
+                          {occurrence.customer_name || "Guest"}
+                        </div>
+                        <div className="text-sm text-white/70">
+                          {occurrence.customer_phone || "-"}
+                        </div>
+                        {occurrence.customer_email ? (
+                          <div className="text-sm text-white/70">
+                            {occurrence.customer_email}
+                          </div>
+                        ) : null}
+                        {occurrence.customer_address !== "-" ? (
+                          <div className="mt-1 text-sm text-white/70">
+                            {occurrence.customer_address}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="rounded-xl border border-white/10 bg-bg-900/30 p-3">
+                        <div className="text-[11px] uppercase tracking-wide text-white/50">
+                          Sale Info
+                        </div>
+                        <div className="mt-1 text-sm text-white/80">
+                          Qty: <span className="text-white">{occurrence.qty}</span>
+                        </div>
+                        <div className="text-sm text-white/80">
+                          Value: <span className="text-white">{peso(occurrence.lineTotal)}</span>
+                        </div>
+                        <div className="text-sm text-white/80">
+                          Payment:{" "}
+                          <span className="text-white">{occurrence.payment_method}</span>
+                        </div>
+                        <div className="text-sm text-white/80">
+                          Channel: <span className="text-white">{occurrence.channel}</span>
+                        </div>
+                        <div className="text-sm text-white/80">
+                          Fulfillment:{" "}
+                          <span className="text-white">{occurrence.shipping_method}</span>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-white/10 bg-bg-900/30 p-3">
+                        <div className="text-[11px] uppercase tracking-wide text-white/50">
+                          Payment Status
+                        </div>
+                        <div className="mt-1 text-sm text-white/80">
+                          {occurrence.payment_status}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 rounded-xl border border-white/10 bg-bg-900/30 p-3">
+                      <div className="text-[11px] uppercase tracking-wide text-white/50">
+                        Sold Together With
+                      </div>
+                      {occurrence.soldWith.length === 0 ? (
+                        <div className="mt-2 text-sm text-white/60">Sold alone.</div>
+                      ) : (
+                        <div className="mt-2 grid gap-2 md:grid-cols-2">
+                          {occurrence.soldWith.map((other) => (
+                            <div
+                              key={`${occurrence.orderId}-${other.title}`}
+                              className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/80"
+                            >
+                              {other.title} x{other.qty}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </DetailsModal>
 
         <DetailsModal
           open={Boolean(selectedDailyDate)}
@@ -1461,36 +2287,85 @@ export default function AdminSalesPage() {
                   (paymentStatus === "PAID" || channel === "POS") &&
                   status !== "VOIDED" &&
                   status !== "CANCELLED";
-                if (!canRevert) return null;
                 const busy = revertingOrderId === String(selectedOrder.id);
                 return (
-                  <div className="flex flex-wrap justify-end gap-2">
-                    <Button
-                      variant="secondary"
-                      disabled={busy}
-                      onClick={() =>
-                        void revertSale(String(selectedOrder.id), { addToCart: true })
-                      }
-                    >
-                      {busy && revertingToCart
-                        ? "Reverting + adding..."
-                        : "Revert sale and add to cart"}
-                    </Button>
-                    <Button
-                      variant="danger"
-                      disabled={busy}
-                      onClick={() => void revertSale(String(selectedOrder.id))}
-                    >
-                      {busy && !revertingToCart ? "Reverting..." : "Revert sale"}
-                    </Button>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap gap-2">
+                      {editingOrderDetails ? (
+                        <>
+                          <Button
+                            variant="secondary"
+                            disabled={savingOrderDetails}
+                            onClick={() => void saveOrderDetails()}
+                          >
+                            {savingOrderDetails ? "Saving..." : "Save details"}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            disabled={savingOrderDetails}
+                            onClick={() => {
+                              setOrderEditDraft(buildOrderEditDraft(selectedOrder));
+                              setEditingOrderDetails(false);
+                              setOrderSaveError(null);
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            setOrderEditDraft(buildOrderEditDraft(selectedOrder));
+                            setEditingOrderDetails(true);
+                            setOrderSaveError(null);
+                          }}
+                        >
+                          Edit sold-to details
+                        </Button>
+                      )}
+                    </div>
+
+                    {canRevert ? (
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <Button
+                          variant="secondary"
+                          disabled={busy || savingOrderDetails}
+                          onClick={() =>
+                            void revertSale(String(selectedOrder.id), { addToCart: true })
+                          }
+                        >
+                          {busy && revertingToCart
+                            ? "Reverting + adding..."
+                            : "Revert sale and add to cart"}
+                        </Button>
+                        <Button
+                          variant="danger"
+                          disabled={busy || savingOrderDetails}
+                          onClick={() => void revertSale(String(selectedOrder.id))}
+                        >
+                          {busy && !revertingToCart ? "Reverting..." : "Revert sale"}
+                        </Button>
+                      </div>
+                    ) : null}
                   </div>
                 );
               })()}
 
+              {orderSaveError ? (
+                <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+                  {orderSaveError}
+                </div>
+              ) : null}
+
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="text-xs text-white/60">
-                    {new Date(selectedOrder.created_at).toLocaleString("en-PH")}
+                    {new Date(
+                      editingOrderDetails && orderEditDraft.soldAt
+                        ? orderEditDraft.soldAt
+                        : selectedOrder.created_at
+                    ).toLocaleString("en-PH")}
                   </div>
                   <div className="mt-1 text-sm text-white/80">
                     Channel: {String(selectedOrder.channel ?? "WEB").toUpperCase()}
@@ -1500,6 +2375,9 @@ export default function AdminSalesPage() {
                   </div>
                   <div className="text-sm text-white/80">
                     Payment: {String(selectedOrder.payment_status ?? "").toUpperCase()}
+                    {selectedOrder.payment_method
+                      ? ` (${String(selectedOrder.payment_method).toUpperCase()})`
+                      : ""}
                   </div>
                 </div>
                 <div className="text-right">
@@ -1510,25 +2388,178 @@ export default function AdminSalesPage() {
                 </div>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
                   <div className="text-[11px] uppercase tracking-wide text-white/50">
-                    Customer
+                    {editingOrderDetails ? "Edit Buyer" : "Customer"}
                   </div>
-                  {(() => {
-                    const ship = buildShippingSummary(selectedOrder);
-                    return (
-                      <>
-                        <div className="mt-1 font-medium">{ship.receiverName}</div>
-                        <div className="text-sm text-white/70">{ship.receiverPhone}</div>
-                        {ship.receiverEmail ? (
-                          <div className="text-sm text-white/70">{ship.receiverEmail}</div>
-                        ) : null}
-                        <div className="mt-1 text-sm text-white/70">{ship.address}</div>
-                      </>
-                    );
-                  })()}
+                  {editingOrderDetails ? (
+                    <div className="mt-2 space-y-3">
+                      <Input
+                        label="Customer name"
+                        value={orderEditDraft.customerName}
+                        onChange={(e) =>
+                          setOrderEditDraft((draft) => ({
+                            ...draft,
+                            customerName: e.target.value,
+                          }))
+                        }
+                      />
+                      <Input
+                        label="Customer phone"
+                        value={orderEditDraft.customerPhone}
+                        onChange={(e) =>
+                          setOrderEditDraft((draft) => ({
+                            ...draft,
+                            customerPhone: e.target.value,
+                          }))
+                        }
+                      />
+                      <Input
+                        label="Customer email"
+                        value={orderEditDraft.customerEmail}
+                        onChange={(e) =>
+                          setOrderEditDraft((draft) => ({
+                            ...draft,
+                            customerEmail: e.target.value,
+                          }))
+                        }
+                      />
+                      <Textarea
+                        label="Address"
+                        value={orderEditDraft.address}
+                        onChange={(e) =>
+                          setOrderEditDraft((draft) => ({
+                            ...draft,
+                            address: e.target.value,
+                          }))
+                        }
+                        className="min-h-[110px]"
+                      />
+                    </div>
+                  ) : (
+                    (() => {
+                      const ship = buildShippingSummary(selectedOrder);
+                      return (
+                        <>
+                          <div className="mt-1 font-medium">{ship.receiverName}</div>
+                          <div className="text-sm text-white/70">{ship.receiverPhone}</div>
+                          {ship.receiverEmail ? (
+                            <div className="text-sm text-white/70">{ship.receiverEmail}</div>
+                          ) : null}
+                          <div className="mt-1 text-sm text-white/70">{ship.address}</div>
+                        </>
+                      );
+                    })()
+                  )}
                 </div>
+
+                <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                  <div className="text-[11px] uppercase tracking-wide text-white/50">
+                    {editingOrderDetails ? "Edit Sale Details" : "Sale Details"}
+                  </div>
+                  {editingOrderDetails ? (
+                    <div className="mt-2 space-y-3">
+                      <Input
+                        label="Sold date and time"
+                        type="datetime-local"
+                        value={orderEditDraft.soldAt}
+                        onChange={(e) =>
+                          setOrderEditDraft((draft) => ({
+                            ...draft,
+                            soldAt: e.target.value,
+                          }))
+                        }
+                      />
+                      <Input
+                        label="Payment method"
+                        value={orderEditDraft.paymentMethod}
+                        onChange={(e) =>
+                          setOrderEditDraft((draft) => ({
+                            ...draft,
+                            paymentMethod: e.target.value,
+                          }))
+                        }
+                      />
+                      <Input
+                        label="Channel"
+                        value={orderEditDraft.channel}
+                        onChange={(e) =>
+                          setOrderEditDraft((draft) => ({
+                            ...draft,
+                            channel: e.target.value,
+                          }))
+                        }
+                      />
+                      <Input
+                        label="Shipping / fulfillment method"
+                        value={orderEditDraft.shippingMethod}
+                        onChange={(e) =>
+                          setOrderEditDraft((draft) => ({
+                            ...draft,
+                            shippingMethod: e.target.value,
+                          }))
+                        }
+                      />
+                      <Textarea
+                        label="Shipping notes"
+                        value={orderEditDraft.notes}
+                        onChange={(e) =>
+                          setOrderEditDraft((draft) => ({
+                            ...draft,
+                            notes: e.target.value,
+                          }))
+                        }
+                      />
+                      <div className="text-xs text-white/50">
+                        Status and totals stay read-only here.
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="mt-1 text-sm text-white/80">
+                        Sold at:{" "}
+                        <span className="text-white">
+                          {new Date(selectedOrder.created_at).toLocaleString("en-PH")}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-sm text-white/80">
+                        Payment method:{" "}
+                        <span className="text-white">
+                          {String(selectedOrder.payment_method ?? "").toUpperCase() || "-"}
+                        </span>
+                      </div>
+                      <div className="text-sm text-white/80">
+                        Channel:{" "}
+                        <span className="text-white">
+                          {String(selectedOrder.channel ?? "WEB").toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="text-sm text-white/80">
+                        Shipping method:{" "}
+                        <span className="text-white">
+                          {String(
+                            mergeShippingDetails(selectedOrder)?.method ??
+                              selectedOrder.shipping_method ??
+                              "-"
+                          ).toUpperCase()}
+                        </span>
+                      </div>
+                      {(() => {
+                        const details = mergeShippingDetails(selectedOrder);
+                        const notes = String(details.notes || details.note || "").trim();
+                        return notes ? (
+                          <div className="mt-1 text-sm text-white/70">{notes}</div>
+                        ) : (
+                          <div className="mt-1 text-sm text-white/60">
+                            No extra shipping notes.
+                          </div>
+                        );
+                      })()}
+                    </>
+                  )}
+                </div>
+
                 <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
                   <div className="text-[11px] uppercase tracking-wide text-white/50">
                     Totals
@@ -1559,10 +2590,46 @@ export default function AdminSalesPage() {
 
               <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
                 <div className="text-[11px] uppercase tracking-wide text-white/50">
-                  Shipping
+                  {editingOrderDetails ? "Shipping Preview" : "Shipping"}
                 </div>
                 {(() => {
-                  const ship = buildShippingSummary(selectedOrder);
+                  const draftOrder = editingOrderDetails
+                    ? {
+                        ...selectedOrder,
+                        customer_name: orderEditDraft.customerName || null,
+                        customer_phone: orderEditDraft.customerPhone || null,
+                        contact: orderEditDraft.customerPhone || null,
+                        address: orderEditDraft.address || null,
+                        payment_method: orderEditDraft.paymentMethod || null,
+                        channel: orderEditDraft.channel || selectedOrder.channel,
+                        shipping_method:
+                          orderEditDraft.shippingMethod || selectedOrder.shipping_method,
+                        shipping_details: {
+                          ...mergeShippingDetails(selectedOrder),
+                          method:
+                            orderEditDraft.shippingMethod || selectedOrder.shipping_method,
+                          receiver_name: orderEditDraft.customerName || null,
+                          receiver_phone: orderEditDraft.customerPhone || null,
+                          phone: orderEditDraft.customerPhone || null,
+                          receiver_email: orderEditDraft.customerEmail || null,
+                          email: orderEditDraft.customerEmail || null,
+                          full_address: orderEditDraft.address || null,
+                          address: orderEditDraft.address || null,
+                          notes: orderEditDraft.notes || null,
+                          pickup_location:
+                            (orderEditDraft.shippingMethod || "").toUpperCase() === "PICKUP"
+                              ? orderEditDraft.address || null
+                              : mergeShippingDetails(selectedOrder).pickup_location,
+                          dropoff_address:
+                            ["LBC", "LALAMOVE"].includes(
+                              (orderEditDraft.shippingMethod || "").toUpperCase()
+                            )
+                              ? orderEditDraft.address || null
+                              : mergeShippingDetails(selectedOrder).dropoff_address,
+                        },
+                      }
+                    : selectedOrder;
+                  const ship = buildShippingSummary(draftOrder);
                   return (
                     <>
                       <div className="mt-1 text-sm text-white/80">

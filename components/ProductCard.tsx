@@ -108,16 +108,26 @@ export type ShopProduct = {
 type FeatureTag = {
   key: ProductSpecialTag;
   label: string;
+  compactLabel: string;
   toneClass: string;
 };
 
 const FEATURE_TAG_BASE_CLASS =
   "inline-flex items-center gap-1.5 rounded-full border font-black uppercase text-white ring-1 ring-inset ring-white/15 backdrop-blur-sm";
+const FEATURE_TAG_COMPACT_LABELS: Record<ProductSpecialTag, string> = {
+  exclusive: "Exclusive",
+  limited_edition: "Limited",
+  chase: "Chase",
+  rare: "Rare",
+  new_release: "New",
+  discontinued: "Phased Out",
+};
 
 function getFeatureTags(product: ShopProduct): FeatureTag[] {
   return normalizeProductSpecialTags(product.special_tags).map((key) => ({
     key,
     label: getProductSpecialTagLabel(key),
+    compactLabel: FEATURE_TAG_COMPACT_LABELS[key],
     toneClass: getProductSpecialTagStyle(key).displayClassName,
   }));
 }
@@ -458,17 +468,21 @@ export default function ProductCard({
   function renderFeatureTagOverlay(mode: "mobile" | "desktop") {
     if (!visibleFeatureTags.length) return null;
 
+    const isCompactGridBadge = mode === "desktop" && wideView;
+    const renderedFeatureTags = isCompactGridBadge
+      ? visibleFeatureTags.slice(0, 1)
+      : visibleFeatureTags;
     const stackClassName =
       mode === "mobile"
-        ? "absolute left-3 top-3 z-10 flex max-w-[76%] flex-col items-start gap-2"
+        ? "absolute left-3 top-3 z-10 flex max-w-[74%] flex-col items-start gap-2"
         : wideView
-          ? "absolute left-2 top-2 z-10 flex max-w-[78%] flex-col items-start gap-1.5"
+          ? "absolute left-2 top-2 z-10 flex max-w-[72%] items-start"
           : "absolute left-3 top-3 z-10 flex max-w-[74%] flex-col items-start gap-2";
     const badgeClassName =
       mode === "mobile"
-        ? "px-3 py-1.5 text-[10px] leading-none tracking-[0.18em]"
+        ? "max-w-full px-3.5 py-1.5 text-[10px] leading-none tracking-[0.16em] sm:px-4 sm:py-2 sm:text-[11px]"
         : wideView
-          ? "px-2.5 py-1.5 text-[9px] leading-none tracking-[0.14em]"
+          ? "max-w-full whitespace-nowrap px-2.5 py-1 text-[8px] leading-none tracking-[0.08em]"
           : "px-3 py-1.5 text-[10px] leading-none tracking-[0.16em] sm:px-3.5 sm:py-2 sm:text-[11px]";
     const dotClassName =
       mode === "mobile"
@@ -479,20 +493,24 @@ export default function ProductCard({
 
     return (
       <div className={stackClassName}>
-        {visibleFeatureTags.map((tag) => (
+        {renderedFeatureTags.map((tag) => (
           <span
             key={tag.key}
             className={[FEATURE_TAG_BASE_CLASS, badgeClassName, tag.toneClass].join(
               " "
             )}
+            title={tag.label}
+            aria-label={tag.label}
           >
-            <span
-              className={[
-                dotClassName,
-                "rounded-full bg-white/95 shadow-[0_0_0_1px_rgba(255,255,255,0.42)]",
-              ].join(" ")}
-            />
-            {tag.label}
+            {isCompactGridBadge ? null : (
+              <span
+                className={[
+                  dotClassName,
+                  "rounded-full bg-white/95 shadow-[0_0_0_1px_rgba(255,255,255,0.42)]",
+                ].join(" ")}
+              />
+            )}
+            {isCompactGridBadge ? tag.compactLabel : tag.label}
           </span>
         ))}
       </div>
