@@ -22,7 +22,13 @@ const BRAND_ALIASES: Array<{ canonical: string; aliases: string[] }> = [
   { canonical: "Hot Wheels", aliases: ["hot wheels", "hotwheels"] },
   {
     canonical: "Tomica Limited Vintage Neo",
-    aliases: ["tomica limited vintage neo", "tlvn", "tlv-n"],
+    aliases: [
+      "tomica limited vintage neo",
+      "tlvn",
+      "tlv-n",
+      "tomytec",
+      "tomy tec",
+    ],
   },
   {
     canonical: "Tomica Limited Vintage",
