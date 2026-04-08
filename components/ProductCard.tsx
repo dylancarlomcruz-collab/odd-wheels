@@ -5,7 +5,11 @@ import { createPortal } from "react-dom";
 import { ChevronDown, ChevronLeft, ShoppingCart, X } from "lucide-react";
 import { recordRecentView } from "@/lib/recentViews";
 import { normalizeSearchTerm } from "@/lib/search";
-import { formatConditionLabel } from "@/lib/conditions";
+import {
+  formatConditionLabel,
+  isIssueCondition,
+  isNearMintCondition,
+} from "@/lib/conditions";
 import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
 import { applyImageFallback, buildSrcSet, getOptimizedImageUrl } from "@/lib/imageUrl";
 import { getOptionPricing, getProductEffectiveRange } from "@/lib/pricing";
@@ -49,7 +53,15 @@ const COMPACT_CONDITION_LABELS: Record<string, string> = {
   sealed: "SEALED",
   resealed: "RESEAL",
   near_mint: "NEAR MINT",
+  sealed_near_mint_box: "NM BOX",
+  sealed_near_mint_blister: "NM BLIST",
+  sealed_not_mint_box: "NOTM BOX",
+  sealed_not_mint_blister: "NOTM BLST",
   unsealed: "UNSEAL",
+  unsealed_no_box: "NO BOX",
+  unsealed_no_acrylic: "NO ACRYL",
+  unsealed_near_mint_box: "U-NM BOX",
+  unsealed_near_mint_blister: "U-NM BL",
   with_issues: "ISSUES",
   sealed_blister: "BLISTER",
   unsealed_blister: "BLISTER",
@@ -389,8 +401,8 @@ export default function ProductCard({
   const publicNotes = String(previewSelected?.public_notes ?? "").trim();
   const issueNotes = String(previewSelected?.issue_notes ?? "").trim();
   const unifiedNotes = publicNotes || issueNotes;
-  const isNearMint = previewSelected?.condition === "near_mint";
-  const isWithIssues = previewSelected?.condition === "with_issues";
+  const isNearMint = isNearMintCondition(previewSelected?.condition);
+  const isWithIssues = isIssueCondition(previewSelected?.condition);
   const showNoteIndicator = isNearMint || isWithIssues;
   const noteIndicatorTone = isWithIssues
     ? "bg-red-400"

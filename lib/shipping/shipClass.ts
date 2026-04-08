@@ -13,6 +13,9 @@ export function shipClassFromBrand(rawBrand: string | null | undefined): ShipCla
 
   if (lower.includes("mini gt")) return "MINI_GT";
   if (lower.includes("kaido")) return "KAIDO";
+  if (lower.includes("tomica limited vintage neo")) {
+    return "TOMICA_LIMITED_VINTAGE_NEO";
+  }
   if (lower.includes("tomica")) return "TOMICA";
   if (lower.includes("hot wheels") || lower.includes("hotwheels")) {
     return "HOT_WHEELS_MAINLINE";

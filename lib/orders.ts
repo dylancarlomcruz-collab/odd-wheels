@@ -5,6 +5,7 @@ import { insertSingleRowWithSchemaFallback } from "@/lib/supabase/insertWithSche
 import type { CartLine } from "@/hooks/useCart";
 import { resolveEffectivePrice } from "@/lib/pricing";
 import { protectorUnitFee } from "@/lib/addons";
+import { notifyAdminPushEvent } from "@/lib/push/adminClient";
 
 export type CreateOrderInput = {
   userId: string;
@@ -275,6 +276,15 @@ export async function createOrderFromCart(
     await supabase.rpc("fn_auto_approve_order", { p_order_id: order.id });
   } catch (err) {
     console.error("Auto-approve failed:", err);
+  }
+
+  try {
+    await notifyAdminPushEvent({
+      event: "order_created",
+      orderId: String(order.id),
+    });
+  } catch (err) {
+    console.error("Admin push notification failed:", err);
   }
 
   return order as any;

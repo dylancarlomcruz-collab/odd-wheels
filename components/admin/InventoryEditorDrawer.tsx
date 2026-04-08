@@ -10,11 +10,14 @@ import { Badge } from "@/components/ui/Badge";
 import { ProductSpecialTagPicker } from "@/components/admin/ProductSpecialTagPicker";
 import { supabase } from "@/lib/supabase/browser";
 import { toast } from "@/components/ui/toast";
+import { getDefaultVariantPriceNumberForBrand } from "@/lib/brandDefaults";
 import { shipClassFromBrand } from "@/lib/shipping/shipClass";
 import {
   conditionSortOrder,
   formatConditionLabel,
   isBlisterCondition,
+  isLoosePackagingCondition,
+  isNearMintCondition,
 } from "@/lib/conditions";
 import {
   applyImageCrop,
@@ -50,8 +53,16 @@ const CONDITION_OPTIONS: Array<VariantDraft["condition"]> = [
   "sealed",
   "resealed",
   "near_mint",
+  "sealed_near_mint_box",
+  "sealed_not_mint_box",
   "sealed_blister",
+  "sealed_near_mint_blister",
+  "sealed_not_mint_blister",
+  "unsealed_no_box",
+  "unsealed_near_mint_box",
+  "unsealed_no_acrylic",
   "unsealed_blister",
+  "unsealed_near_mint_blister",
   "blistered",
   "unsealed",
   "with_issues",
@@ -65,6 +76,7 @@ const SHIP_OPTIONS = [
   "TRUCKS",
   "BLISTER",
   "TOMICA",
+  "TOMICA_LIMITED_VINTAGE_NEO",
   "HOT_WHEELS_MAINLINE",
   "HOT_WHEELS_PREMIUM",
   "LOOSE_NO_BOX",
@@ -709,8 +721,32 @@ export function InventoryEditorDrawer({
     const hasSealedBlister = baseList.some(
       (v) => v.condition === "sealed_blister"
     );
+    const hasSealedNearMintBox = baseList.some(
+      (v) => v.condition === "sealed_near_mint_box"
+    );
+    const hasSealedNotMintBox = baseList.some(
+      (v) => v.condition === "sealed_not_mint_box"
+    );
+    const hasSealedNearMintBlister = baseList.some(
+      (v) => v.condition === "sealed_near_mint_blister"
+    );
+    const hasSealedNotMintBlister = baseList.some(
+      (v) => v.condition === "sealed_not_mint_blister"
+    );
+    const hasUnsealedNoBox = baseList.some(
+      (v) => v.condition === "unsealed_no_box"
+    );
+    const hasUnsealedNoAcrylic = baseList.some(
+      (v) => v.condition === "unsealed_no_acrylic"
+    );
+    const hasUnsealedNearMintBox = baseList.some(
+      (v) => v.condition === "unsealed_near_mint_box"
+    );
     const hasUnsealedBlister = baseList.some(
       (v) => v.condition === "unsealed_blister"
+    );
+    const hasUnsealedNearMintBlister = baseList.some(
+      (v) => v.condition === "unsealed_near_mint_blister"
     );
     const hasBlistered = baseList.some((v) => v.condition === "blistered");
     const nextCondition: VariantDraft["condition"] =
@@ -718,10 +754,26 @@ export function InventoryEditorDrawer({
         ? "with_issues"
         : hasSealed
           ? "unsealed"
-          : hasUnsealed
-            ? "sealed"
+            : hasUnsealed
+              ? "sealed"
+            : hasSealedNearMintBox
+              ? "sealed_near_mint_box"
+            : hasSealedNotMintBox
+              ? "sealed_not_mint_box"
+            : hasUnsealedNoBox
+              ? "unsealed_no_box"
+            : hasUnsealedNoAcrylic
+              ? "unsealed_no_acrylic"
+            : hasUnsealedNearMintBox
+              ? "unsealed_near_mint_box"
             : hasSealedBlister && hasUnsealedBlister
               ? "with_issues"
+              : hasSealedNearMintBlister
+                ? "sealed_near_mint_blister"
+              : hasSealedNotMintBlister
+                ? "sealed_not_mint_blister"
+              : hasUnsealedNearMintBlister
+                ? "unsealed_near_mint_blister"
               : hasSealedBlister
                 ? "unsealed_blister"
                 : hasUnsealedBlister
@@ -733,7 +785,9 @@ export function InventoryEditorDrawer({
       (base?.ship_class as string | null) ?? shipClassFromBrand(brand);
     const nextShipClass = isBlisterCondition(nextCondition)
       ? "BLISTER"
-      : baseShipClass;
+      : isLoosePackagingCondition(nextCondition)
+        ? "LOOSE_NO_BOX"
+        : baseShipClass;
     setVariants((prev) => [
         ...prev,
       {
@@ -741,7 +795,7 @@ export function InventoryEditorDrawer({
         condition: nextCondition,
         barcode: base?.barcode ?? null,
         cost: base?.cost ?? null,
-        price: 0,
+        price: getDefaultVariantPriceNumberForBrand(brand),
         qty: base?.qty ?? 1,
         ship_class: nextShipClass ?? null,
         issue_notes: null,
@@ -852,7 +906,7 @@ export function InventoryEditorDrawer({
                   allowed_lbc_packages: normalizeRestrictionList(v.allowed_lbc_packages),
                   allowed_jnt_pouches: normalizeRestrictionList(v.allowed_jnt_pouches),
                   public_notes:
-                    v.condition === "near_mint"
+                    isNearMintCondition(v.condition)
                       ? v.public_notes || "Near Mint Condition"
                       : v.public_notes || null,
                   issue_notes: null,
@@ -909,7 +963,7 @@ export function InventoryEditorDrawer({
               allowed_lbc_packages: normalizeRestrictionList(v.allowed_lbc_packages),
               allowed_jnt_pouches: normalizeRestrictionList(v.allowed_jnt_pouches),
             public_notes:
-              v.condition === "near_mint"
+              isNearMintCondition(v.condition)
                 ? v.public_notes || "Near Mint Condition"
                 : v.public_notes || null,
             issue_notes: null,
@@ -1400,16 +1454,19 @@ export function InventoryEditorDrawer({
                                 const nextCondition = e.target
                                   .value as VariantDraft["condition"];
                                 const nextNotes =
-                                  nextCondition === "near_mint"
+                                  isNearMintCondition(nextCondition)
                                     ? v.public_notes || "Near Mint Condition"
-                                    : v.condition === "near_mint" &&
+                                    : isNearMintCondition(v.condition) &&
                                         v.public_notes === "Near Mint Condition"
                                       ? null
                                       : v.public_notes ?? null;
                                 const nextShipClass =
                                   isBlisterCondition(nextCondition)
                                     ? "BLISTER"
-                                    : v.ship_class === "BLISTER"
+                                    : isLoosePackagingCondition(nextCondition)
+                                      ? "LOOSE_NO_BOX"
+                                      : v.ship_class === "BLISTER" ||
+                                          v.ship_class === "LOOSE_NO_BOX"
                                       ? shipClassFromBrand(brand)
                                       : v.ship_class;
                                 updateVariant(v.id, {
@@ -1508,7 +1565,9 @@ export function InventoryEditorDrawer({
                           <option value="">(none)</option>
                           {SHIP_OPTIONS.map((opt) => (
                             <option key={opt} value={opt}>
-                              {opt}
+                              {opt === "TOMICA_LIMITED_VINTAGE_NEO"
+                                ? "Tomica Limited Vintage Neo"
+                                : opt}
                             </option>
                           ))}
                         </Select>

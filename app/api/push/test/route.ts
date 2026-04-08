@@ -15,11 +15,21 @@ export async function POST(req: Request) {
   const authResult = await requireUserRequest(req);
   if ("error" in authResult) return authResult.error;
 
-  const result = await sendPushToUser(authResult.userId, {
-    title: "Odd Wheels notifications are on",
-    body: "You will now receive order updates on this device.",
-    url: "/orders",
-    tag: `push-test-${authResult.userId}`,
+  const { sb, userId } = authResult;
+  const { data: profile } = await sb
+    .from("profiles")
+    .select("role")
+    .eq("id", userId)
+    .maybeSingle();
+  const isAdmin = String(profile?.role ?? "").trim().toLowerCase() === "admin";
+
+  const result = await sendPushToUser(userId, {
+    title: isAdmin ? "Odd Wheels admin alerts are on" : "Odd Wheels notifications are on",
+    body: isAdmin
+      ? "You will now receive cart, order, and purchase alerts on this device."
+      : "You will now receive order updates on this device.",
+    url: isAdmin ? "/admin/orders" : "/orders",
+    tag: `push-test-${userId}`,
   });
 
   if (!result.ok) {

@@ -7,7 +7,11 @@ import { useAllOrders } from "@/hooks/useAllOrders";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
-import { formatConditionLabel } from "@/lib/conditions";
+import {
+  formatConditionLabel,
+  isIssueCondition,
+  isNearMintCondition,
+} from "@/lib/conditions";
 import { toast } from "@/components/ui/toast";
 
 function parseJsonMaybe(v: any) {
@@ -277,8 +281,8 @@ export default function CashierOrdersPage() {
                             const itemCondition = String(
                               it?.condition ?? it?.product_variant?.condition ?? ""
                             ).toLowerCase();
-                            const isNearMint = itemCondition === "near_mint";
-                            const isWithIssues = itemCondition === "with_issues";
+                            const isNearMint = isNearMintCondition(itemCondition);
+                            const isWithIssues = isIssueCondition(itemCondition);
                             const notes = String(
                               it?.public_notes ??
                                 it?.issue_notes ??

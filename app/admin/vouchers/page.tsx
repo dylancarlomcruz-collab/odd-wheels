@@ -62,6 +62,7 @@ const SHIP_CLASS_OPTIONS: ShipClass[] = [
   "TRUCKS",
   "BLISTER",
   "TOMICA",
+  "TOMICA_LIMITED_VINTAGE_NEO",
   "HOT_WHEELS_MAINLINE",
   "HOT_WHEELS_PREMIUM",
   "LOOSE_NO_BOX",
@@ -88,6 +89,8 @@ function formatShipClassLabel(value: string) {
       return "Hot Wheels Premium";
     case "LOOSE_NO_BOX":
       return "Loose (No Box)";
+    case "TOMICA_LIMITED_VINTAGE_NEO":
+      return "Tomica Limited Vintage Neo";
     default:
       return value.replace(/_/g, " ");
   }

@@ -9,7 +9,11 @@ import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { formatPHP } from "@/lib/money";
-import { formatConditionLabel } from "@/lib/conditions";
+import {
+  formatConditionLabel,
+  isIssueCondition,
+  isNearMintCondition,
+} from "@/lib/conditions";
 import { supabase } from "@/lib/supabase/browser";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
@@ -1214,15 +1218,15 @@ function OrderDetailContent() {
                           ).trim();
                           if (!noteValue) return null;
                           const noteTone =
-                            String(it.condition) === "with_issues"
+                            isIssueCondition(it.condition)
                               ? "text-red-200/80"
-                              : String(it.condition) === "near_mint"
+                              : isNearMintCondition(it.condition)
                                 ? "text-amber-200/80"
                                 : "text-white/70";
                           const indicatorTone =
-                            String(it.condition) === "with_issues"
+                            isIssueCondition(it.condition)
                               ? "bg-red-400"
-                              : String(it.condition) === "near_mint"
+                              : isNearMintCondition(it.condition)
                                 ? "bg-amber-400"
                                 : "";
                           const showIndicator = indicatorTone.length > 0;

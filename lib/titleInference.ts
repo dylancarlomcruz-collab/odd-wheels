@@ -20,6 +20,14 @@ const BRAND_ALIASES: Array<{ canonical: string; aliases: string[] }> = [
   { canonical: "POP RACE", aliases: ["pop race", "poprace"] },
   { canonical: "BMC", aliases: ["bmc"] },
   { canonical: "Hot Wheels", aliases: ["hot wheels", "hotwheels"] },
+  {
+    canonical: "Tomica Limited Vintage Neo",
+    aliases: ["tomica limited vintage neo", "tlvn", "tlv-n"],
+  },
+  {
+    canonical: "Tomica Limited Vintage",
+    aliases: ["tomica limited vintage", "tlv"],
+  },
   { canonical: "Tomica", aliases: ["tomica"] },
   { canonical: "Focal Horizon", aliases: ["focal horizon", "focalhorizon"] },
   { canonical: "Street Warrior", aliases: ["street warrior", "street warriro", "streetwarrior"] },

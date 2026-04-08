@@ -72,9 +72,10 @@ values
   ('BMC', 6, true),
   ('Hot Wheels', 7, true),
   ('Tomica', 8, true),
-  ('Focal Horizon', 9, true),
-  ('Street Warrior', 10, true),
-  ('GCD', 11, true)
+  ('Tomica Limited Vintage Neo', 9, true),
+  ('Focal Horizon', 10, true),
+  ('Street Warrior', 11, true),
+  ('GCD', 12, true)
 on conflict (name) do update set
   sort_order = excluded.sort_order,
   is_active = excluded.is_active;
@@ -199,14 +200,14 @@ create table if not exists public.products (
 create table if not exists public.product_variants (
   id uuid primary key default gen_random_uuid(),
   product_id uuid not null references public.products(id) on delete cascade,
-  condition text not null check (condition in ('sealed','resealed','near_mint','unsealed','with_issues','blistered','sealed_blister','unsealed_blister')),
+  condition text not null check (condition in ('sealed','resealed','near_mint','sealed_near_mint_box','sealed_near_mint_blister','sealed_not_mint_box','sealed_not_mint_blister','unsealed','unsealed_no_box','unsealed_no_acrylic','unsealed_near_mint_box','unsealed_near_mint_blister','with_issues','blistered','sealed_blister','unsealed_blister')),
   issue_notes text,
   cost numeric,
   price numeric not null,
   sale_price numeric,
   discount_percent numeric,
   qty int not null default 0 check (qty >= 0),
-  ship_class text default 'MINI_GT' check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','TRUCKS','BLISTER','TOMICA','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE','FIGURES_DIORAMA')),
+  ship_class text default 'MINI_GT' check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','TRUCKS','BLISTER','TOMICA','TOMICA_LIMITED_VINTAGE_NEO','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE','FIGURES_DIORAMA')),
   allowed_couriers text[],
   allowed_lbc_packages text[],
   allowed_jnt_pouches text[],
@@ -214,6 +215,56 @@ create table if not exists public.product_variants (
 );
 
 create index if not exists idx_variants_product on public.product_variants(product_id);
+
+alter table public.product_variants
+  drop constraint if exists product_variants_ship_class_check;
+
+alter table public.product_variants
+  add constraint product_variants_ship_class_check
+  check (
+    ship_class in (
+      'MINI_GT',
+      'KAIDO',
+      'POPRACE',
+      'ACRYLIC_TRUE_SCALE',
+      'TRUCKS',
+      'BLISTER',
+      'TOMICA',
+      'TOMICA_LIMITED_VINTAGE_NEO',
+      'HOT_WHEELS_MAINLINE',
+      'HOT_WHEELS_PREMIUM',
+      'LOOSE_NO_BOX',
+      'LALAMOVE',
+      'FIGURES_DIORAMA'
+    )
+  );
+
+-- Refresh condition constraint for existing projects when new condition values are added.
+alter table public.product_variants
+  drop constraint if exists product_variants_condition_check;
+
+alter table public.product_variants
+  add constraint product_variants_condition_check
+  check (
+    condition in (
+      'sealed',
+      'resealed',
+      'near_mint',
+      'sealed_near_mint_box',
+      'sealed_near_mint_blister',
+      'sealed_not_mint_box',
+      'sealed_not_mint_blister',
+      'unsealed',
+      'unsealed_no_box',
+      'unsealed_no_acrylic',
+      'unsealed_near_mint_box',
+      'unsealed_near_mint_blister',
+      'with_issues',
+      'blistered',
+      'sealed_blister',
+      'unsealed_blister'
+    )
+  );
 
 -- 7) Cart items
 create table if not exists public.cart_items (
@@ -714,14 +765,14 @@ drop policy if exists "product clicks read" on public.product_clicks;
 create policy "product clicks read" on public.product_clicks
 for select using (true);
 
-create or replace function public.increment_product_click(product_id uuid)
+create or replace function public.increment_product_click(p_product_id uuid)
 returns void
 language plpgsql
 security definer
 as $$
 begin
   insert into public.product_clicks (product_id, clicks, last_clicked_at)
-  values (product_id, 1, now())
+  values (p_product_id, 1, now())
   on conflict (product_id)
   do update set
     clicks = public.product_clicks.clicks + 1,

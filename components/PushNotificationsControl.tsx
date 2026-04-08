@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { useProfile } from "@/hooks/useProfile";
 import { toast } from "@/components/ui/toast";
 import {
   WEB_PUSH_PUBLIC_KEY,
@@ -58,6 +59,7 @@ function getPlatformLabel() {
 
 export function PushNotificationsControl() {
   const { user, session } = useAuth();
+  const { profile } = useProfile();
   const [state, setState] = React.useState<NotificationState>("checking");
   const [permission, setPermission] =
     React.useState<NotificationPermission>("default");
@@ -75,6 +77,18 @@ export function PushNotificationsControl() {
       Authorization: `Bearer ${token}`,
     };
   }, [session?.access_token]);
+
+  const isAdmin = profile?.role === "admin";
+  const notificationLabel = isAdmin ? "Admin alerts" : "Notifications";
+  const notificationDescription = isAdmin
+    ? "Cart, order, and purchase alerts for this admin account."
+    : "Order updates for this device after you sign in.";
+  const signInMessage = isAdmin
+    ? "Sign in first so admin alerts can be tied to your account."
+    : "Sign in first so order updates can be tied to your account.";
+  const enabledMessage = isAdmin
+    ? "Admin alerts are enabled on this device."
+    : "Order notifications are enabled on this device.";
 
   const refreshState = React.useCallback(async () => {
     if (typeof window === "undefined") return;
@@ -246,7 +260,7 @@ export function PushNotificationsControl() {
       setState("enabled");
       toast({
         intent: "success",
-        message: "Order notifications are enabled on this device.",
+        message: enabledMessage,
       });
     } catch (error: any) {
       const normalized = normalizePushErrorMessage(error?.message);
@@ -263,7 +277,7 @@ export function PushNotificationsControl() {
     } finally {
       setBusy(false);
     }
-  }, [authHeaders, refreshState, state, user]);
+  }, [authHeaders, enabledMessage, refreshState, state, user]);
 
   const disableNotifications = React.useCallback(async () => {
     if (!authHeaders) {
@@ -358,10 +372,10 @@ export function PushNotificationsControl() {
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-medium text-white">
             <Bell className="h-4 w-4" />
-            Notifications
+            {notificationLabel}
           </div>
           <div className="mt-1 text-xs text-white/60">
-            Order updates for this device after you sign in.
+            {notificationDescription}
           </div>
         </div>
         <span
@@ -378,7 +392,7 @@ export function PushNotificationsControl() {
 
       <div className="mt-3 space-y-2 text-xs text-white/65">
         {!user ? (
-          <div>Sign in first so order updates can be tied to your account.</div>
+          <div>{signInMessage}</div>
         ) : null}
         {disabledByServer ? (
           <div>Push keys are not configured on this server yet.</div>

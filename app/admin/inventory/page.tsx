@@ -22,11 +22,16 @@ import {
   normalizeLookupField,
   normalizeTitleBrandAliases,
 } from "@/lib/titleInference";
+import { getDefaultVariantPriceForBrand } from "@/lib/brandDefaults";
 import { formatPHP } from "@/lib/money";
 import { toast } from "@/components/ui/toast";
 import {
+  ALL_VARIANT_CONDITIONS,
   formatConditionLabel,
   isBlisterCondition,
+  isIssueCondition,
+  isLoosePackagingCondition,
+  isNearMintCondition,
 } from "@/lib/conditions";
 import { isLalamoveOnlyShipClass } from "@/lib/shipping/shipClass";
 import {
@@ -74,7 +79,15 @@ type Variant = {
     | "sealed"
     | "resealed"
     | "near_mint"
+    | "sealed_near_mint_box"
+    | "sealed_near_mint_blister"
+    | "sealed_not_mint_box"
+    | "sealed_not_mint_blister"
     | "unsealed"
+    | "unsealed_no_box"
+    | "unsealed_no_acrylic"
+    | "unsealed_near_mint_box"
+    | "unsealed_near_mint_blister"
     | "with_issues"
     | "blistered"
     | "sealed_blister"
@@ -99,6 +112,7 @@ type ShipClass =
   | "TRUCKS"
   | "BLISTER"
   | "TOMICA"
+  | "TOMICA_LIMITED_VINTAGE_NEO"
   | "HOT_WHEELS_MAINLINE"
   | "HOT_WHEELS_PREMIUM"
   | "LOOSE_NO_BOX"
@@ -190,16 +204,8 @@ type UploadCandidate = {
   algo_distances?: Record<string, number>;
 };
 
-const BULK_CONDITIONS: VariantCondition[] = [
-  "sealed",
-  "resealed",
-  "near_mint",
-  "unsealed",
-  "with_issues",
-  "blistered",
-  "sealed_blister",
-  "unsealed_blister",
-];
+const BULK_CONDITIONS: VariantCondition[] = [...ALL_VARIANT_CONDITIONS];
+const CONDITION_SELECT_OPTIONS: VariantCondition[] = [...ALL_VARIANT_CONDITIONS];
 
 const BULK_SHIP_CLASS_FILTER_OPTIONS: Array<{ value: ShipClass; label: string }> = [
   { value: "MINI_GT", label: "Mini GT" },
@@ -209,6 +215,7 @@ const BULK_SHIP_CLASS_FILTER_OPTIONS: Array<{ value: ShipClass; label: string }>
   { value: "TRUCKS", label: "Trucks" },
   { value: "BLISTER", label: "Blister" },
   { value: "TOMICA", label: "Tomica" },
+  { value: "TOMICA_LIMITED_VINTAGE_NEO", label: "Tomica Limited Vintage Neo" },
   { value: "HOT_WHEELS_MAINLINE", label: "Hot Wheels Mainline" },
   { value: "HOT_WHEELS_PREMIUM", label: "Hot Wheels Premium" },
   { value: "LOOSE_NO_BOX", label: "Loose / No Box" },
@@ -221,7 +228,9 @@ const DEFAULT_COST_BY_SHIP_CLASS: Partial<Record<ShipClass, string>> = {
   MINI_GT: "450",
   POPRACE: "500",
   KAIDO: "500",
+  TOMICA_LIMITED_VINTAGE_NEO: "700",
 };
+const DEFAULT_BRAND_SUGGESTIONS = ["Tomica Limited Vintage Neo"];
 
 const WARM_HASH_DEFAULT_IMAGES = 8;
 const WARM_HASH_DEFAULT_PRODUCTS = 20;
@@ -452,6 +461,29 @@ function normalizeBulkCondition(
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
   if (!cleaned) return fallback;
+  const aliasMap: Partial<Record<string, VariantCondition>> = {
+    nm_box: "sealed_near_mint_box",
+    near_mint_box: "sealed_near_mint_box",
+    sealed_nm_box: "sealed_near_mint_box",
+    sealed_near_mint_box: "sealed_near_mint_box",
+    unsealed_nm_box: "unsealed_near_mint_box",
+    unsealed_near_mint_box: "unsealed_near_mint_box",
+    unsealed_no_box: "unsealed_no_box",
+    no_box: "unsealed_no_box",
+    nm_blister: "sealed_near_mint_blister",
+    near_mint_blister: "sealed_near_mint_blister",
+    sealed_nm_blister: "sealed_near_mint_blister",
+    sealed_near_mint_blister: "sealed_near_mint_blister",
+    unsealed_nm_blister: "unsealed_near_mint_blister",
+    unsealed_near_mint_blister: "unsealed_near_mint_blister",
+    unsealed_no_acrylic: "unsealed_no_acrylic",
+    no_acrylic: "unsealed_no_acrylic",
+    not_mint_box: "sealed_not_mint_box",
+    sealed_not_mint_box: "sealed_not_mint_box",
+    not_mint_blister: "sealed_not_mint_blister",
+    sealed_not_mint_blister: "sealed_not_mint_blister",
+  };
+  if (aliasMap[cleaned]) return aliasMap[cleaned]!;
   const match = BULK_CONDITIONS.find((value) => value === cleaned);
   return match ?? fallback;
 }
@@ -571,6 +603,10 @@ function getDefaultCostForShipClass(value: ShipClass | null | undefined) {
   return DEFAULT_COST_BY_SHIP_CLASS[value] ?? "";
 }
 
+function getDefaultPriceForBrand(value: string | null | undefined) {
+  return getDefaultVariantPriceForBrand(value);
+}
+
 function mergeBrandSuggestions(
   current: string[],
   nextValues: Array<string | null | undefined>
@@ -617,14 +653,11 @@ function VariantDraftPanel({
           onChange={() => {}}
           disabled
         >
-          <option value="sealed">Sealed</option>
-          <option value="resealed">Resealed</option>
-          <option value="near_mint">Near Mint</option>
-          <option value="sealed_blister">Sealed blister</option>
-          <option value="unsealed">Unsealed</option>
-          <option value="unsealed_blister">Unsealed blister</option>
-          <option value="blistered">Blistered</option>
-          <option value="with_issues">With Issues</option>
+          {CONDITION_SELECT_OPTIONS.map((conditionOption) => (
+            <option key={conditionOption} value={conditionOption}>
+              {formatConditionLabel(conditionOption)}
+            </option>
+          ))}
         </Select>
 
         <Select
@@ -640,6 +673,9 @@ function VariantDraftPanel({
           <option value="TRUCKS">Trucks</option>
           <option value="BLISTER">Blister</option>
           <option value="TOMICA">Tomica</option>
+          <option value="TOMICA_LIMITED_VINTAGE_NEO">
+            Tomica Limited Vintage Neo
+          </option>
           <option value="HOT_WHEELS_MAINLINE">Hot Wheels Mainline</option>
           <option value="HOT_WHEELS_PREMIUM">Hot Wheels Premium</option>
           <option value="LOOSE_NO_BOX">Loose (No Box)</option>
@@ -732,7 +768,15 @@ function resolveNormalizedTitle(current: string, incoming: string | null | undef
 }
 
 function brandFromNormalizedTitle(titleValue: string) {
-  return /\bKaido\s+House\b/i.test(titleValue) ? "Kaido House" : null;
+  if (
+    /\bTomica\s+Limited\s+Vintage\s+Neo\b/i.test(titleValue) ||
+    /\bTLVN\b/i.test(titleValue) ||
+    /\bTLV-N\b/i.test(titleValue)
+  ) {
+    return "Tomica Limited Vintage Neo";
+  }
+  if (/\bKaido\s+House\b/i.test(titleValue)) return "Kaido House";
+  return null;
 }
 
 export default function AdminInventoryPage() {
@@ -798,6 +842,8 @@ export default function AdminInventoryPage() {
   const conditionTouchedRef = React.useRef(false);
   const costTouchedRef = React.useRef(false);
   const lastAutoCostRef = React.useRef("");
+  const priceTouchedRef = React.useRef(false);
+  const lastAutoPriceRef = React.useRef("");
   const titleEditedRef = React.useRef(false);
   const lastAutoTitleRef = React.useRef("");
   const titleCommaStageRef = React.useRef(0);
@@ -1200,6 +1246,47 @@ export default function AdminInventoryPage() {
     setCost("");
   }
 
+  function applyDefaultPriceForBrand(
+    nextBrand: string | null | undefined,
+    options?: { force?: boolean; currentPrice?: string }
+  ) {
+    const nextDefaultPrice = getDefaultPriceForBrand(nextBrand);
+    const currentPrice = String(options?.currentPrice ?? price).trim();
+    const previousAutoPrice = lastAutoPriceRef.current;
+    const shouldApplyDefault =
+      options?.force ||
+      !priceTouchedRef.current ||
+      !currentPrice ||
+      currentPrice === previousAutoPrice;
+
+    if (!shouldApplyDefault) return;
+
+    priceTouchedRef.current = false;
+    lastAutoPriceRef.current = nextDefaultPrice;
+    setPrice(nextDefaultPrice);
+  }
+
+  function handlePriceChange(nextValue: string) {
+    priceTouchedRef.current = true;
+    setPrice(nextValue.replace(/[^0-9.]/g, ""));
+  }
+
+  function handlePriceInputClick() {
+    const currentPrice = price.trim();
+    if (!currentPrice) return;
+
+    const defaultPrice = getDefaultPriceForBrand(brand);
+    if (
+      currentPrice !== lastAutoPriceRef.current &&
+      currentPrice !== defaultPrice
+    ) {
+      return;
+    }
+
+    priceTouchedRef.current = true;
+    setPrice("");
+  }
+
   React.useEffect(() => {
     if (isBlisterCondition(condition)) return;
     if (isLalamoveOnlyShipClass(shipClass)) return;
@@ -1223,6 +1310,10 @@ export default function AdminInventoryPage() {
   React.useEffect(() => {
     applyDefaultCostForShipClass(shipClass);
   }, [shipClass]);
+
+  React.useEffect(() => {
+    applyDefaultPriceForBrand(brand);
+  }, [brand]);
 
   React.useEffect(() => {
     if (!filteredBrandSuggestions.length) {
@@ -1257,18 +1348,20 @@ export default function AdminInventoryPage() {
   function handleVariantConditionChange(next: VariantCondition) {
     conditionTouchedRef.current = true;
     const leavingNearMint =
-      condition === "near_mint" &&
+      isNearMintCondition(condition) &&
       publicNotes.trim() === "Near Mint Condition" &&
-      next !== "near_mint";
+      !isNearMintCondition(next);
     setCondition(next);
-    if (next === "near_mint" && !publicNotes.trim()) {
+    if (isNearMintCondition(next) && !publicNotes.trim()) {
       setPublicNotes("Near Mint Condition");
     } else if (leavingNearMint) {
       setPublicNotes("");
     }
     if (isBlisterCondition(next)) {
       setShipClass("BLISTER");
-    } else if (shipClass === "BLISTER") {
+    } else if (isLoosePackagingCondition(next)) {
+      setShipClass("LOOSE_NO_BOX");
+    } else if (shipClass === "BLISTER" || shipClass === "LOOSE_NO_BOX") {
       setShipClass(shipClassFromBrand(brand));
     }
   }
@@ -1387,7 +1480,11 @@ export default function AdminInventoryPage() {
     );
 
     setBrandSuggestions((prev) =>
-      mergeBrandSuggestions(prev, [...productBrands, ...brandTabNames])
+      mergeBrandSuggestions(prev, [
+        ...productBrands,
+        ...brandTabNames,
+        ...DEFAULT_BRAND_SUGGESTIONS,
+      ])
     );
   }
 
@@ -1480,6 +1577,7 @@ export default function AdminInventoryPage() {
     options?: { focusBarcode?: boolean }
   ) {
     conditionTouchedRef.current = false;
+    priceTouchedRef.current = false;
     titleEditedRef.current = false;
     lastAutoTitleRef.current = "";
     lastAutoIdentityRef.current = { brand: "", model: "", variation: "" };
@@ -1494,6 +1592,9 @@ export default function AdminInventoryPage() {
     setSelectedImages({});
     setLookupMsg(null);
     setQueuedVariants([]);
+    const nextDefaultPrice = getDefaultPriceForBrand(p.brand ?? "");
+    lastAutoPriceRef.current = nextDefaultPrice;
+    setPrice(nextDefaultPrice);
 
     setLoadingVariants(true);
     const { data, error } = await supabase
@@ -1513,7 +1614,7 @@ export default function AdminInventoryPage() {
     }
     const loaded = (data as any) ?? [];
     setVariants(loaded);
-    applyVariantDefaultsFromExisting(loaded);
+    applyVariantDefaultsFromExisting(loaded, p.brand ?? "");
     if (options?.focusBarcode ?? true) {
       focusBarcodeInput();
     }
@@ -1661,7 +1762,7 @@ export default function AdminInventoryPage() {
 
     const notesValue = publicNotes.trim();
     const resolvedNotes =
-      condition === "near_mint"
+      isNearMintCondition(condition)
         ? notesValue || "Near Mint Condition"
         : notesValue || null;
 
@@ -1819,6 +1920,7 @@ export default function AdminInventoryPage() {
   function clearProduct() {
     conditionTouchedRef.current = false;
     costTouchedRef.current = false;
+    priceTouchedRef.current = false;
     titleEditedRef.current = false;
     lastAutoTitleRef.current = "";
     lastAutoIdentityRef.current = { brand: "", model: "", variation: "" };
@@ -1848,7 +1950,10 @@ export default function AdminInventoryPage() {
       force: true,
       currentCost: "",
     });
-    setPrice("");
+    applyDefaultPriceForBrand("", {
+      force: true,
+      currentPrice: "",
+    });
     setQty("1");
     setShipClass(nextShipClass);
     setVariantBarcode("");
@@ -1857,6 +1962,7 @@ export default function AdminInventoryPage() {
   function clearFieldsForBarcodeLookup() {
     conditionTouchedRef.current = false;
     costTouchedRef.current = false;
+    priceTouchedRef.current = false;
     titleEditedRef.current = false;
     lastAutoTitleRef.current = "";
     lastAutoIdentityRef.current = { brand: "", model: "", variation: "" };
@@ -1898,7 +2004,10 @@ export default function AdminInventoryPage() {
       force: true,
       currentCost: "",
     });
-    setPrice("");
+    applyDefaultPriceForBrand("", {
+      force: true,
+      currentPrice: "",
+    });
     setQty("1");
     setShipClass(nextShipClass);
     setVariantBarcode("");
@@ -1931,6 +2040,7 @@ export default function AdminInventoryPage() {
   function resetVariantDraft() {
     conditionTouchedRef.current = false;
     costTouchedRef.current = false;
+    priceTouchedRef.current = false;
     const nextShipClass = shipClassFromBrand(brand);
     setCondition(defaultConditionForBrand(brand));
     setPublicNotes("");
@@ -1941,7 +2051,10 @@ export default function AdminInventoryPage() {
       force: true,
       currentCost: "",
     });
-    setPrice("");
+    applyDefaultPriceForBrand(brand, {
+      force: true,
+      currentPrice: "",
+    });
     setQty("1");
     setShipClass(nextShipClass);
     setVariantBarcode("");
@@ -1998,12 +2111,20 @@ export default function AdminInventoryPage() {
 
   const conditionCycle: VariantCondition[] = [
     "unsealed",
+    "unsealed_no_box",
+    "unsealed_no_acrylic",
+    "unsealed_near_mint_box",
     "sealed",
     "with_issues",
     "resealed",
     "near_mint",
+    "sealed_near_mint_box",
+    "sealed_not_mint_box",
     "sealed_blister",
+    "sealed_near_mint_blister",
+    "sealed_not_mint_blister",
     "unsealed_blister",
+    "unsealed_near_mint_blister",
     "blistered",
   ];
 
@@ -2024,7 +2145,10 @@ export default function AdminInventoryPage() {
     }
     setQueuedVariants((prev) => [...prev, buildVariantDraft()]);
     setCondition(nextCondition(condition));
-    setPrice("");
+    applyDefaultPriceForBrand(brand, {
+      force: true,
+      currentPrice: "",
+    });
     setQty("1");
   }
 
@@ -3350,24 +3474,30 @@ export default function AdminInventoryPage() {
     void uploadImageFiles(files, pid);
   }
 
-  function applyVariantDefaultsFromExisting(list: Variant[]) {
+  function applyVariantDefaultsFromExisting(
+    list: Variant[],
+    sourceBrand: string = brand
+  ) {
     if (!Array.isArray(list) || list.length === 0) return;
     const base = [...list].reverse().find((v) => v) ?? list[list.length - 1];
     if (!base) return;
     const nextCondition = nextConditionFromExisting(list);
     const baseShipClass =
-      (base.ship_class as ShipClass | null) ?? shipClassFromBrand(brand);
+      (base.ship_class as ShipClass | null) ?? shipClassFromBrand(sourceBrand);
     const nextShipClass = (
       isBlisterCondition(nextCondition)
         ? "BLISTER"
         : baseShipClass && isLalamoveOnlyShipClass(baseShipClass)
           ? baseShipClass
-          : baseShipClass ?? shipClassFromBrand(brand)
+          : baseShipClass ?? shipClassFromBrand(sourceBrand)
     ) as ShipClass;
     setCondition(nextCondition);
     setVariantBarcode(base.barcode ?? "");
     adoptDraftCost(base.cost != null ? String(base.cost) : "", nextShipClass);
-    setPrice("");
+    applyDefaultPriceForBrand(sourceBrand, {
+      force: true,
+      currentPrice: "",
+    });
     setQty(base.qty != null ? String(base.qty) : "1");
     setShipClass(nextShipClass);
     setPublicNotes(String(base.public_notes ?? base.issue_notes ?? ""));
@@ -3376,6 +3506,28 @@ export default function AdminInventoryPage() {
 
   function nextConditionFromExisting(list: Variant[]): VariantCondition {
     const hasNearMint = list.some((v) => v.condition === "near_mint");
+    const hasNearMintBox = list.some(
+      (v) => v.condition === "sealed_near_mint_box"
+    );
+    const hasUnsealedNearMintBox = list.some(
+      (v) => v.condition === "unsealed_near_mint_box"
+    );
+    const hasNotMintBox = list.some(
+      (v) => v.condition === "sealed_not_mint_box"
+    );
+    const hasNearMintBlister = list.some(
+      (v) => v.condition === "sealed_near_mint_blister"
+    );
+    const hasUnsealedNearMintBlister = list.some(
+      (v) => v.condition === "unsealed_near_mint_blister"
+    );
+    const hasNotMintBlister = list.some(
+      (v) => v.condition === "sealed_not_mint_blister"
+    );
+    const hasUnsealedNoBox = list.some((v) => v.condition === "unsealed_no_box");
+    const hasUnsealedNoAcrylic = list.some(
+      (v) => v.condition === "unsealed_no_acrylic"
+    );
     const hasResealed = list.some((v) => v.condition === "resealed");
     const hasSealed = list.some((v) => v.condition === "sealed");
     const hasUnsealed = list.some((v) => v.condition === "unsealed");
@@ -3387,6 +3539,14 @@ export default function AdminInventoryPage() {
     );
     const hasBlistered = list.some((v) => v.condition === "blistered");
     if (hasNearMint) return "near_mint";
+    if (hasNearMintBox) return "sealed_near_mint_box";
+    if (hasUnsealedNoBox) return "unsealed_no_box";
+    if (hasUnsealedNoAcrylic) return "unsealed_no_acrylic";
+    if (hasUnsealedNearMintBox) return "unsealed_near_mint_box";
+    if (hasNotMintBox) return "sealed_not_mint_box";
+    if (hasNearMintBlister) return "sealed_near_mint_blister";
+    if (hasUnsealedNearMintBlister) return "unsealed_near_mint_blister";
+    if (hasNotMintBlister) return "sealed_not_mint_blister";
     if (hasResealed) return "resealed";
     if (hasSealed && hasUnsealed) return "with_issues";
     if (hasSealed) return "unsealed";
@@ -3832,7 +3992,7 @@ export default function AdminInventoryPage() {
 
         const notesValue = draft.publicNotes.trim();
         const resolvedNotes =
-          draft.condition === "near_mint"
+          isNearMintCondition(draft.condition)
             ? notesValue || "Near Mint Condition"
             : notesValue || null;
 
@@ -4025,9 +4185,9 @@ export default function AdminInventoryPage() {
         const productId = String(product.id);
         const barcodeValue = await generateUniqueBarcode();
         const notesValue =
-          item.condition === "with_issues"
+          isIssueCondition(item.condition)
             ? issueNoteValue
-            : item.condition === "near_mint"
+            : isNearMintCondition(item.condition)
               ? "Near Mint Condition"
               : null;
 
@@ -4136,8 +4296,8 @@ export default function AdminInventoryPage() {
     }
 
     const notesValue = String(v.public_notes ?? v.issue_notes ?? "").trim();
-    const resolvedNotes =
-      v.condition === "near_mint"
+      const resolvedNotes =
+        isNearMintCondition(v.condition)
         ? notesValue || "Near Mint Condition"
         : notesValue || null;
 
@@ -5076,15 +5236,15 @@ export default function AdminInventoryPage() {
                     v.public_notes ?? v.issue_notes ?? ""
                   ).trim();
                   const noteTone =
-                    v.condition === "with_issues"
+                    isIssueCondition(v.condition)
                       ? "text-red-200/80"
-                      : v.condition === "near_mint"
+                      : isNearMintCondition(v.condition)
                         ? "text-amber-200/80"
                         : "text-white/60";
                   const indicatorTone =
-                    v.condition === "with_issues"
+                    isIssueCondition(v.condition)
                       ? "bg-red-400"
-                      : v.condition === "near_mint"
+                      : isNearMintCondition(v.condition)
                         ? "bg-amber-400"
                         : "";
                   const showIndicator = indicatorTone.length > 0;
@@ -5231,6 +5391,9 @@ export default function AdminInventoryPage() {
                         <option value="TRUCKS">TRUCKS</option>
                         <option value="BLISTER">BLISTER</option>
                         <option value="TOMICA">TOMICA</option>
+                        <option value="TOMICA_LIMITED_VINTAGE_NEO">
+                          Tomica Limited Vintage Neo
+                        </option>
                         <option value="HOT_WHEELS_MAINLINE">HOT_WHEELS_MAINLINE</option>
                         <option value="HOT_WHEELS_PREMIUM">HOT_WHEELS_PREMIUM</option>
                         <option value="LOOSE_NO_BOX">LOOSE_NO_BOX</option>
@@ -5368,14 +5531,11 @@ export default function AdminInventoryPage() {
                   handleVariantConditionChange(e.target.value as VariantCondition)
                 }
               >
-                <option value="sealed">Sealed</option>
-                <option value="resealed">Resealed</option>
-                <option value="near_mint">Near Mint</option>
-                <option value="sealed_blister">Sealed blister</option>
-                <option value="unsealed">Unsealed</option>
-                <option value="unsealed_blister">Unsealed blister</option>
-                <option value="blistered">Blistered</option>
-                <option value="with_issues">With Issues</option>
+                {CONDITION_SELECT_OPTIONS.map((conditionOption) => (
+                  <option key={conditionOption} value={conditionOption}>
+                    {formatConditionLabel(conditionOption)}
+                  </option>
+                ))}
               </Select>
 
               <Select
@@ -5390,6 +5550,9 @@ export default function AdminInventoryPage() {
                 <option value="TRUCKS">Trucks</option>
                 <option value="BLISTER">Blister</option>
                 <option value="TOMICA">Tomica</option>
+                <option value="TOMICA_LIMITED_VINTAGE_NEO">
+                  Tomica Limited Vintage Neo
+                </option>
                 <option value="HOT_WHEELS_MAINLINE">Hot Wheels Mainline</option>
                 <option value="HOT_WHEELS_PREMIUM">Hot Wheels Premium</option>
                 <option value="LOOSE_NO_BOX">Loose (No Box)</option>
@@ -5414,9 +5577,8 @@ export default function AdminInventoryPage() {
               <Input
                 label="Selling Price (₱)"
                 value={price}
-                onChange={(e) =>
-                  setPrice(e.target.value.replace(/[^0-9.]/g, ""))
-                }
+                onChange={(e) => handlePriceChange(e.target.value)}
+                onClick={handlePriceInputClick}
                 placeholder="(empty)"
               />
               <div className="space-y-1">
@@ -5605,6 +5767,9 @@ export default function AdminInventoryPage() {
                 <option value="TRUCKS">Trucks</option>
                 <option value="BLISTER">Blister</option>
                 <option value="TOMICA">Tomica</option>
+                <option value="TOMICA_LIMITED_VINTAGE_NEO">
+                  Tomica Limited Vintage Neo
+                </option>
                 <option value="HOT_WHEELS_MAINLINE">Hot Wheels Mainline</option>
                 <option value="HOT_WHEELS_PREMIUM">Hot Wheels Premium</option>
                 <option value="LOOSE_NO_BOX">Loose (No Box)</option>
@@ -5627,14 +5792,11 @@ export default function AdminInventoryPage() {
                   setBulkHotWheelsCondition(e.target.value as VariantCondition)
                 }
               >
-                <option value="sealed">Sealed</option>
-                <option value="unsealed">Unsealed</option>
-                <option value="near_mint">Near Mint</option>
-                <option value="with_issues">With Issues</option>
-                <option value="resealed">Resealed</option>
-                <option value="sealed_blister">Sealed blister</option>
-                <option value="unsealed_blister">Unsealed blister</option>
-                <option value="blistered">Blistered</option>
+                {CONDITION_SELECT_OPTIONS.map((conditionOption) => (
+                  <option key={conditionOption} value={conditionOption}>
+                    {formatConditionLabel(conditionOption)}
+                  </option>
+                ))}
               </Select>
             </div>
 
@@ -6217,14 +6379,11 @@ export default function AdminInventoryPage() {
               }
             >
               <option value="any">Any variation (first match)</option>
-              <option value="sealed">Sealed</option>
-              <option value="resealed">Resealed</option>
-              <option value="near_mint">Near Mint</option>
-              <option value="sealed_blister">Sealed blister</option>
-              <option value="unsealed">Unsealed</option>
-              <option value="unsealed_blister">Unsealed blister</option>
-              <option value="blistered">Blistered</option>
-              <option value="with_issues">With Issues</option>
+              {CONDITION_SELECT_OPTIONS.map((conditionOption) => (
+                <option key={conditionOption} value={conditionOption}>
+                  {formatConditionLabel(conditionOption)}
+                </option>
+              ))}
             </Select>
             <div className="flex justify-end">
               <Button
@@ -6339,14 +6498,11 @@ export default function AdminInventoryPage() {
                     }
                     disabled={existingBarcodeActionLoading}
                   >
-                    <option value="sealed">Sealed</option>
-                    <option value="resealed">Resealed</option>
-                    <option value="near_mint">Near Mint</option>
-                    <option value="sealed_blister">Sealed blister</option>
-                    <option value="unsealed">Unsealed</option>
-                    <option value="unsealed_blister">Unsealed blister</option>
-                    <option value="blistered">Blistered</option>
-                    <option value="with_issues">With Issues</option>
+                    {CONDITION_SELECT_OPTIONS.map((conditionOption) => (
+                      <option key={conditionOption} value={conditionOption}>
+                        {formatConditionLabel(conditionOption)}
+                      </option>
+                    ))}
                   </Select>
 
                   <Select
@@ -6362,6 +6518,9 @@ export default function AdminInventoryPage() {
                     <option value="TRUCKS">Trucks</option>
                     <option value="BLISTER">Blister</option>
                     <option value="TOMICA">Tomica</option>
+                    <option value="TOMICA_LIMITED_VINTAGE_NEO">
+                      Tomica Limited Vintage Neo
+                    </option>
                     <option value="HOT_WHEELS_MAINLINE">Hot Wheels Mainline</option>
                     <option value="HOT_WHEELS_PREMIUM">Hot Wheels Premium</option>
                     <option value="LOOSE_NO_BOX">Loose (No Box)</option>
@@ -6388,9 +6547,8 @@ export default function AdminInventoryPage() {
                   <Input
                     label="Selling Price (P)"
                     value={price}
-                    onChange={(e) =>
-                      setPrice(e.target.value.replace(/[^0-9.]/g, ""))
-                    }
+                    onChange={(e) => handlePriceChange(e.target.value)}
+                    onClick={handlePriceInputClick}
                     placeholder="(empty)"
                     disabled={existingBarcodeActionLoading}
                   />

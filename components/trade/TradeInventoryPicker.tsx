@@ -25,7 +25,15 @@ type TradeVariant = {
     | "sealed"
     | "resealed"
     | "near_mint"
+    | "sealed_near_mint_box"
+    | "sealed_near_mint_blister"
+    | "sealed_not_mint_box"
+    | "sealed_not_mint_blister"
     | "unsealed"
+    | "unsealed_no_box"
+    | "unsealed_no_acrylic"
+    | "unsealed_near_mint_box"
+    | "unsealed_near_mint_blister"
     | "with_issues"
     | "blistered"
     | "sealed_blister"
@@ -124,9 +132,31 @@ function TradeProductCard({
     const sealed = variants.find((v) => v.condition === "sealed");
     const resealed = variants.find((v) => v.condition === "resealed");
     const nearMint = variants.find((v) => v.condition === "near_mint");
+    const nearMintBox = variants.find(
+      (v) => v.condition === "sealed_near_mint_box"
+    );
+    const notMintBox = variants.find(
+      (v) => v.condition === "sealed_not_mint_box"
+    );
     const sealedBlister = variants.find((v) => v.condition === "sealed_blister");
+    const nearMintBlister = variants.find(
+      (v) => v.condition === "sealed_near_mint_blister"
+    );
+    const notMintBlister = variants.find(
+      (v) => v.condition === "sealed_not_mint_blister"
+    );
+    const unsealedNoBox = variants.find((v) => v.condition === "unsealed_no_box");
+    const unsealedNoAcrylic = variants.find(
+      (v) => v.condition === "unsealed_no_acrylic"
+    );
+    const unsealedNearMintBox = variants.find(
+      (v) => v.condition === "unsealed_near_mint_box"
+    );
     const unsealedBlister = variants.find(
       (v) => v.condition === "unsealed_blister"
+    );
+    const unsealedNearMintBlister = variants.find(
+      (v) => v.condition === "unsealed_near_mint_blister"
     );
     const blistered = variants.find((v) => v.condition === "blistered");
     const unsealed = variants.find((v) => v.condition === "unsealed");
@@ -134,18 +164,34 @@ function TradeProductCard({
       sealed ||
       resealed ||
       nearMint ||
+      nearMintBox ||
+      notMintBox ||
       unsealed ||
+      unsealedNoBox ||
+      unsealedNoAcrylic ||
+      unsealedNearMintBox ||
       sealedBlister ||
+      nearMintBlister ||
+      notMintBlister ||
       unsealedBlister ||
+      unsealedNearMintBlister ||
       blistered
     ) {
       return [
         sealed,
         resealed,
         nearMint,
+        nearMintBox,
+        notMintBox,
         sealedBlister,
+        nearMintBlister,
+        notMintBlister,
         unsealed,
+        unsealedNoBox,
+        unsealedNoAcrylic,
+        unsealedNearMintBox,
         unsealedBlister,
+        unsealedNearMintBlister,
         blistered,
       ].filter((v): v is TradeVariant => Boolean(v));
     }

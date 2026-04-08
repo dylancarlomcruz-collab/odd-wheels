@@ -13,7 +13,11 @@ import { formatPHP } from "@/lib/money";
 import { useBuyerProducts } from "@/hooks/useBuyerProducts";
 import { useBuyerShopProducts } from "@/hooks/useBuyerShopProducts";
 import { recommendSimilar } from "@/lib/recommendations";
-import { formatConditionLabel } from "@/lib/conditions";
+import {
+  formatConditionLabel,
+  isIssueCondition,
+  isNearMintCondition,
+} from "@/lib/conditions";
 import { useSettings } from "@/hooks/useSettings";
 import { toast } from "@/components/ui/toast";
 import { resolveEffectivePrice } from "@/lib/pricing";
@@ -533,14 +537,28 @@ function CartContent() {
   const hasNonSealedInCart = React.useMemo(() => {
     const isSealed = (value: string | null | undefined) => {
       const normalized = String(value ?? "").toLowerCase().trim();
-      return normalized === "sealed" || normalized === "sealed_blister";
+      return (
+        normalized === "sealed" ||
+        normalized === "sealed_blister" ||
+        normalized === "sealed_near_mint_box" ||
+        normalized === "sealed_near_mint_blister" ||
+        normalized === "sealed_not_mint_box" ||
+        normalized === "sealed_not_mint_blister"
+      );
     };
     return lines.some((line) => !isSealed(line.variant.condition));
   }, [lines]);
   const hasNonSealedSelected = React.useMemo(() => {
     const isSealed = (value: string | null | undefined) => {
       const normalized = String(value ?? "").toLowerCase().trim();
-      return normalized === "sealed" || normalized === "sealed_blister";
+      return (
+        normalized === "sealed" ||
+        normalized === "sealed_blister" ||
+        normalized === "sealed_near_mint_box" ||
+        normalized === "sealed_near_mint_blister" ||
+        normalized === "sealed_not_mint_box" ||
+        normalized === "sealed_not_mint_blister"
+      );
     };
     return selectedLines.some((line) => !isSealed(line.variant.condition));
   }, [selectedLines]);
@@ -1014,8 +1032,8 @@ function CartContent() {
   const previewUnifiedNotes = String(
     previewLine?.variant.public_notes ?? previewLine?.variant.issue_notes ?? ""
   ).trim();
-  const isPreviewNearMint = previewCondition === "near_mint";
-  const isPreviewWithIssues = previewCondition === "with_issues";
+  const isPreviewNearMint = isNearMintCondition(previewCondition);
+  const isPreviewWithIssues = isIssueCondition(previewCondition);
   const previewIndicatorTone = isPreviewWithIssues
     ? "bg-red-400"
     : isPreviewNearMint
@@ -1289,15 +1307,15 @@ function CartContent() {
                             ).trim();
                             if (!noteValue) return null;
                             const noteTone =
-                              l.variant.condition === "with_issues"
+                              isIssueCondition(l.variant.condition)
                                 ? "text-red-200/80"
-                                : l.variant.condition === "near_mint"
+                                : isNearMintCondition(l.variant.condition)
                                   ? "text-amber-200/80"
                                   : "text-white/50";
                             const indicatorTone =
-                              l.variant.condition === "with_issues"
+                              isIssueCondition(l.variant.condition)
                                 ? "bg-red-400"
-                                : l.variant.condition === "near_mint"
+                                : isNearMintCondition(l.variant.condition)
                                   ? "bg-amber-400"
                                   : "";
                             const showIndicator = indicatorTone.length > 0;

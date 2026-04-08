@@ -101,6 +101,7 @@ function normalizeBarcodeResponse(raw: any) {
     raw?.brand ??
     raw?.manufacturer ??
     "";
+  const manufacturer = product?.manufacturer ?? raw?.manufacturer ?? "";
   const model = product?.model ?? raw?.model ?? "";
   const colorStyle =
     product?.color ??
@@ -116,8 +117,16 @@ function normalizeBarcodeResponse(raw: any) {
     (product?.image ? [product.image] : raw?.image ? [raw.image] : []);
 
   const inferred = inferFieldsFromTitle(title);
+  const smartTomicaBrand =
+    inferTomicaVintageBrand(title, brand, manufacturer, model) ??
+    (inferred.brand === "Tomica Limited Vintage Neo" ||
+    inferred.brand === "Tomica Limited Vintage"
+      ? inferred.brand
+      : null);
   let normalizedBrand = normalizeBrandAlias(brand);
-  if (/\btakara\s+tomy\b/i.test(String(brand ?? ""))) {
+  if (smartTomicaBrand) {
+    normalizedBrand = smartTomicaBrand;
+  } else if (/\btakara\s+tomy\b/i.test(String(brand ?? ""))) {
     normalizedBrand = "Takara";
   }
   if (inferred.brand === "Tomica") {
@@ -139,4 +148,32 @@ function normalizeBarcodeResponse(raw: any) {
     images: images.filter(Boolean),
     raw
   };
+}
+
+function inferTomicaVintageBrand(...values: Array<string | null | undefined>) {
+  const haystack = values
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (!haystack) return null;
+
+  if (
+    /\btomica\s+limited\s+vintage\s+neo\b/.test(haystack) ||
+    /\btlvn\b/.test(haystack) ||
+    /\btlv-n\b/.test(haystack) ||
+    /\blv-n[0-9a-z-]*\b/.test(haystack)
+  ) {
+    return "Tomica Limited Vintage Neo";
+  }
+
+  if (
+    /\btomica\s+limited\s+vintage\b/.test(haystack) ||
+    /\btlv\b/.test(haystack)
+  ) {
+    return "Tomica Limited Vintage";
+  }
+
+  return null;
 }

@@ -11,6 +11,7 @@ export function emptyShipCounts(): ShipCounts {
     TRUCKS: 0,
     BLISTER: 0,
     TOMICA: 0,
+    TOMICA_LIMITED_VINTAGE_NEO: 0,
     HOT_WHEELS_MAINLINE: 0,
     HOT_WHEELS_PREMIUM: 0,
     LOOSE_NO_BOX: 0,

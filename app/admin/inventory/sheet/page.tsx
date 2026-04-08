@@ -105,10 +105,6 @@ const BOXED_TRUESCALE_BRANDS = new Set(
     "Pop Race",
     "Tarmac",
     "Tarmac Works",
-    "TLVN",
-    "TLV-N",
-    "Tomica Limited Vintage",
-    "Tomica Limited Vintage Neo",
     "Masdi",
     "XCarToys",
     "X Car Toys",
@@ -130,7 +126,16 @@ const MINI_GT_BRANDS = new Set(
   )
 );
 const TOMICA_BRANDS = new Set(
-  ["Tomica", "Takara Tomy", "Takara Tomy Tomica"].map((brand) =>
+  [
+    "Tomica",
+    "Takara Tomy",
+    "Takara Tomy Tomica",
+    "TLV",
+    "TLVN",
+    "TLV-N",
+    "Tomica Limited Vintage",
+    "Tomica Limited Vintage Neo",
+  ].map((brand) =>
     brand.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
   )
 );
@@ -402,6 +407,7 @@ const FALLBACK_DIECAST_BRANDS = [
   "Pop Race",
   "Hot Wheels",
   "Tomica",
+  "Tomica Limited Vintage Neo",
   "BMC",
   "GCD",
   "Focal Horizon",
@@ -1242,7 +1248,15 @@ const COMPACT_CONDITION_LABELS: Record<string, string> = {
   sealed_unsealed: "SEALED/UNSEALED",
   resealed: "RESEAL",
   near_mint: "NEAR MINT",
+  sealed_near_mint_box: "NM BOX",
+  sealed_near_mint_blister: "NM BLIST",
+  sealed_not_mint_box: "NOTM BOX",
+  sealed_not_mint_blister: "NOTM BLST",
   unsealed: "UNSEAL",
+  unsealed_no_box: "NO BOX",
+  unsealed_no_acrylic: "NO ACRYL",
+  unsealed_near_mint_box: "U-NM BOX",
+  unsealed_near_mint_blister: "U-NM BL",
   with_issues: "ISSUES",
   sealed_blister: "BLISTER",
   unsealed_blister: "BLISTER",

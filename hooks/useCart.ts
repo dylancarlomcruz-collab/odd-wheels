@@ -4,6 +4,7 @@ import * as React from "react";
 import { supabase } from "@/lib/supabase/browser";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { getOrCreateGuestSessionId } from "@/lib/guestSession";
+import { notifyAdminPushEvent } from "@/lib/push/adminClient";
 
 export type CartLine = {
   id: string;
@@ -470,6 +471,15 @@ export function useCart() {
             () => undefined,
             (err) => console.error("Failed to log add-to-cart", err)
           );
+      }
+      if (prevQty <= 0 && nextQty > 0) {
+        void notifyAdminPushEvent({
+          event: "cart_activity",
+          variantId,
+          qty: nextQty,
+        }).catch((err) =>
+          console.error("Admin cart push notification failed:", err)
+        );
       }
       emitCartUpdated(instanceId.current);
       return { available, desiredQty, nextQty, prevQty, capped };

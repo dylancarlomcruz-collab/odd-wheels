@@ -19,7 +19,15 @@ export type AdminVariant = {
     | "sealed"
     | "resealed"
     | "near_mint"
+    | "sealed_near_mint_box"
+    | "sealed_near_mint_blister"
+    | "sealed_not_mint_box"
+    | "sealed_not_mint_blister"
     | "unsealed"
+    | "unsealed_no_box"
+    | "unsealed_no_acrylic"
+    | "unsealed_near_mint_box"
+    | "unsealed_near_mint_blister"
     | "with_issues"
     | "blistered"
     | "sealed_blister"
@@ -56,13 +64,28 @@ const CONDITION_OPTIONS: AdminVariant["condition"][] = [
   "sealed",
   "resealed",
   "near_mint",
+  "sealed_near_mint_box",
+  "sealed_not_mint_box",
   "unsealed",
+  "unsealed_no_box",
+  "unsealed_no_acrylic",
+  "unsealed_near_mint_box",
   "with_issues",
   "blistered",
   "sealed_blister",
+  "sealed_near_mint_blister",
+  "sealed_not_mint_blister",
   "unsealed_blister",
+  "unsealed_near_mint_blister",
 ];
-const BLISTER_CONDITIONS = ["blistered", "sealed_blister", "unsealed_blister"] as const;
+const BLISTER_CONDITIONS = [
+  "blistered",
+  "sealed_blister",
+  "sealed_near_mint_blister",
+  "sealed_not_mint_blister",
+  "unsealed_blister",
+  "unsealed_near_mint_blister",
+] as const;
 const SHIP_CLASS_OPTIONS = [
   "MINI_GT",
   "KAIDO",
@@ -71,6 +94,7 @@ const SHIP_CLASS_OPTIONS = [
   "TRUCKS",
   "BLISTER",
   "TOMICA",
+  "TOMICA_LIMITED_VINTAGE_NEO",
   "HOT_WHEELS_MAINLINE",
   "HOT_WHEELS_PREMIUM",
   "LOOSE_NO_BOX",
@@ -126,6 +150,8 @@ function formatShipClassLabel(value: string) {
       return "Hot Wheels Premium";
     case "LOOSE_NO_BOX":
       return "Loose (No Box)";
+    case "TOMICA_LIMITED_VINTAGE_NEO":
+      return "Tomica Limited Vintage Neo";
     default:
       return value.replace(/_/g, " ");
   }

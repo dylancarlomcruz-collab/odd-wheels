@@ -13,7 +13,11 @@ import { recommendSimilar } from "@/lib/recommendations";
 import { useBuyerProducts } from "@/hooks/useBuyerProducts";
 import { toast } from "@/components/ui/toast";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
-import { formatConditionLabel } from "@/lib/conditions";
+import {
+  formatConditionLabel,
+  isIssueCondition,
+  isNearMintCondition,
+} from "@/lib/conditions";
 import { supabase } from "@/lib/supabase/browser";
 import { getOrCreateGuestSessionId } from "@/lib/guestSession";
 import { recordRecentView } from "@/lib/recentViews";
@@ -397,15 +401,15 @@ export default function ProductDetailPage() {
                       ).trim();
                       if (!noteValue) return null;
                       const noteTone =
-                        v.condition === "with_issues"
+                        isIssueCondition(v.condition)
                           ? "text-red-200/80"
-                          : v.condition === "near_mint"
+                          : isNearMintCondition(v.condition)
                             ? "text-amber-200/80"
                             : "text-white/70";
                       const indicatorTone =
-                        v.condition === "with_issues"
+                        isIssueCondition(v.condition)
                           ? "bg-red-400"
-                          : v.condition === "near_mint"
+                          : isNearMintCondition(v.condition)
                             ? "bg-amber-400"
                             : "";
                       const showIndicator = indicatorTone.length > 0;

@@ -9,6 +9,7 @@ export type ShipClass =
   | "TRUCKS"
   | "BLISTER"
   | "TOMICA"
+  | "TOMICA_LIMITED_VINTAGE_NEO"
   | "HOT_WHEELS_MAINLINE"
   | "HOT_WHEELS_PREMIUM"
   | "LOOSE_NO_BOX"
@@ -47,6 +48,7 @@ export const JNT_CAPACITY: Record<JntPouch, Record<ShipClass, number>> = {
     TRUCKS: 0,
     BLISTER: 0,
     TOMICA: 10,
+    TOMICA_LIMITED_VINTAGE_NEO: 10,
     HOT_WHEELS_MAINLINE: 0,
     HOT_WHEELS_PREMIUM: 0,
     LOOSE_NO_BOX: 10,
@@ -61,6 +63,7 @@ export const JNT_CAPACITY: Record<JntPouch, Record<ShipClass, number>> = {
     TRUCKS: 1,
     BLISTER: 2,
     TOMICA: 30,
+    TOMICA_LIMITED_VINTAGE_NEO: 30,
     HOT_WHEELS_MAINLINE: 8,
     HOT_WHEELS_PREMIUM: 6,
     LOOSE_NO_BOX: 30,
@@ -78,6 +81,7 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     TRUCKS: 0,
     BLISTER: 0,
     TOMICA: 4,
+    TOMICA_LIMITED_VINTAGE_NEO: 4,
     HOT_WHEELS_MAINLINE: 0,
     HOT_WHEELS_PREMIUM: 0,
     LOOSE_NO_BOX: 4,
@@ -92,6 +96,7 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     TRUCKS: 1,
     BLISTER: 1,
     TOMICA: 20,
+    TOMICA_LIMITED_VINTAGE_NEO: 20,
     HOT_WHEELS_MAINLINE: 8,
     HOT_WHEELS_PREMIUM: 6,
     LOOSE_NO_BOX: 20,
@@ -106,6 +111,7 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     TRUCKS: 3,
     BLISTER: 8,
     TOMICA: 20,
+    TOMICA_LIMITED_VINTAGE_NEO: 20,
     HOT_WHEELS_MAINLINE: 20,
     HOT_WHEELS_PREMIUM: 16,
     LOOSE_NO_BOX: 20,

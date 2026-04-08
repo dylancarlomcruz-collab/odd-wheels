@@ -26,7 +26,11 @@ import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
-import { formatConditionLabel } from "@/lib/conditions";
+import {
+  formatConditionLabel,
+  isIssueCondition,
+  isNearMintCondition,
+} from "@/lib/conditions";
 import { toast } from "@/components/ui/toast";
 
 const SHIPPING_TABS = [
@@ -2122,8 +2126,8 @@ export default function CashierShipmentsPage() {
                     const itemCondition = String(
                       it?.condition ?? it?.product_variant?.condition ?? ""
                     ).toLowerCase();
-                    const isNearMint = itemCondition === "near_mint";
-                    const isWithIssues = itemCondition === "with_issues";
+                    const isNearMint = isNearMintCondition(itemCondition);
+                    const isWithIssues = isIssueCondition(itemCondition);
                               const notes = String(
                                 it?.public_notes ??
                                   it?.product_variant?.public_notes ??

@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { sendOrderEventNotification } from "@/lib/push/server";
+import {
+  sendAdminOrderEventNotification,
+  sendOrderEventNotification,
+} from "@/lib/push/server";
 
 function normalizeShippingDetails(raw: unknown) {
   if (raw && typeof raw === "object") {
@@ -141,6 +144,11 @@ export async function POST(req: Request) {
       orderId,
       markToShip ? "status_updated" : "completed"
     ).catch(() => undefined);
+    if (paymentStatus !== "PAID") {
+      await sendAdminOrderEventNotification(orderId, "purchase_paid").catch(
+        () => undefined
+      );
+    }
 
     return NextResponse.json({ ok: true, orderId }, { status: 200 });
   } catch (e: any) {
