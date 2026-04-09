@@ -70,12 +70,14 @@ function formatProfilePhoneError(
 }
 
 export default function AccountPage() {
-  const { user, signOut } = useAuth();
+  const { user, session, signOut } = useAuth();
   const emailRedirectTo = "https://www.odd-wheels.com/";
 
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
+  const [deleting, setDeleting] = React.useState(false);
   const [msg, setMsg] = React.useState<string | null>(null);
+  const [deleteMsg, setDeleteMsg] = React.useState<string | null>(null);
   const [saveAttempted, setSaveAttempted] = React.useState(false);
 
   const [name, setName] = React.useState("");
@@ -83,6 +85,7 @@ export default function AccountPage() {
   const [contactNumber, setContactNumber] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [newPassword, setNewPassword] = React.useState("");
+  const [deleteConfirmation, setDeleteConfirmation] = React.useState("");
   const [shippingDefaults, setShippingDefaults] = React.useState<ShippingDefaults>(() =>
     normalizeShippingDefaults({})
   );
@@ -271,6 +274,45 @@ export default function AccountPage() {
     setShippingDefaults(savedDefaults);
     setShippingDefaultsRaw(data?.shipping_defaults ?? mergedDefaults);
     setMsg(successMessage);
+  }
+
+  async function onDeleteAccount() {
+    if (!user || !session?.access_token || deleting) return;
+    if (deleteConfirmation.trim().toUpperCase() !== "DELETE") {
+      setDeleteMsg('Type "DELETE" to confirm account deletion.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Delete this account permanently? This cannot be undone."
+    );
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setDeleteMsg(null);
+    setMsg(null);
+
+    try {
+      const res = await fetch("/api/account/delete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || "Failed to delete account.");
+      }
+
+      await supabase.auth.signOut();
+      window.location.href = "/";
+    } catch (e: any) {
+      console.error(e);
+      setDeleteMsg(e?.message || "Failed to delete account.");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   async function requestLalamovePin(payload: {
@@ -761,12 +803,39 @@ export default function AccountPage() {
       <Card>
         <CardHeader>
           <div className="text-base font-semibold">Account Actions</div>
-          <div className="text-sm text-neutral-400">Sign out from this device.</div>
+          <div className="text-sm text-neutral-400">
+            Sign out from this device, or permanently delete your account.
+          </div>
         </CardHeader>
-        <CardBody>
+        <CardBody className="space-y-4">
           <Button variant="secondary" onClick={() => signOut()}>
             Sign out
           </Button>
+
+          <div className="rounded-xl border border-red-500/30 bg-red-950/20 p-4 space-y-3">
+            <div>
+              <div className="text-sm font-semibold text-red-200">Delete Account</div>
+              <div className="text-xs text-red-100/80">
+                This permanently removes your account if it has no order history.
+                Type <span className="font-semibold">DELETE</span> to confirm.
+              </div>
+            </div>
+            <Input
+              label='Type "DELETE" to confirm'
+              value={deleteConfirmation}
+              onChange={(e) => setDeleteConfirmation(e.target.value)}
+            />
+            {deleteMsg ? (
+              <div className="text-sm text-red-200">{deleteMsg}</div>
+            ) : null}
+            <Button
+              variant="danger"
+              onClick={onDeleteAccount}
+              disabled={deleting || deleteConfirmation.trim().toUpperCase() !== "DELETE"}
+            >
+              {deleting ? "Deleting..." : "Delete account"}
+            </Button>
+          </div>
         </CardBody>
       </Card>
       <LalamoveMapPickerModal
