@@ -32,9 +32,9 @@ export const JNT_RATES: Record<JntPouch, Record<Region, number>> = {
 };
 
 export const LBC_RATES: Record<LbcPackage, Record<Region, number>> = {
-  N_SAKTO: { METRO_MANILA: 60, LUZON: 70, VISAYAS: 90, MINDANAO: 90 },
-  MINIBOX: { METRO_MANILA: 110, LUZON: 125, VISAYAS: 125, MINDANAO: 125 },
-  SMALL_BOX: { METRO_MANILA: 140, LUZON: 140, VISAYAS: 140, MINDANAO: 140 },
+  N_SAKTO: { METRO_MANILA: 54, LUZON: 64, VISAYAS: 94, MINDANAO: 94 },
+  MINIBOX: { METRO_MANILA: 85, LUZON: 135, VISAYAS: 135, MINDANAO: 135 },
+  SMALL_BOX: { METRO_MANILA: 114, LUZON: 155, VISAYAS: 165, MINDANAO: 165 },
 };
 
 // Capacity rules: maximum pieces per class for each package.
