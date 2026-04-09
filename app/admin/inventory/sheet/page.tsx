@@ -23,6 +23,11 @@ import {
   normalizeProductSpecialTags,
   type ProductSpecialTag,
 } from "@/lib/productTags";
+import {
+  NEW_ARRIVAL_WINDOW_DAYS,
+  isNewArrivalCreatedAt,
+  parseArrivalTime,
+} from "@/lib/newArrivals";
 
 type SheetRow = {
   id: string;
@@ -95,7 +100,6 @@ const EXPORT_THUMB_HEIGHT = 720;
 const EXPORT_THUMB_QUALITY = 100;
 const ALL_CATEGORY = "ALL";
 const NEW_ARRIVAL_CATEGORY = "New Arrival";
-const NEW_ARRIVAL_WINDOW_DAYS = 5;
 let cachedNoisePattern: CanvasPattern | null = null;
 let cachedNoiseContext: CanvasRenderingContext2D | null = null;
 
@@ -283,15 +287,11 @@ function isJdmMarket(row: SheetRow) {
 
 function getRowAddedTimestamp(row: SheetRow) {
   const raw = row.created_at ?? row.product?.created_at;
-  const ts = raw ? new Date(raw).getTime() : NaN;
-  return Number.isFinite(ts) ? ts : null;
+  return parseArrivalTime(raw);
 }
 
 function isNewArrivalRow(row: SheetRow) {
-  const addedTs = getRowAddedTimestamp(row);
-  if (!addedTs) return false;
-  const cutoffMs = NEW_ARRIVAL_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-  return Date.now() - addedTs <= cutoffMs;
+  return isNewArrivalCreatedAt(row.created_at ?? row.product?.created_at);
 }
 
 function formatBaseDownloadCategory(row: SheetRow) {

@@ -21,6 +21,7 @@ import { buildSearchOr } from "@/lib/search";
 import { SHOP_CATEGORY_OPTIONS, matchesShopCategory } from "@/lib/shopCategories";
 import { mapProductsToShopProducts } from "@/lib/shopProducts";
 import { supabase } from "@/lib/supabase/browser";
+import { isNewArrivalCreatedAt } from "@/lib/newArrivals";
 
 const GRID_VIEW_STORAGE_KEY = "oddwheels:grid-view";
 
@@ -326,6 +327,15 @@ export default function SearchContent() {
     };
     const minEffective = (product: (typeof products)[number]) =>
       product.minEffectivePrice ?? product.minPrice;
+    const getCreatedTime = (product: (typeof products)[number]) =>
+      product.created_at ? new Date(product.created_at).getTime() : 0;
+    const getInventoryCreatedTime = (product: (typeof products)[number]) =>
+      product.inventory_created_at
+        ? new Date(product.inventory_created_at).getTime()
+        : 0;
+    const isNewestPriorityProduct = (product: (typeof products)[number]) => {
+      return isNewArrivalCreatedAt(product.inventory_created_at);
+    };
 
     let list = products.slice();
 
@@ -386,11 +396,21 @@ export default function SearchContent() {
     }
 
     if (filters.sortBy === "newest") {
-      list.sort(
-        (a, b) =>
-          new Date(b.created_at ?? 0).getTime() -
-          new Date(a.created_at ?? 0).getTime()
-      );
+      list.sort((a, b) => {
+        const aPriority = isNewestPriorityProduct(a);
+        const bPriority = isNewestPriorityProduct(b);
+        if (aPriority !== bPriority) return aPriority ? -1 : 1;
+
+        if (aPriority && bPriority) {
+          const inventoryDiff =
+            getInventoryCreatedTime(b) - getInventoryCreatedTime(a);
+          if (inventoryDiff !== 0) return inventoryDiff;
+        }
+
+        const createdDiff = getCreatedTime(b) - getCreatedTime(a);
+        if (createdDiff !== 0) return createdDiff;
+        return getInventoryCreatedTime(b) - getInventoryCreatedTime(a);
+      });
     } else if (filters.sortBy === "price_low") {
       list.sort((a, b) => minEffective(a) - minEffective(b));
     } else if (filters.sortBy === "price_high") {
@@ -437,7 +457,7 @@ export default function SearchContent() {
           const { data } = await supabase
             .from("products")
             .select(
-              "*, product_variants(id, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty)"
+              "*, product_variants(id, created_at, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty)"
             )
             .eq("is_active", true)
             .or(orClause)
@@ -460,7 +480,7 @@ export default function SearchContent() {
           const { data: sellerProducts } = await supabase
             .from("products")
             .select(
-              "*, product_variants(id, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty)"
+              "*, product_variants(id, created_at, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty)"
             )
             .in("id", sellerIds);
 
@@ -480,7 +500,7 @@ export default function SearchContent() {
           const { data: recentProducts } = await supabase
             .from("products")
             .select(
-              "*, product_variants(id, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty)"
+              "*, product_variants(id, created_at, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty)"
             )
             .in("id", recentIds);
 

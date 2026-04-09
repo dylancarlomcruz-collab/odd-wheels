@@ -5,6 +5,7 @@ import type { ShopProduct } from "@/components/ProductCard";
 
 export type VariantRow = {
   id: string;
+  created_at?: string | null;
   condition: string | null;
   barcode?: string | null;
   issue_notes: string | null;
@@ -40,6 +41,7 @@ export type ProductRow = {
   created_at: string | null;
   product_variants: Array<{
     id: string;
+    created_at?: string | null;
     condition: string | null;
     barcode?: string | null;
     issue_notes: string | null;
@@ -56,6 +58,26 @@ export type ProductRow = {
 function pickNumber(v: any, fallback = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function resolveLatestCreatedAt(
+  ...values: Array<string | null | undefined>
+): string | null {
+  let latestValue: string | null = null;
+  let latestTime = Number.NEGATIVE_INFINITY;
+
+  for (const value of values) {
+    const raw = String(value ?? "").trim();
+    if (!raw) continue;
+    const time = Date.parse(raw);
+    if (!Number.isFinite(time)) continue;
+    if (time > latestTime) {
+      latestTime = time;
+      latestValue = raw;
+    }
+  }
+
+  return latestValue;
 }
 
 export function collapseVariants(rows: VariantRow[]): ShopProduct[] {
@@ -127,6 +149,7 @@ export function collapseVariants(rows: VariantRow[]): ShopProduct[] {
         hasSale: pricing.hasSale,
         options: [option],
         created_at: p.created_at ?? null,
+        inventory_created_at: v.created_at ?? p.created_at ?? null,
         totalQty: qty,
         minQty: qty,
       });
@@ -150,6 +173,12 @@ export function collapseVariants(rows: VariantRow[]): ShopProduct[] {
       existing.totalQty = pickNumber(existing.totalQty, 0) + qty;
       existing.minQty = Math.min(pickNumber(existing.minQty, qty), qty);
       existing.options.push(option);
+      existing.created_at = resolveLatestCreatedAt(existing.created_at, p.created_at);
+      existing.inventory_created_at = resolveLatestCreatedAt(
+        existing.inventory_created_at,
+        v.created_at,
+        p.created_at
+      );
     }
   }
 
@@ -239,6 +268,13 @@ export function mapProductsToShopProducts(rows: ProductRow[]): ShopProduct[] {
       (min, o) => Math.min(min, o.qty),
       options[0]?.qty ?? 0
     );
+    const latestCreatedAt = resolveLatestCreatedAt(
+      p.created_at,
+      ...variants.map((variant) => variant.created_at)
+    );
+    const latestInventoryCreatedAt =
+      resolveLatestCreatedAt(...variants.map((variant) => variant.created_at)) ??
+      p.created_at;
 
     products.push({
       key: p.id,
@@ -262,7 +298,8 @@ export function mapProductsToShopProducts(rows: ProductRow[]): ShopProduct[] {
               conditionSortOrder(b.condition_raw) ||
             a.price - b.price
         ),
-      created_at: p.created_at ?? null,
+      created_at: p.created_at ?? latestCreatedAt,
+      inventory_created_at: latestInventoryCreatedAt,
       totalQty,
       minQty,
     });

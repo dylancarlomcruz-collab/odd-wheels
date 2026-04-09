@@ -109,6 +109,7 @@ export type ShopProduct = {
   hasSale?: boolean;
   options: ConditionOption[];
   created_at?: string | null;
+  inventory_created_at?: string | null;
   totalQty?: number;
   minQty?: number;
   special_tags?: ProductSpecialTag[] | null;

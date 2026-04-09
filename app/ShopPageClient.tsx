@@ -28,6 +28,7 @@ import { InventoryEditorDrawer } from "@/components/admin/InventoryEditorDrawer"
 import type { AdminProduct } from "@/components/admin/InventoryBrowseGrid";
 import { resolveEffectivePrice } from "@/lib/pricing";
 import { useShopSort } from "@/hooks/useShopSort";
+import { isNewArrivalCreatedAt } from "@/lib/newArrivals";
 
 const BRAND_ALL_KEY = "__all__";
 const MAX_PRIMARY_BRAND_TABS = 9;
@@ -538,7 +539,7 @@ export default function ShopPageClient() {
       const { data, error } = await supabase
         .from("product_variants")
         .select(
-          "id,condition,barcode,issue_notes,issue_photo_urls,public_notes,ship_class,price,sale_price,discount_percent,qty, product:products(*)"
+          "id,created_at,condition,barcode,issue_notes,issue_photo_urls,public_notes,ship_class,price,sale_price,discount_percent,qty, product:products(*)"
         )
         .gt("qty", 0)
         .order("created_at", { ascending: false });
@@ -838,6 +839,15 @@ export default function ShopPageClient() {
       p.created_at ? new Date(p.created_at).getTime() : 0,
     []
   );
+  const getInventoryCreatedTime = React.useCallback(
+    (p: ShopProduct) =>
+      p.inventory_created_at ? new Date(p.inventory_created_at).getTime() : 0,
+    []
+  );
+  const isNewestPriorityProduct = React.useCallback(
+    (p: ShopProduct) => isNewArrivalCreatedAt(p.inventory_created_at, nowTs),
+    [nowTs]
+  );
   const getAgeDays = React.useCallback(
     (p: ShopProduct) => (nowTs - getCreatedTime(p)) / (1000 * 60 * 60 * 24),
     [getCreatedTime, nowTs]
@@ -1117,11 +1127,26 @@ export default function ShopPageClient() {
     }
 
     if (sortBy === "newest") {
-      list.sort((a, b) =>
-        newestDir === "asc"
-          ? getCreatedTime(a) - getCreatedTime(b)
-          : getCreatedTime(b) - getCreatedTime(a)
-      );
+      list.sort((a, b) => {
+        if (newestDir === "asc") {
+          const createdDiff = getCreatedTime(a) - getCreatedTime(b);
+          if (createdDiff !== 0) return createdDiff;
+          return getInventoryCreatedTime(a) - getInventoryCreatedTime(b);
+        }
+
+        const aPriority = isNewestPriorityProduct(a);
+        const bPriority = isNewestPriorityProduct(b);
+        if (aPriority !== bPriority) return aPriority ? -1 : 1;
+
+        if (aPriority && bPriority) {
+          const inventoryDiff = getInventoryCreatedTime(b) - getInventoryCreatedTime(a);
+          if (inventoryDiff !== 0) return inventoryDiff;
+        }
+
+        const createdDiff = getCreatedTime(b) - getCreatedTime(a);
+        if (createdDiff !== 0) return createdDiff;
+        return getInventoryCreatedTime(b) - getInventoryCreatedTime(a);
+      });
       return list;
     }
 
@@ -1151,9 +1176,11 @@ export default function ShopPageClient() {
     priceDir,
     newestDir,
     getCreatedTime,
+    getInventoryCreatedTime,
     getRecencyBoost,
     getBasePopularityScore,
     getPopularSortScore,
+    isNewestPriorityProduct,
     searchTermTokens,
     strictSearchTokens,
     normalizedSearchQuery,
