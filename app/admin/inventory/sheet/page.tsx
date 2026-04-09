@@ -71,6 +71,15 @@ type PendingZipSession = {
   singleFolder: boolean;
 };
 
+type CardGroupMode =
+  | "brand"
+  | "ship_class"
+  | "ship_class_brand"
+  | "brand_ship_class"
+  | "download_category"
+  | "rarity_tag"
+  | "none";
+
 const PAGE_SIZE = 200;
 const EXPORT_PAGE_SIZE = 1000;
 const CARD_EXPORT_SIZE = 1080;
@@ -709,6 +718,10 @@ function getRowProductTagKeys(row: { product: SheetRow["product"] }) {
 
 function getRowProductTagLabels(row: { product: SheetRow["product"] }) {
   return getRowProductTagKeys(row).map((tag) => getProductSpecialTagLabel(tag));
+}
+
+function getRowRarityCategories(row: { product: SheetRow["product"] }) {
+  return getRowProductTagLabels(row);
 }
 
 function formatRowProductTags(row: { product: SheetRow["product"] }) {
@@ -2270,14 +2283,9 @@ export default function InventorySheetPage() {
   const [previewingCard, setPreviewingCard] = React.useState(false);
   const [exportMsg, setExportMsg] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState(false);
-  const [cardGroupMode, setCardGroupMode] = React.useState<
-    | "brand"
-    | "ship_class"
-    | "ship_class_brand"
-    | "brand_ship_class"
-    | "download_category"
-    | "none"
-  >("download_category");
+  const [cardGroupMode, setCardGroupMode] = React.useState<CardGroupMode>(
+    "download_category"
+  );
   const [syncingModel, setSyncingModel] = React.useState(false);
   const [brandSyncTick, setBrandSyncTick] = React.useState(0);
   const pendingZipSessionRef = React.useRef<PendingZipSession | null>(null);
@@ -3049,31 +3057,12 @@ export default function InventorySheetPage() {
     }
   }
 
-  function getCardFolder(
-    zip: any,
-    row: SheetRow,
-    mode:
-      | "brand"
-      | "ship_class"
-      | "ship_class_brand"
-      | "brand_ship_class"
-      | "download_category"
-      | "none"
-  ) {
+  function getCardFolder(zip: any, row: SheetRow, mode: CardGroupMode) {
     const parts = getCardFolderParts(row, mode);
     return resolveZipFolder(zip, parts);
   }
 
-  function getCardFolderParts(
-    row: SheetRow,
-    mode:
-      | "brand"
-      | "ship_class"
-      | "ship_class_brand"
-      | "brand_ship_class"
-      | "download_category"
-      | "none"
-  ) {
+  function getCardFolderParts(row: SheetRow, mode: CardGroupMode) {
     const brand = fileSafe(formatBrand(row)) || "Unknown";
     const shipClass = formatShipClassFolder(row);
     const category = formatDownloadCategory(row) || "Others";
@@ -3087,6 +3076,7 @@ export default function InventorySheetPage() {
       const safeCategory = fileSafe(category, 60) || "Others";
       return [safeCategory];
     }
+    if (mode === "rarity_tag") return [];
     return [];
   }
 
@@ -3096,6 +3086,31 @@ export default function InventorySheetPage() {
       folder = folder.folder(part) ?? folder;
     }
     return folder;
+  }
+
+  function buildCardExportAssignments(rows: SheetRow[], mode: CardGroupMode) {
+    const assignments: Array<{ row: SheetRow; folderParts: string[] }> = [];
+
+    for (const row of rows) {
+      if (mode === "rarity_tag") {
+        const rarityLabels = getRowRarityCategories(row);
+        for (const label of rarityLabels) {
+          const safeLabel = fileSafe(label, 60) || "Other Tags";
+          assignments.push({
+            row,
+            folderParts: [safeLabel],
+          });
+        }
+        continue;
+      }
+
+      assignments.push({
+        row,
+        folderParts: getCardFolderParts(row, mode),
+      });
+    }
+
+    return assignments;
   }
 
   function normalizeCardConditionKey(value: string | null) {
@@ -3155,13 +3170,14 @@ export default function InventorySheetPage() {
     return output;
   }
 
-  async function downloadCardsZip() {
+  async function downloadCardsZip(options?: { mode?: CardGroupMode }) {
     if (exportingCards) return;
     setExportingCards(true);
     setExportMsg(null);
     setError(null);
 
     try {
+      const effectiveMode = options?.mode ?? cardGroupMode;
       const { rows: exportRows, scope } = await resolveExportRows();
       if (!exportRows.length) {
         setExportMsg(
@@ -3174,6 +3190,17 @@ export default function InventorySheetPage() {
       const grouped = groupRows(exportRows);
       const orderedRows = grouped.flatMap((group) => group.rows);
       const cardRows = mergeSealedUnsealedRows(orderedRows);
+      const assignments = buildCardExportAssignments(cardRows, effectiveMode);
+      const skippedNoRarity =
+        effectiveMode === "rarity_tag" ? cardRows.length - assignments.length : 0;
+      if (!assignments.length) {
+        setExportMsg(
+          effectiveMode === "rarity_tag"
+            ? "No rows with rarity tags available for export."
+            : "No card rows available."
+        );
+        return;
+      }
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
 
@@ -3186,19 +3213,18 @@ export default function InventorySheetPage() {
       let generated = 0;
       let missingImage = 0;
       let processed = 0;
-      const total = cardRows.length;
+      const total = assignments.length;
       const folderCounts = new Map<string, number>();
       setExportMsg(`Rendering 0 of ${total} cards...`);
 
-      for (const row of cardRows) {
-        const baseParts = getCardFolderParts(row, cardGroupMode);
+      for (const { row, folderParts } of assignments) {
         let targetFolder = zip;
-        if (baseParts.length) {
-          const baseKey = baseParts.join("/");
+        if (folderParts.length) {
+          const baseKey = folderParts.join("/");
           const count = folderCounts.get(baseKey) ?? 0;
           const bucket = Math.floor(count / CARD_FOLDER_LIMIT) + 1;
           folderCounts.set(baseKey, count + 1);
-          const splitParts = [...baseParts];
+          const splitParts = [...folderParts];
           if (bucket > 1) {
             const lastIdx = splitParts.length - 1;
             splitParts[lastIdx] = `${splitParts[lastIdx]} (${bucket})`;
@@ -3237,7 +3263,10 @@ export default function InventorySheetPage() {
       const url = URL.createObjectURL(zipBlob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = "inventory-cards.zip";
+      link.download =
+        effectiveMode === "rarity_tag"
+          ? "inventory-cards-rarity.zip"
+          : "inventory-cards.zip";
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -3246,14 +3275,16 @@ export default function InventorySheetPage() {
       const groupLabel =
         {
           download_category: "4-up category",
+          rarity_tag: "rarity tag",
           brand: "brand",
           ship_class: "class",
           ship_class_brand: "class to brand",
           brand_ship_class: "brand to class",
           none: "no folders",
-        }[cardGroupMode] ?? cardGroupMode.replace(/_/g, " ");
+        }[effectiveMode] ?? effectiveMode.replace(/_/g, " ");
       const summary = [`${generated} cards`, `grouped by ${groupLabel}`];
       if (missingImage) summary.push(`${missingImage} missing images`);
+      if (skippedNoRarity) summary.push(`${skippedNoRarity} without rarity tags skipped`);
       setExportMsg(summary.join(" | "));
     } catch (err: any) {
       setError(err?.message ?? "Export failed.");
@@ -4468,19 +4499,10 @@ export default function InventorySheetPage() {
               <select
                 className="h-9 rounded-md border border-white/10 bg-bg-900/60 px-2 text-xs text-white/80"
                 value={cardGroupMode}
-                onChange={(e) =>
-                  setCardGroupMode(
-                    e.target.value as
-                      | "brand"
-                      | "ship_class"
-                      | "ship_class_brand"
-                      | "brand_ship_class"
-                      | "download_category"
-                      | "none"
-                  )
-                }
+                onChange={(e) => setCardGroupMode(e.target.value as CardGroupMode)}
               >
                 <option value="download_category">Group by 4-up category</option>
+                <option value="rarity_tag">Group by rarity tag</option>
                 <option value="brand">Group by brand</option>
                 <option value="ship_class">Group by class</option>
                 <option value="ship_class_brand">Class to brand</option>
@@ -4490,10 +4512,22 @@ export default function InventorySheetPage() {
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={downloadCardsZip}
+                onClick={() => {
+                  void downloadCardsZip();
+                }}
                 disabled={exportingCards}
               >
                 {exportingCards ? "Preparing..." : "Download Cards ZIP"}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  void downloadCardsZip({ mode: "rarity_tag" });
+                }}
+                disabled={exportingCards}
+              >
+                {exportingCards ? "Preparing..." : "Download Cards ZIP (Rarity)"}
               </Button>
               <Button
                 variant="secondary"
