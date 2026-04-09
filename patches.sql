@@ -3155,3 +3155,97 @@ alter table public.products
 update public.products
 set special_tags = array_remove(special_tags, 'new_release')
 where 'new_release' = any(special_tags);
+
+-- Harden auth signup profile creation against schema drift in public.profiles.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_insert_columns text[] := array['id'];
+  v_insert_values text[] := array[format('%L', new.id)];
+  v_update_columns text[] := array[]::text[];
+  v_column text;
+  v_value text;
+begin
+  for v_column, v_value in
+    select
+      c.column_name,
+      case c.column_name
+        when 'role' then 'buyer'
+        when 'full_name' then nullif(trim(coalesce(new.raw_user_meta_data->>'full_name', '')), '')
+        when 'username' then nullif(trim(coalesce(new.raw_user_meta_data->>'username', '')), '')
+        when 'contact_number' then nullif(trim(coalesce(new.raw_user_meta_data->>'contact_number', '')), '')
+        when 'email' then nullif(trim(coalesce(new.email, '')), '')
+        when 'address' then nullif(trim(coalesce(new.raw_user_meta_data->>'address', '')), '')
+        when 'default_address' then nullif(trim(coalesce(new.raw_user_meta_data->>'address', '')), '')
+        when 'contact_country_code' then nullif(trim(coalesce(new.raw_user_meta_data->>'contact_country_code', '')), '')
+        when 'contact_country_iso2' then nullif(trim(coalesce(new.raw_user_meta_data->>'contact_country_iso2', '')), '')
+        else null
+      end
+    from information_schema.columns c
+    where c.table_schema = 'public'
+      and c.table_name = 'profiles'
+      and c.column_name = any(
+        array[
+          'role',
+          'full_name',
+          'username',
+          'contact_number',
+          'email',
+          'address',
+          'default_address',
+          'contact_country_code',
+          'contact_country_iso2'
+        ]
+      )
+    order by c.ordinal_position
+  loop
+    v_insert_columns := array_append(v_insert_columns, v_column);
+    v_insert_values := array_append(
+      v_insert_values,
+      case
+        when v_value is null then 'null'
+        else format('%L', v_value)
+      end
+    );
+    if v_column <> 'role' then
+      v_update_columns := array_append(v_update_columns, v_column);
+    end if;
+  end loop;
+
+  if coalesce(array_length(v_update_columns, 1), 0) > 0 then
+    execute format(
+      'insert into public.profiles (%s) values (%s) on conflict (id) do update set %s',
+      array_to_string(
+        array(select format('%I', col) from unnest(v_insert_columns) as col),
+        ', '
+      ),
+      array_to_string(v_insert_values, ', '),
+      array_to_string(
+        array(
+          select format(
+            '%1$I = coalesce(excluded.%1$I, public.profiles.%1$I)',
+            col
+          )
+          from unnest(v_update_columns) as col
+        ),
+        ', '
+      )
+    );
+  else
+    execute format(
+      'insert into public.profiles (%s) values (%s) on conflict (id) do nothing',
+      array_to_string(
+        array(select format('%I', col) from unnest(v_insert_columns) as col),
+        ', '
+      ),
+      array_to_string(v_insert_values, ', ')
+    );
+  end if;
+
+  return new;
+end;
+$$;
