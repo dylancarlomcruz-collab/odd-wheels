@@ -145,21 +145,26 @@ function RegisterContent() {
     });
     setLoading(false);
 
+    const createdUser = data.user;
+    if (createdUser) {
+      setError(null);
+      setPassword("");
+      if (!data.session && !createdUser.email_confirmed_at) {
+        setNotice(
+          "Account created. Please verify your email before logging in. Check your inbox first, then your spam/junk folder if the email is not visible."
+        );
+        return;
+      }
+      router.replace(redirectTo);
+      return;
+    }
+
     if (error) {
       setError(error.message);
       return;
     }
 
-    // Profiles row will be created via DB trigger (see schema.sql).
-    if (data.user && !data.session && !data.user.email_confirmed_at) {
-      setPassword("");
-      setNotice(
-        "Account created. Please verify your email before logging in. Check your inbox first, then your spam/junk folder if the email is not visible."
-      );
-      return;
-    }
-
-    if (data.user) router.replace(redirectTo);
+    setError("Failed to create account.");
   }
 
   return (
