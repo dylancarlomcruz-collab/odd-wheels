@@ -57,6 +57,7 @@ type ExportRow = SheetRow & {
 
 type GridPage = {
   group: string;
+  mode: GridPageGroupMode;
   rows: ExportRow[];
 };
 
@@ -84,6 +85,8 @@ type CardGroupMode =
   | "download_category"
   | "rarity_tag"
   | "none";
+
+type GridPageGroupMode = "download_category" | "rarity_tag";
 
 const PAGE_SIZE = 200;
 const EXPORT_PAGE_SIZE = 1000;
@@ -1974,7 +1977,8 @@ function renderEightUpCanvas(
   ctx: CanvasRenderingContext2D,
   rows: ExportRow[],
   images: Array<CanvasImageSource | null>,
-  category: string
+  category: string,
+  mode: GridPageGroupMode = "download_category"
 ) {
   const width = EIGHT_UP_WIDTH;
   const height = EIGHT_UP_HEIGHT;
@@ -2055,6 +2059,12 @@ function renderEightUpCanvas(
   ctx.fillStyle = "rgba(255,255,255,0.75)";
   ctx.fillText(suffix, startX, footerY);
   ctx.restore();
+
+  const badgeFont = '800 18px "Segoe UI", Arial, sans-serif';
+  const badgeHeight = 36;
+  const badgePaddingX = 14;
+  const badgeLineWidth = 1.5;
+  const badgeStepY = 40;
 
   for (let i = 0; i < GRID_PAGE_SIZE; i += 1) {
     const col = i % cols;
@@ -2165,24 +2175,24 @@ function renderEightUpCanvas(
           tagY,
           {
             tag,
-            font: '800 9px "Segoe UI", Arial, sans-serif',
-            height: 18,
-            paddingX: 7,
+            font: badgeFont,
+            height: badgeHeight,
+            paddingX: badgePaddingX,
             maxWidth: innerW - 16,
-            lineWidth: 1,
+            lineWidth: badgeLineWidth,
           }
         );
-        tagY += 21;
+        tagY += badgeStepY;
       }
       const extraCount = exportTags.length - visibleTags.length;
       if (extraCount > 0) {
         drawProductTagBadge(ctx, `+${extraCount} more`, innerX + 8, tagY, {
           tag: "more",
-          font: '800 9px "Segoe UI", Arial, sans-serif',
-          height: 18,
-          paddingX: 7,
+          font: badgeFont,
+          height: badgeHeight,
+          paddingX: badgePaddingX,
           maxWidth: innerW - 16,
-          lineWidth: 1,
+          lineWidth: badgeLineWidth,
         });
       }
     }
@@ -2633,7 +2643,7 @@ export default function InventorySheetPage() {
         >;
         unresolvedRenderedCount += unresolvedRows.length;
         while (images.length < GRID_PAGE_SIZE) images.push(null);
-        renderEightUpCanvas(ctx, page.rows, images, page.group);
+        renderEightUpCanvas(ctx, page.rows, images, page.group, page.mode);
         const blob = await canvasToBlob(canvas, "image/png");
         const groupFolder = page.folderName
           ? params.zip.folder(page.folderName) ?? params.zip
@@ -2717,6 +2727,7 @@ export default function InventorySheetPage() {
           folderName: page.folderName,
           fileName: page.fileName,
           group: page.group,
+          mode: page.mode,
           rows: page.rows.map((row) =>
             mergeExportRowWithLatest(row, latestMap.get(row.id))
           ),
@@ -3697,10 +3708,17 @@ export default function InventorySheetPage() {
     }
   }
 
-  function buildGridPages(source: ExportRow[]) {
+  function buildGridPages(
+    source: ExportRow[],
+    options?: { mode?: GridPageGroupMode }
+  ) {
+    const mode = options?.mode ?? "download_category";
     const isTrueScaleGroup = (value: string) =>
       value === "Truescales" || value.startsWith("Truescales ");
     const expanded = source.flatMap((row) => {
+      if (mode === "rarity_tag") {
+        return getRowRarityCategories(row).map((group) => ({ group, row }));
+      }
       if (categoryFilter && categoryFilter !== ALL_CATEGORY) {
         if (!rowHasDownloadCategory(row, categoryFilter)) return [];
         return [{ group: categoryFilter, row }];
@@ -3710,8 +3728,18 @@ export default function InventorySheetPage() {
     const sorted = [...expanded].sort((a, b) => {
       const catA = a.group || "Others";
       const catB = b.group || "Others";
-      const orderA = DOWNLOAD_CATEGORY_ORDER.indexOf(catA);
-      const orderB = DOWNLOAD_CATEGORY_ORDER.indexOf(catB);
+      const orderA =
+        mode === "rarity_tag"
+          ? PRODUCT_SPECIAL_TAG_OPTIONS.findIndex(
+              (option) => getProductSpecialTagLabel(option.key) === catA
+            )
+          : DOWNLOAD_CATEGORY_ORDER.indexOf(catA);
+      const orderB =
+        mode === "rarity_tag"
+          ? PRODUCT_SPECIAL_TAG_OPTIONS.findIndex(
+              (option) => getProductSpecialTagLabel(option.key) === catB
+            )
+          : DOWNLOAD_CATEGORY_ORDER.indexOf(catB);
       if (orderA !== orderB) {
         return (orderA === -1 ? 999 : orderA) - (orderB === -1 ? 999 : orderB);
       }
@@ -3746,6 +3774,7 @@ export default function InventorySheetPage() {
       for (let i = 0; i < bucket.length; i += GRID_PAGE_SIZE) {
         pages.push({
           group: currentGroup || "Unassigned",
+          mode,
           rows: bucket.slice(i, i + GRID_PAGE_SIZE),
         });
       }
@@ -4014,13 +4043,13 @@ export default function InventorySheetPage() {
       .product-tags {
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 12px;
       }
       .product-tags--card {
         position: absolute;
-        top: 10px;
-        left: 10px;
-        right: 10px;
+        top: 12px;
+        left: 12px;
+        right: 12px;
         z-index: 2;
         pointer-events: none;
       }
@@ -4029,13 +4058,13 @@ export default function InventorySheetPage() {
         max-width: 100%;
         display: inline-flex;
         align-items: center;
-        gap: 7px;
-        min-height: 24px;
-        padding: 5px 12px;
+        gap: 12px;
+        min-height: 36px;
+        padding: 9px 18px;
         border-radius: 999px;
-        border: 1.5px solid rgba(255,255,255,0.22);
+        border: 1.75px solid rgba(255,255,255,0.24);
         box-shadow: 0 10px 20px rgba(0,0,0,0.26);
-        font-size: 9px;
+        font-size: 18px;
         line-height: 1;
         font-weight: 800;
         letter-spacing: 0.16em;
@@ -4045,8 +4074,8 @@ export default function InventorySheetPage() {
         text-overflow: ellipsis;
       }
       .product-tag__dot {
-        width: 6px;
-        height: 6px;
+        width: 10px;
+        height: 10px;
         flex: 0 0 auto;
         border-radius: 999px;
         background: rgba(255,255,255,0.96);
@@ -4221,8 +4250,12 @@ export default function InventorySheetPage() {
     }
   }
 
-  async function startEightUpZipDownload(options?: { singleFolder?: boolean }) {
+  async function startEightUpZipDownload(options?: {
+    singleFolder?: boolean;
+    mode?: GridPageGroupMode;
+  }) {
     const singleFolder = Boolean(options?.singleFolder);
+    const mode = options?.mode ?? "download_category";
     if (exportingEightUpZip) return;
     setPendingZipSession(null);
     setShowZipRetryModal(false);
@@ -4251,7 +4284,15 @@ export default function InventorySheetPage() {
         );
         return;
       }
-      const pages = buildGridPages(imageRows);
+      const pages = buildGridPages(imageRows, { mode });
+      if (!pages.length) {
+        setExportMsg(
+          mode === "rarity_tag"
+            ? "No rows with rarity tags available for 4-up export."
+            : "No rows available for 4-up export."
+        );
+        return;
+      }
       const pageTasks = buildZipPageTasks(pages, { singleFolder });
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
@@ -4273,8 +4314,12 @@ export default function InventorySheetPage() {
         pendingPages: pass.deferredPages,
         unresolvedRenderedCount: 0,
         downloadName: singleFolder
-          ? "inventory-4up-pages-flat.zip"
-          : "inventory-9up-pages.zip",
+          ? mode === "rarity_tag"
+            ? "inventory-4up-pages-rarity-flat.zip"
+            : "inventory-4up-pages-flat.zip"
+          : mode === "rarity_tag"
+            ? "inventory-4up-pages-rarity.zip"
+            : "inventory-9up-pages.zip",
         singleFolder,
       };
 
@@ -4298,6 +4343,10 @@ export default function InventorySheetPage() {
 
   async function downloadEightUpZip() {
     await startEightUpZipDownload({ singleFolder: false });
+  }
+
+  async function downloadEightUpZipRarity() {
+    await startEightUpZipDownload({ singleFolder: false, mode: "rarity_tag" });
   }
 
   async function downloadEightUpZipSingleFolder() {
@@ -4523,11 +4572,19 @@ export default function InventorySheetPage() {
                 variant="secondary"
                 size="sm"
                 onClick={() => {
-                  void downloadCardsZip({ mode: "rarity_tag" });
+                  if (hasPendingZipResume) {
+                    setShowZipRetryModal(true);
+                    return;
+                  }
+                  void downloadEightUpZipRarity();
                 }}
-                disabled={exportingCards}
+                disabled={exportingEightUpZip}
               >
-                {exportingCards ? "Preparing..." : "Download Cards ZIP (Rarity)"}
+                {exportingEightUpZip
+                  ? "Preparing..."
+                  : hasPendingZipResume
+                    ? `Resume 4-up ZIP (${pendingZipPagesCount})`
+                    : "Download 4-up ZIP (Rarity)"}
               </Button>
               <Button
                 variant="secondary"
