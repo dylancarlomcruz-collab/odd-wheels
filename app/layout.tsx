@@ -51,8 +51,38 @@ const pwaRegisterScript = `
 (() => {
   if (typeof window === "undefined") return;
   if (!("serviceWorker" in navigator)) return;
+  const CACHE_RESET_VERSION = "odd-wheels-pwa-reset-v1";
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+    const resetPromise = (async () => {
+      try {
+        if (
+          window.location.hostname === "localhost" ||
+          window.location.hostname === "127.0.0.1"
+        ) {
+          return;
+        }
+        const previous = window.localStorage.getItem("oddwheels-pwa-reset-version");
+        if (previous === CACHE_RESET_VERSION) {
+          return;
+        }
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((reg) => reg.unregister().catch(() => undefined)));
+        if ("caches" in window) {
+          const keys = await window.caches.keys();
+          await Promise.all(
+            keys
+              .filter((key) => key.startsWith("odd-wheels-pwa-"))
+              .map((key) => window.caches.delete(key))
+          );
+        }
+        window.localStorage.setItem("oddwheels-pwa-reset-version", CACHE_RESET_VERSION);
+      } catch {}
+    })();
+
+    resetPromise
+      .then(() => navigator.serviceWorker.register("/sw.js"))
+      .then((registration) => registration.update().catch(() => undefined))
+      .catch(() => undefined);
   });
 })();
 `;

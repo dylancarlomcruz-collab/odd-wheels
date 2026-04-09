@@ -1,6 +1,5 @@
-const CACHE_NAME = "odd-wheels-pwa-v2";
+const CACHE_NAME = "odd-wheels-pwa-v3";
 const PRECACHE_URLS = [
-  "/",
   "/manifest.webmanifest",
   "/icon-192.png",
   "/icon-512.png",
@@ -46,9 +45,6 @@ function isCacheableAsset(request) {
   if (request.method !== "GET") return false;
   const destination = request.destination;
   if (
-    destination === "script" ||
-    destination === "style" ||
-    destination === "worker" ||
     destination === "font" ||
     destination === "image"
   ) {
@@ -56,9 +52,6 @@ function isCacheableAsset(request) {
   }
   const url = new URL(request.url);
   return (
-    url.pathname.startsWith("/_next/static/") ||
-    url.pathname.endsWith(".js") ||
-    url.pathname.endsWith(".css") ||
     url.pathname.endsWith(".png") ||
     url.pathname.endsWith(".jpg") ||
     url.pathname.endsWith(".jpeg") ||
