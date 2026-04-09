@@ -536,21 +536,16 @@ export default function ShopPageClient() {
       setLoading(true);
       setErr(null);
 
-      const { data, error } = await supabase
-        .from("product_variants")
-        .select(
-          "id,created_at,condition,barcode,issue_notes,issue_photo_urls,public_notes,ship_class,price,sale_price,discount_percent,qty, product:products(*)"
-        )
-        .gt("qty", 0)
-        .order("created_at", { ascending: false });
+      const res = await fetch("/api/shop/products", { cache: "no-store" });
+      const json = await res.json().catch(() => null);
 
       if (!mounted) return;
 
-      if (error) {
-        setErr(error.message || "Failed to load products");
+      if (!res.ok || !json?.ok) {
+        setErr(json?.error || "Failed to load products");
         setRows([]);
       } else {
-        setRows((data as any) ?? []);
+        setRows((json.rows as any) ?? []);
       }
       setLoading(false);
     })();
