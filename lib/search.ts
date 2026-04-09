@@ -7,9 +7,42 @@ import {
 const BRAND_SYNONYMS: Array<{ pattern: RegExp; canonical: string }> = [
   { pattern: /\bmini\s*-?\s*gt\b/gi, canonical: "mini gt" },
   { pattern: /\bminigt\b/gi, canonical: "mini gt" },
+  { pattern: /\btsm\s*-?\s*models?\b/gi, canonical: "mini gt" },
+  { pattern: /\btsm\b/gi, canonical: "mini gt" },
   { pattern: /\bkaido\s*-?\s*house\b/gi, canonical: "kaido house" },
+  { pattern: /\bkaido\s+huse\b/gi, canonical: "kaido house" },
+  { pattern: /\binno\s*-?\s*64\b/gi, canonical: "inno64" },
+  { pattern: /\binno64\b/gi, canonical: "inno64" },
   { pattern: /\bpop\s*-?\s*race\b/gi, canonical: "pop race" },
+  { pattern: /\bpoprace\b/gi, canonical: "pop race" },
   { pattern: /\btarmac\s*works?\b/gi, canonical: "tarmac" },
+  { pattern: /\btarmc(?:\s+works?)?\b/gi, canonical: "tarmac" },
+  {
+    pattern: /\btomica\s+limited\s+vintage\s+neo\b/gi,
+    canonical: "tomica limited vintage neo",
+  },
+  {
+    pattern: /\btomica\s+limted\s+vintage\s+neo\b/gi,
+    canonical: "tomica limited vintage neo",
+  },
+  { pattern: /\btlv\s*-?\s*n\b/gi, canonical: "tomica limited vintage neo" },
+  { pattern: /\btlvn\b/gi, canonical: "tomica limited vintage neo" },
+  { pattern: /\btomytec\b/gi, canonical: "tomica limited vintage neo" },
+  {
+    pattern: /\btomica\s+limited\s+vintage\b/gi,
+    canonical: "tomica limited vintage",
+  },
+  {
+    pattern: /\btomica\s+limted\s+vintage\b/gi,
+    canonical: "tomica limited vintage",
+  },
+  { pattern: /\btlv\b/gi, canonical: "tomica limited vintage" },
+  { pattern: /\bhot\s*-?\s*wheels\b/gi, canonical: "hot wheels" },
+  { pattern: /\bhotwheels\b/gi, canonical: "hot wheels" },
+  { pattern: /\bstreet\s*warrior\b/gi, canonical: "street warrior" },
+  { pattern: /\bstreetwarrior\b/gi, canonical: "street warrior" },
+  { pattern: /\bfocal\s*horizon\b/gi, canonical: "focal horizon" },
+  { pattern: /\bfocalhorizon\b/gi, canonical: "focal horizon" },
 ];
 
 const MODEL_SYNONYMS: Array<{ pattern: RegExp; append: string }> = [
@@ -19,6 +52,31 @@ const MODEL_SYNONYMS: Array<{ pattern: RegExp; append: string }> = [
   { pattern: /\bgtr\b/i, append: "gt-r" },
   { pattern: /\brx\s*-?\s*7\b/i, append: "rx-7" },
   { pattern: /\brx\s*-?\s*7\b/i, append: "rx7" },
+  { pattern: /\bef9\b/i, append: "civic ef9" },
+  { pattern: /\beg6\b/i, append: "civic eg6" },
+  { pattern: /\bek9\b/i, append: "civic ek9" },
+  { pattern: /\bfd2\b/i, append: "civic fd2" },
+  { pattern: /\bdc2\b/i, append: "integra dc2" },
+  { pattern: /\bs13\b/i, append: "silvia s13" },
+  { pattern: /\bs14\b/i, append: "silvia s14" },
+  { pattern: /\bs15\b/i, append: "silvia s15" },
+  { pattern: /\bbnr32\b/i, append: "skyline gt-r bnr32" },
+  { pattern: /\ber34\b/i, append: "skyline er34" },
+  { pattern: /\bae86\b/i, append: "corolla trueno levin ae86" },
+  { pattern: /\bjzx100\b/i, append: "chaser mark ii cresta jzx100" },
+  { pattern: /\bgc8\b/i, append: "impreza gc8" },
+  { pattern: /\bgd3\b/i, append: "fit jazz gd3" },
+  { pattern: /\bge8\b/i, append: "fit jazz ge8" },
+];
+
+const CONDITIONAL_QUERY_EXPANSIONS: Array<{
+  pattern: RegExp;
+  expands: string[];
+}> = [
+  { pattern: /\bcivic\s+ef\b/i, expands: ["civic ef", "civic ef9"] },
+  { pattern: /\bcivic\s+eg\b/i, expands: ["civic eg", "civic eg6"] },
+  { pattern: /\bcivic\s+ek\b/i, expands: ["civic ek", "civic ek9"] },
+  { pattern: /\bcivic\s+fd\b/i, expands: ["civic fd", "civic fd2"] },
 ];
 
 const SMART_SYNONYM_GROUPS: Array<{
@@ -76,7 +134,7 @@ const SMART_SYNONYM_GROUPS: Array<{
   },
 ];
 
-const MAX_EXPANDED_TERMS = 20;
+const MAX_EXPANDED_TERMS = 32;
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -106,9 +164,11 @@ export function normalizeSearchTerm(value: string) {
     .trim();
 
   let normalized = ` ${base} `;
+  normalized = normalizeLvnCodes(normalized);
   for (const rule of BRAND_SYNONYMS) {
     normalized = normalized.replace(rule.pattern, ` ${rule.canonical} `);
   }
+  normalized = normalizeLvnCodes(normalized);
   normalized = normalized.replace(/\s+/g, " ").trim();
   return normalized;
 }
@@ -125,6 +185,21 @@ export function expandSearchTerms(value: string) {
     if (hasTrigger(normalized, group.triggers)) {
       group.expands.forEach((term) => terms.add(term));
     }
+  });
+
+  CONDITIONAL_QUERY_EXPANSIONS.forEach((rule) => {
+    if (rule.pattern.test(normalized)) {
+      rule.expands.forEach((term) => terms.add(term));
+    }
+  });
+
+  collectLvnCodes(raw, normalized).forEach((code) => {
+    terms.add(`lvn${code}`);
+    terms.add(`lv-n${code}`);
+    terms.add(`lv n${code}`);
+    terms.add(`tlvn${code}`);
+    terms.add(`tlv-n${code}`);
+    terms.add(`n${code}`);
   });
 
   for (const rule of MODEL_SYNONYMS) {
@@ -145,6 +220,40 @@ function sanitizeIlikeTerm(term: string) {
     .replace(/[%,()]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeLvnCodes(value: string) {
+  return String(value ?? "")
+    .replace(
+      /\b(?:tlv|lv)\s*[- ]?\s*n\s*[- ]?\s*([0-9]{1,4}[a-z]{0,3})\b/gi,
+      (_, code: string) => ` lvn${String(code).toLowerCase()} `
+    )
+    .replace(
+      /\blvn\s*[- ]?\s*([0-9]{1,4}[a-z]{0,3})\b/gi,
+      (_, code: string) => ` lvn${String(code).toLowerCase()} `
+    );
+}
+
+function collectLvnCodes(...values: string[]) {
+  const codes = new Set<string>();
+  const patterns = [
+    /\b(?:tlv|lv)\s*[- ]?\s*n\s*[- ]?\s*([0-9]{1,4}[a-z]{0,3})\b/gi,
+    /\blvn\s*[- ]?\s*([0-9]{1,4}[a-z]{0,3})\b/gi,
+  ];
+
+  for (const value of values) {
+    const input = String(value ?? "");
+    for (const pattern of patterns) {
+      pattern.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = pattern.exec(input))) {
+        const code = String(match[1] ?? "").toLowerCase().trim();
+        if (code) codes.add(code);
+      }
+    }
+  }
+
+  return Array.from(codes);
 }
 
 export function buildSearchOr(terms: string[]) {
