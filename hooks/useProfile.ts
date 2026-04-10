@@ -1,8 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { isSupabaseReady, supabase } from "@/lib/supabase/browser";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { fetchAuthedJson } from "@/lib/api/client";
 
 export type Role = "admin" | "cashier" | "buyer";
 
@@ -26,7 +26,7 @@ export function useProfile() {
     let mounted = true;
 
     async function run() {
-      if (!user || !isSupabaseReady) {
+      if (!user) {
         setProfile(null);
         setLoading(false);
         return;
@@ -34,27 +34,25 @@ export function useProfile() {
 
       setLoading(true);
 
-      const { data, error, status } = await supabase
-        .from("profiles")
-        .select(
-          "id, role, full_name, username, contact_number, email, shipping_defaults, created_at"
-        )
-        .eq("id", user.id)
-        .maybeSingle();
+      try {
+        const payload = await fetchAuthedJson<{ ok: true; profile: Profile | null }>(
+          "/api/account/profile"
+        );
 
-      if (!mounted) return;
-
-      if (error) {
-        console.error("Failed to load profile:", { status, error });
+        if (!mounted) return;
+        setProfile(payload.profile ?? null);
+      } catch (error) {
+        if (!mounted) return;
+        console.error("Failed to load profile:", error);
         setProfile(null);
-      } else {
-        setProfile((data as any) ?? null);
       }
 
-      setLoading(false);
+      if (mounted) {
+        setLoading(false);
+      }
     }
 
-    run();
+    void run();
     return () => {
       mounted = false;
     };

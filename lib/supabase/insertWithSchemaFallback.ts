@@ -1,5 +1,3 @@
-"use client";
-
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const MISSING_COLUMN_PATTERN =

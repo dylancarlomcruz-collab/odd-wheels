@@ -1,8 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { supabase } from "@/lib/supabase/browser";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { fetchAuthedJson } from "@/lib/api/client";
 
 // Counts ALL orders for the current user EXCEPT VOIDED/CANCELLED.
 export function useActiveOrderCount() {
@@ -19,24 +19,21 @@ export function useActiveOrderCount() {
 
     setLoading(true);
 
-    const { count: c, error } = await supabase
-      .from("orders")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", user.id)
-      .not("status", "in", "(CANCELLED,VOIDED)");
-
-    if (error) {
+    try {
+      const payload = await fetchAuthedJson<{ ok: true; count: number }>(
+        "/api/account/orders/count"
+      );
+      setCount(Number(payload.count ?? 0));
+    } catch (error) {
       console.error("Failed to count orders:", error);
       setCount(0);
-    } else {
-      setCount(Number(c ?? 0));
     }
 
     setLoading(false);
   }, [user?.id]);
 
   React.useEffect(() => {
-    reload();
+    void reload();
   }, [reload]);
 
   return { count, loading, reload };

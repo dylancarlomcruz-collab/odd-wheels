@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase/browser";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { getOrCreateGuestSessionId } from "@/lib/guestSession";
 import { notifyAdminPushEvent } from "@/lib/push/adminClient";
+import { fetchAuthedJson, fetchJson } from "@/lib/api/client";
 
 export type CartLine = {
   id: string;
@@ -12,8 +13,6 @@ export type CartLine = {
   variant_id: string;
   qty: number;
   protector_selected: boolean;
-
-  // joined
   variant: {
     id: string;
     condition: string;
@@ -143,6 +142,7 @@ export function useCart() {
 
   const reload = React.useCallback(async () => {
     setLoading(true);
+
     if (!user) {
       const guestItems = readGuestCart();
       if (!guestItems.length) {
@@ -150,165 +150,67 @@ export function useCart() {
         setLoading(false);
         return;
       }
-      const variantIds = guestItems
-        .map((item) => item.variant_id)
-        .filter(Boolean);
-      if (!variantIds.length) {
-        setLines([]);
-        setLoading(false);
-        return;
-      }
-      const { data, error } = await supabase
-        .from("product_variants")
-        .select(
-          "id,condition,issue_notes,public_notes,price,sale_price,discount_percent,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches, product:products(id,title,brand,model,image_urls)"
-        )
-        .in("id", variantIds);
 
-      if (error) {
+      try {
+        const payload = await fetchJson<{
+          ok: true;
+          lines: CartLine[];
+          items: GuestCartItem[];
+        }>("/api/cart", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "guestPreview", items: guestItems }),
+        });
+        writeGuestCart(payload.items);
+        void syncGuestCart(payload.items);
+        setLines(payload.lines ?? []);
+      } catch (error) {
         console.error("Failed to load guest cart:", error);
         setLines([]);
-        setLoading(false);
-        return;
       }
 
-      const variantMap = new Map(
-        ((data as any[]) ?? []).map((row) => [String(row.id), row])
-      );
-      const nextLines: CartLine[] = [];
-      const cleanedItems: GuestCartItem[] = [];
-      let changed = false;
-      for (const item of guestItems) {
-        const variant = variantMap.get(String(item.variant_id));
-        if (!variant) {
-          changed = true;
-          continue;
-        }
-        const available = Number(variant.qty ?? 0);
-        const desired = Number(item.qty ?? 0);
-        const nextQty = Math.max(1, Math.min(desired, available || desired));
-        if (nextQty !== desired) changed = true;
-        nextLines.push({
-          id: String(item.variant_id),
-          user_id: "guest",
-          variant_id: String(item.variant_id),
-          qty: nextQty,
-          protector_selected: Boolean(item.protector_selected),
-          variant: variant as any,
-        });
-        cleanedItems.push({ ...item, qty: nextQty });
-      }
-      if (changed) {
-        writeGuestCart(cleanedItems);
-      }
-      void syncGuestCart(cleanedItems);
-      setLines(nextLines);
       setLoading(false);
       return;
     }
 
-    const { data, error } = await supabase
-      .from("cart_items")
-      .select(
-        "id,user_id,variant_id,qty,protector_selected, variant:product_variants(id,condition,issue_notes,public_notes,price,sale_price,discount_percent,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches, product:products(id,title,brand,model,image_urls))"
-      )
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false });
+    try {
+      const payload = await fetchAuthedJson<{ ok: true; rows: CartLine[] }>(
+        "/api/cart"
+      );
+      setLines(payload.rows ?? []);
+    } catch (error) {
+      console.error("Failed to load cart:", error);
+      setLines([]);
+    }
 
-    if (error) console.error("Failed to load cart:", error);
-    setLines((data as any) ?? []);
     setLoading(false);
   }, [user?.id]);
 
   React.useEffect(() => {
-    reload();
+    void reload();
   }, [reload]);
 
   const mergeGuestCartToUser = React.useCallback(async () => {
     if (!user) return;
     if (mergePromise) return mergePromise;
+
     const run = (async () => {
       const guestItems = readGuestCart();
       if (!guestItems.length) return;
-      const variantIds = guestItems.map((item) => item.variant_id).filter(Boolean);
-      if (!variantIds.length) return;
 
-      const [existingRes, inventoryRes] = await Promise.all([
-        supabase
-          .from("cart_items")
-          .select("id,variant_id,qty,protector_selected")
-          .eq("user_id", user.id)
-          .in("variant_id", variantIds),
-        supabase
-          .from("product_variants")
-          .select("id,qty")
-          .in("id", variantIds),
-      ]);
-
-      const existingMap = new Map<
-        string,
-        { id: string; qty: number; protector_selected: boolean }
-      >();
-      (existingRes.data as any[] | null)?.forEach((row) => {
-        if (!row?.variant_id) return;
-        existingMap.set(String(row.variant_id), {
-          id: String(row.id),
-          qty: Number(row.qty ?? 0),
-          protector_selected: Boolean(row.protector_selected),
-        });
-      });
-
-      const inventoryMap = new Map<string, number>();
-      (inventoryRes.data as any[] | null)?.forEach((row) => {
-        if (!row?.id) return;
-        inventoryMap.set(String(row.id), Number(row.qty ?? 0));
-      });
-
-      for (const item of guestItems) {
-        const variantId = String(item.variant_id ?? "").trim();
-        if (!variantId) continue;
-        const guestQty = Number(item.qty ?? 0);
-        if (!Number.isFinite(guestQty) || guestQty <= 0) continue;
-        const available = inventoryMap.get(variantId);
-        if (typeof available === "number" && available <= 0) continue;
-        const existing = existingMap.get(variantId);
-        const prevQty = existing?.qty ?? 0;
-        const desired = prevQty + guestQty;
-        const availableQty = typeof available === "number" ? available : undefined;
-        const nextQty = typeof availableQty === "number"
-          ? Math.max(1, Math.min(desired, availableQty))
-          : Math.max(1, desired);
-        const nextProtectorSelected =
-          Boolean(existing?.protector_selected) ||
-          Boolean(item.protector_selected);
-        if (existing?.id) {
-          if (
-            nextQty !== prevQty ||
-            nextProtectorSelected !== existing?.protector_selected
-          ) {
-            await supabase
-              .from("cart_items")
-              .update({
-                qty: nextQty,
-                protector_selected: nextProtectorSelected,
-              })
-              .eq("id", existing.id);
-          }
-        } else {
-          await supabase
-            .from("cart_items")
-            .insert({
-              user_id: user.id,
-              variant_id: variantId,
-              qty: nextQty,
-              protector_selected: Boolean(item.protector_selected),
-            });
+      const payload = await fetchAuthedJson<{ ok: true; rows: CartLine[] }>(
+        "/api/cart",
+        {
+          method: "POST",
+          body: JSON.stringify({ action: "mergeGuest", items: guestItems }),
         }
-      }
+      );
 
       writeGuestCart([]);
       void syncGuestCart([]);
+      setLines(payload.rows ?? []);
     })();
+
     mergePromise = run;
     try {
       await run;
@@ -329,7 +231,7 @@ export function useCart() {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ source?: string }>).detail;
       if (detail?.source === instanceId.current) return;
-      reload();
+      void reload();
     };
     window.addEventListener(CART_EVENT, handler as EventListener);
     return () => {
@@ -337,12 +239,11 @@ export function useCart() {
     };
   }, [reload]);
 
-  // Optional: realtime stock updates (requires Supabase Realtime enabled for product_variants).
   React.useEffect(() => {
     if (!user) return;
     if (lines.length === 0) return;
 
-    const variantIds = lines.map((l) => l.variant_id).filter(Boolean);
+    const variantIds = lines.map((line) => line.variant_id).filter(Boolean);
     const filter = variantIds.length ? `id=in.(${variantIds.join(",")})` : undefined;
 
     const channel = supabase
@@ -351,8 +252,7 @@ export function useCart() {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "product_variants", filter },
         () => {
-          // Re-validate cart when any cart variant stock changes
-          reload();
+          void reload();
         }
       )
       .subscribe();
@@ -360,7 +260,7 @@ export function useCart() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user?.id, JSON.stringify(lines.map((l) => l.variant_id))]);
+  }, [user?.id, reload, JSON.stringify(lines.map((line) => line.variant_id))]);
 
   const add = React.useCallback(
     async (
@@ -368,28 +268,31 @@ export function useCart() {
       qty = 1,
       options?: { protectorSelected?: boolean }
     ): Promise<AddResult> => {
-      // Always clamp based on current inventory qty
-      const { data: vRow, error: vErr } = await supabase
-        .from("product_variants")
-        .select("qty, product_id")
-        .eq("id", variantId)
-        .maybeSingle();
-      if (vErr) throw vErr;
-      const available = Number((vRow as any)?.qty ?? 0);
-      const productId = (vRow as any)?.product_id as string | undefined;
+      const summary = await fetchJson<{
+        ok: true;
+        available: number;
+        productId: string;
+      }>("/api/cart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "variantSummary", variantId }),
+      });
+
+      const available = Number(summary.available ?? 0);
+      const productId = summary.productId || undefined;
       if (available <= 0) throw new Error("Item sold out");
+
       const protectorSelected = Boolean(options?.protectorSelected);
 
       if (!user) {
         const guestItems = readGuestCart();
-        const existing = guestItems.find(
-          (item) => item.variant_id === variantId
-        );
+        const existing = guestItems.find((item) => item.variant_id === variantId);
         const prevQty = Number(existing?.qty ?? 0);
         const desired = prevQty + Number(qty);
         let desiredQty = desired;
         let nextQty = Math.max(1, Math.min(desired, available));
         let capped = desired > available;
+
         if (existing) {
           if (nextQty !== prevQty) {
             existing.qty = nextQty;
@@ -408,9 +311,11 @@ export function useCart() {
             protector_selected: protectorSelected,
           });
         }
+
         writeGuestCart(guestItems);
         void syncGuestCart(guestItems);
         await reload();
+
         if (productId) {
           supabase
             .rpc("increment_product_add_to_cart", { p_product_id: productId })
@@ -419,110 +324,86 @@ export function useCart() {
               (err) => console.error("Failed to log add-to-cart", err)
             );
         }
+
         emitCartUpdated(instanceId.current);
         return { available, desiredQty, nextQty, prevQty, capped };
       }
 
-      // Upsert: if exists, increment
-      const { data: existing } = await supabase
-        .from("cart_items")
-        .select("id,qty,protector_selected")
-        .eq("user_id", user.id)
-        .eq("variant_id", variantId)
-        .maybeSingle();
+      const payload = await fetchAuthedJson<{
+        ok: true;
+        available: number;
+        desiredQty: number;
+        nextQty: number;
+        prevQty: number;
+        capped: boolean;
+        productId?: string;
+      }>("/api/cart", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "add",
+          variantId,
+          qty,
+          protectorSelected,
+        }),
+      });
 
-      const prevQty = Number(existing?.qty ?? 0);
-      const desired = prevQty + Number(qty);
-      let desiredQty = desired;
-      let nextQty = Math.max(1, Math.min(desired, available));
-      let capped = desired > available;
-
-      const nextProtectorSelected =
-        Boolean(existing?.protector_selected) || protectorSelected;
-
-      if (existing?.id) {
-        if (
-          nextQty !== prevQty ||
-          nextProtectorSelected !== Boolean(existing?.protector_selected)
-        ) {
-          await supabase
-            .from("cart_items")
-            .update({ qty: nextQty, protector_selected: nextProtectorSelected })
-            .eq("id", existing.id);
-        }
-      } else {
-        desiredQty = Number(qty) || 1;
-        nextQty = Math.max(1, Math.min(desiredQty, available));
-        capped = desiredQty > available;
-        await supabase
-          .from("cart_items")
-          .insert({
-            user_id: user.id,
-            variant_id: variantId,
-            qty: nextQty,
-            protector_selected: protectorSelected,
-          });
-      }
       await reload();
-      if (productId) {
+
+      if (payload.productId || productId) {
         supabase
-          .rpc("increment_product_add_to_cart", { p_product_id: productId })
+          .rpc("increment_product_add_to_cart", {
+            p_product_id: payload.productId || productId,
+          })
           .then(
             () => undefined,
             (err) => console.error("Failed to log add-to-cart", err)
           );
       }
-      if (prevQty <= 0 && nextQty > 0) {
+
+      if (payload.prevQty <= 0 && payload.nextQty > 0) {
         void notifyAdminPushEvent({
           event: "cart_activity",
           variantId,
-          qty: nextQty,
+          qty: payload.nextQty,
         }).catch((err) =>
           console.error("Admin cart push notification failed:", err)
         );
       }
+
       emitCartUpdated(instanceId.current);
-      return { available, desiredQty, nextQty, prevQty, capped };
+      return {
+        available: payload.available,
+        desiredQty: payload.desiredQty,
+        nextQty: payload.nextQty,
+        prevQty: payload.prevQty,
+        capped: payload.capped,
+      };
     },
     [user?.id, reload]
   );
 
   const updateQty = React.useCallback(
     async (lineId: string, qty: number) => {
-      const isGuest = !user;
-      const variantId = isGuest ? lineId : undefined;
-      let resolvedVariantId = variantId;
-      if (!isGuest) {
-        // Fetch variantId for this cart line
-        const { data: row, error: rowErr } = await supabase
-          .from("cart_items")
-          .select("id,variant_id")
-          .eq("id", lineId)
-          .maybeSingle();
-        if (rowErr) throw rowErr;
-        resolvedVariantId = (row as any)?.variant_id as string | undefined;
-      }
-
-      // Clamp to inventory
-      let available = Infinity;
-      if (resolvedVariantId) {
-        const { data: vRow, error: vErr } = await supabase
-          .from("product_variants")
-          .select("qty")
-          .eq("id", resolvedVariantId)
-          .maybeSingle();
-        if (vErr) throw vErr;
-        available = Number((vRow as any)?.qty ?? 0);
-      }
-
-      const desired = Number(qty);
-      const nextQty = Math.max(1, Math.min(Number.isFinite(desired) ? desired : 1, available));
-      if (isGuest && resolvedVariantId) {
-        const guestItems = readGuestCart();
-        const existing = guestItems.find(
-          (item) => item.variant_id === resolvedVariantId
+      if (!user) {
+        const summary = await fetchJson<{ ok: true; available: number }>(
+          "/api/cart",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "variantSummary", variantId: lineId }),
+          }
         );
+
+        const desired = Number(qty);
+        const nextQty = Math.max(
+          1,
+          Math.min(Number.isFinite(desired) ? desired : 1, summary.available)
+        );
+
+        const guestItems = readGuestCart();
+        const existing = guestItems.find((item) => item.variant_id === lineId);
         if (!existing) return;
+
         existing.qty = nextQty;
         writeGuestCart(guestItems);
         void syncGuestCart(guestItems);
@@ -530,7 +411,14 @@ export function useCart() {
         emitCartUpdated(instanceId.current);
         return;
       }
-      await supabase.from("cart_items").update({ qty: nextQty }).eq("id", lineId);
+
+      await fetchAuthedJson<{ ok: true; nextQty: number; available: number }>(
+        "/api/cart",
+        {
+          method: "POST",
+          body: JSON.stringify({ action: "updateQty", lineId, qty }),
+        }
+      );
       await reload();
       emitCartUpdated(instanceId.current);
     },
@@ -549,7 +437,11 @@ export function useCart() {
         emitCartUpdated(instanceId.current);
         return;
       }
-      await supabase.from("cart_items").delete().eq("id", lineId);
+
+      await fetchAuthedJson<{ ok: true }>("/api/cart", {
+        method: "POST",
+        body: JSON.stringify({ action: "remove", lineId }),
+      });
       await reload();
       emitCartUpdated(instanceId.current);
     },
@@ -562,6 +454,7 @@ export function useCart() {
         const guestItems = readGuestCart();
         const existing = guestItems.find((item) => item.variant_id === lineId);
         if (!existing) return;
+
         existing.protector_selected = selected;
         writeGuestCart(guestItems);
         void syncGuestCart(guestItems);
@@ -569,10 +462,11 @@ export function useCart() {
         emitCartUpdated(instanceId.current);
         return;
       }
-      await supabase
-        .from("cart_items")
-        .update({ protector_selected: selected })
-        .eq("id", lineId);
+
+      await fetchAuthedJson<{ ok: true }>("/api/cart", {
+        method: "POST",
+        body: JSON.stringify({ action: "updateProtector", lineId, selected }),
+      });
       await reload();
       emitCartUpdated(instanceId.current);
     },

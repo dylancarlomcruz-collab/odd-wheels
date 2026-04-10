@@ -36,14 +36,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     let mounted = true;
 
-    supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return;
-      setSession(data.session ?? null);
-      setLoading(false);
-      if (data.session && isRecoveryUrl() && pathname !== "/auth/reset") {
-        router.replace("/auth/reset");
-      }
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (!mounted) return;
+        if (error) {
+          console.error("Failed to restore auth session:", error);
+          setSession(null);
+          setLoading(false);
+          return;
+        }
+        setSession(data.session ?? null);
+        setLoading(false);
+        if (data.session && isRecoveryUrl() && pathname !== "/auth/reset") {
+          router.replace("/auth/reset");
+        }
+      })
+      .catch((error) => {
+        if (!mounted) return;
+        console.error("Failed to restore auth session:", error);
+        setSession(null);
+        setLoading(false);
+      });
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s ?? null);
@@ -64,7 +78,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loading,
     signOut: async () => {
       if (!supabase) return;
-      await supabase.auth.signOut();
+      try {
+        await supabase.auth.signOut();
+      } catch (error) {
+        console.error("Failed to sign out cleanly:", error);
+      }
     }
   };
 

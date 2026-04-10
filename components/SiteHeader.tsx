@@ -45,6 +45,7 @@ import { Badge } from "@/components/ui/Badge";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { PushNotificationsControl } from "@/components/PushNotificationsControl";
 import { useSettings } from "@/hooks/useSettings";
+import { fetchAuthedJson } from "@/lib/api/client";
 import { supabase } from "@/lib/supabase/browser";
 import { useShopSort } from "@/hooks/useShopSort";
 import {
@@ -64,15 +65,6 @@ const SHOP_SORT_OPTIONS: Array<{ value: "relevance" | "newest" | "popular"; labe
   { value: "newest", label: "Newest" },
   { value: "popular", label: "Most Popular" },
 ];
-const PREPARING_SHIPPING_STATUSES = [
-  "PREPARING",
-  "PREPARING_TO_SHIP",
-  "PREPARING TO SHIP",
-  "TO_SHIP",
-  "PENDING_SHIPMENT",
-  "NONE",
-];
-
 export function SiteHeader() {
   const { user } = useAuth();
   const { profile } = useProfile();
@@ -422,46 +414,20 @@ export function SiteHeader() {
 
   const loadStaffCounts = React.useCallback(async () => {
     if (!isStaff) return;
-    const [pendingOrders, sellTrade, preparingShipA, preparingShipB] =
-      await Promise.all([
-        supabase
-          .from("orders")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "PENDING_APPROVAL"),
-        supabase
-          .from("sell_trade_requests")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "PENDING"),
-        supabase
-          .from("orders")
-          .select("id", { count: "exact", head: true })
-          .eq("payment_status", "PAID")
-          .not("status", "in", "(CANCELLED,VOIDED)")
-          .in("shipping_status", PREPARING_SHIPPING_STATUSES),
-        supabase
-          .from("orders")
-          .select("id", { count: "exact", head: true })
-          .eq("payment_status", "PAID")
-          .not("status", "in", "(CANCELLED,VOIDED)")
-          .is("shipping_status", null),
-      ]);
-
-    const firstError =
-      pendingOrders.error ||
-      sellTrade.error ||
-      preparingShipA.error ||
-      preparingShipB.error;
-    if (firstError) {
-      console.error("Failed to load staff nav counts:", firstError);
+    try {
+      const payload = await fetchAuthedJson<{
+        ok: true;
+        counts: {
+          pendingApproval: number;
+          sellTradePending: number;
+          pendingShipping: number;
+        };
+      }>("/api/staff/nav-counts");
+      setStaffCounts(payload.counts);
+    } catch (error) {
+      console.error("Failed to load staff nav counts:", error);
       return;
     }
-
-    setStaffCounts({
-      pendingApproval: pendingOrders.count ?? 0,
-      sellTradePending: sellTrade.count ?? 0,
-      pendingShipping:
-        (preparingShipA.count ?? 0) + (preparingShipB.count ?? 0),
-    });
   }, [isStaff]);
 
   React.useEffect(() => {

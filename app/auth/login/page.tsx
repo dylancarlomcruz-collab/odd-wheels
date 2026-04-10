@@ -20,6 +20,14 @@ function formatLoginError(message: string) {
   ) {
     return "Your email is not verified yet. Please verify your email before logging in, and check your spam/junk folder if you cannot find the verification email in your inbox.";
   }
+  if (
+    lower.includes("failed to fetch") ||
+    lower.includes("networkerror") ||
+    lower.includes("fetch failed") ||
+    lower.includes("authretryablefetcherror")
+  ) {
+    return "Login could not reach Supabase right now. Please try again in a few seconds. If it keeps happening, hard refresh the page and try once more.";
+  }
   return message;
 }
 
@@ -68,18 +76,23 @@ function LoginContent() {
       }
     }
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email: emailValue,
-      password,
-    });
-    setLoading(false);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: emailValue,
+        password,
+      });
+      setLoading(false);
 
-    if (error) {
-      setError(formatLoginError(error.message));
-      return;
+      if (error) {
+        setError(formatLoginError(error.message));
+        return;
+      }
+
+      router.replace(redirectTo);
+    } catch (error: any) {
+      setLoading(false);
+      setError(formatLoginError(String(error?.message ?? "Failed to fetch")));
     }
-
-    router.replace(redirectTo);
   }
 
   return (
