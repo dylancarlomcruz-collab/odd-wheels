@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function GET() {
   try {
     const sb = supabaseAdmin();
@@ -15,7 +18,12 @@ export async function GET() {
     if (error) {
       return NextResponse.json(
         { ok: false, error: error.message || "Failed to load shop products." },
-        { status: 500 }
+        {
+          status: 500,
+          headers: {
+            "Cache-Control": "no-store, max-age=0",
+          },
+        }
       );
     }
 
@@ -24,14 +32,27 @@ export async function GET() {
       return qty > 0 && row?.product?.is_active !== false;
     });
 
-    return NextResponse.json({ ok: true, rows }, { status: 200 });
+    return NextResponse.json(
+      { ok: true, rows },
+      {
+        status: 200,
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+        },
+      }
+    );
   } catch (e: any) {
     return NextResponse.json(
       {
         ok: false,
         error: e?.message ?? "Failed to load shop products.",
       },
-      { status: 500 }
+      {
+        status: 500,
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+        },
+      }
     );
   }
 }
