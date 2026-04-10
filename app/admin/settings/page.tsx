@@ -174,7 +174,6 @@ export default function AdminSettingsPage() {
 
   const [schedule, setSchedule] = React.useState("");
   const [cutoff, setCutoff] = React.useState("");
-  const [orderApprovalEnabled, setOrderApprovalEnabled] = React.useState(true);
   const [priorityAvailable, setPriorityAvailable] = React.useState(false);
   const [priorityNote, setPriorityNote] = React.useState("");
   const [freeShippingThreshold, setFreeShippingThreshold] = React.useState("");
@@ -221,11 +220,6 @@ export default function AdminSettingsPage() {
     if (data) {
       setSchedule(data.shipping_schedule_text ?? "");
       setCutoff(data.shipping_cutoff_text ?? "");
-      setOrderApprovalEnabled(
-        (data as any).order_approval_enabled !== undefined
-          ? Boolean((data as any).order_approval_enabled)
-          : true
-      );
       setPriorityAvailable(!!data.priority_shipping_available);
       setPriorityNote(data.priority_shipping_note ?? "");
       setFreeShippingThreshold(
@@ -312,7 +306,6 @@ export default function AdminSettingsPage() {
     const { error } = await supabase.from("settings").update({
       shipping_schedule_text: schedule || null,
       shipping_cutoff_text: cutoff || null,
-      order_approval_enabled: orderApprovalEnabled,
       priority_shipping_available: priorityAvailable,
       priority_shipping_note: priorityNote || null,
       free_shipping_threshold: threshold,
@@ -432,17 +425,6 @@ export default function AdminSettingsPage() {
 
           <Textarea label="Shipping Schedule (shown on homepage & checkout)" value={schedule} onChange={(e) => setSchedule(e.target.value)} />
           <Input label="Shipping Cut-off (optional)" value={cutoff} onChange={(e) => setCutoff(e.target.value)} />
-          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
-            <div className="font-semibold">Order Approval</div>
-            <div className="text-sm text-white/60">
-              If disabled, orders skip the approval queue and go straight to payment.
-            </div>
-            <Checkbox
-              checked={orderApprovalEnabled}
-              onChange={setOrderApprovalEnabled}
-              label="Order approval enabled"
-            />
-          </div>
           <Input
             label="Free shipping threshold (PHP)"
             value={freeShippingThreshold}

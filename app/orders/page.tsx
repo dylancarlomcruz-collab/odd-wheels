@@ -33,7 +33,6 @@ import {
 } from "@/lib/orderBadges";
 
 type StageKey =
-  | "PENDING_APPROVAL"
   | "TO_PAY"
   | "TO_SHIP"
   | "SHIPPED"
@@ -144,7 +143,6 @@ function formatLeadTimeRange(minDays: number, maxDays: number) {
 }
 
 const STAGE_ORDER: StageKey[] = [
-  "PENDING_APPROVAL",
   "TO_PAY",
   "TO_SHIP",
   "SHIPPED",
@@ -162,16 +160,6 @@ const STAGE_META: Record<
     icon: typeof Clock3;
   }
 > = {
-  PENDING_APPROVAL: {
-    label: "Pending approval",
-    hint: "Waiting for staff approval",
-    empty: "No orders pending approval.",
-    badgeClass:
-      "border-amber-400/70 bg-amber-50 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100",
-    summaryClass:
-      "bg-amber-50 text-amber-800/80 dark:bg-amber-500/5 dark:text-amber-100/80",
-    icon: Clock3,
-  },
   TO_PAY: {
     label: "To pay",
     hint: "Payment required or under review",
@@ -225,7 +213,7 @@ function stageFromOrder(o: Order): StageKey | null {
     status === "PENDING_APPROVAL" ||
     status === "PENDING_STAFF_APPROVAL" ||
     status === "PENDING";
-  if (isPendingApproval) return "PENDING_APPROVAL";
+  if (isPendingApproval) return "TO_PAY";
 
   if (shipping === "COMPLETED" || status === "COMPLETED") return "COMPLETED";
   if (shipping === "SHIPPED" || status === "SHIPPED") return "SHIPPED";
@@ -607,7 +595,7 @@ function OrdersContent() {
   const { user } = useAuth();
   const { orders, itemsByOrderId, loading } = useOrders();
   const [activeTab, setActiveTab] =
-    React.useState<StageKey>("PENDING_APPROVAL");
+    React.useState<StageKey>("TO_PAY");
   const router = useRouter();
   const [showFeedback, setShowFeedback] = React.useState(false);
   const [feedbackPrompt, setFeedbackPrompt] =
@@ -636,7 +624,6 @@ function OrdersContent() {
 
   const stageBuckets = React.useMemo(() => {
     const buckets: Record<StageKey, Order[]> = {
-      PENDING_APPROVAL: [],
       TO_PAY: [],
       TO_SHIP: [],
       SHIPPED: [],
@@ -654,7 +641,7 @@ function OrdersContent() {
     if (loading) return;
     const firstWithOrders =
       STAGE_ORDER.find((key) => stageBuckets[key].length > 0) ??
-      "PENDING_APPROVAL";
+      "TO_PAY";
     setActiveTab((cur) => (cur === firstWithOrders ? cur : firstWithOrders));
   }, [loading, stageBuckets]);
 

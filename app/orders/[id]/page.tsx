@@ -559,6 +559,13 @@ function OrderDetailContent() {
     left !== null;
   const shippingStatus = normalizeShippingStatus(order?.shipping_status);
   const badges = order ? getBadges(order) : [];
+  const statusLabel = React.useMemo(() => {
+    const status = String(order?.status ?? "").toUpperCase();
+    if (["PENDING_APPROVAL", "PENDING_STAFF_APPROVAL", "PENDING"].includes(status)) {
+      return "Awaiting Payment";
+    }
+    return formatStatusLabel(order?.status);
+  }, [order?.status]);
   const isPaid = order?.payment_status === "PAID";
   const showPaymentDetails =
     order?.payment_status !== "PAID" &&
@@ -805,7 +812,7 @@ function OrderDetailContent() {
                 Order #{order.id.slice(0, 8)}
               </h1>
               <div className="text-sm text-white/60">
-                Status: {formatStatusLabel(order.status)} | Payment: {formatStatusLabel(order.payment_status)} {order.payment_method ? `(${order.payment_method})` : ""}
+                Status: {statusLabel} | Payment: {formatStatusLabel(order.payment_status)} {order.payment_method ? `(${order.payment_method})` : ""}
               </div>
             </div>
 
@@ -829,14 +836,6 @@ function OrderDetailContent() {
               <div className="font-semibold">Payment instructions</div>
             </CardHeader>
             <CardBody className="space-y-3 text-sm text-white/70">
-              {order.status === "PENDING_APPROVAL" ? (
-                <div className="panel p-3">
-                  Your order is waiting for admin/cashier approval. Once
-                  approved, items will be reserved and you will have 12 hours to
-                  pay.
-                </div>
-              ) : null}
-
               {order.status === "AWAITING_PAYMENT" ? (
                 <div className="panel border-yellow-500/30 bg-yellow-500/10 p-3">
                   {showTimer ? (

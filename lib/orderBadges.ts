@@ -62,7 +62,7 @@ function orderStatusBadge(status: string) {
     case "PENDING_APPROVAL":
     case "PENDING_STAFF_APPROVAL":
     case "PENDING":
-      return { label: "Pending approval", tone: "warning" as const };
+      return { label: "Awaiting payment", tone: "warning" as const };
     case "AWAITING_PAYMENT":
       return { label: "Awaiting payment", tone: "warning" as const };
     case "PAYMENT_SUBMITTED":
