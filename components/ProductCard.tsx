@@ -3,7 +3,14 @@
 import * as React from "react";
 import Link from "next/link";
 import { createPortal } from "react-dom";
-import { ChevronLeft, ExternalLink, Share2, ShoppingCart, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronLeft,
+  ExternalLink,
+  Share2,
+  ShoppingCart,
+  X,
+} from "lucide-react";
 import { toast } from "@/components/ui/toast";
 import { recordRecentView } from "@/lib/recentViews";
 import {
@@ -835,10 +842,10 @@ export default function ProductCard({
           >
             <div
               ref={previewScrollRef}
-              className="max-h-[85vh] overflow-y-auto sm:max-h-[90vh]"
+              className="max-h-[92svh] overflow-y-auto sm:max-h-[90vh]"
             >
-              <div className="sticky top-0 z-10 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="sticky top-0 z-10 border-b border-white/10 bg-bg-900/95 px-4 py-2 backdrop-blur sm:px-5 sm:py-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div className="flex min-w-0 items-start gap-3">
                     {canGoBack ? (
                       <button
@@ -852,11 +859,13 @@ export default function ProductCard({
                       </button>
                     ) : null}
                     <div className="min-w-0">
-                      <div className="text-xs text-white/50">Preview</div>
-                      <div className="text-base font-semibold leading-snug line-clamp-2 sm:text-lg">
+                      <div className="hidden text-xs text-white/50 sm:block">
+                        Preview
+                      </div>
+                      <div className="line-clamp-1 text-sm font-semibold leading-snug sm:line-clamp-2 sm:text-lg">
                         {previewDisplayTitle}
                       </div>
-                      <div className="text-xs text-white/60 sm:text-sm">
+                      <div className="hidden text-xs text-white/60 sm:block sm:text-sm">
                         {previewProduct.brand ?? "-"}
                         {previewProduct.model
                           ? ` · ${previewProduct.model}`
@@ -864,10 +873,10 @@ export default function ProductCard({
                       </div>
                     </div>
                   </div>
-                  <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+                  <div className="grid grid-cols-3 gap-2 sm:flex sm:shrink-0 sm:flex-wrap sm:items-center sm:justify-end">
                     <Link
                       href={previewProductPageHref}
-                      className="inline-flex h-11 min-w-[7.25rem] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
+                      className="inline-flex h-9 min-w-0 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-white/10 bg-bg-950/40 px-2 py-2 text-xs text-white/80 hover:bg-bg-950/60 sm:h-11 sm:min-w-[7.25rem] sm:gap-2 sm:px-3 sm:text-sm"
                     >
                       <ExternalLink className="h-4 w-4" />
                       View page
@@ -875,7 +884,7 @@ export default function ProductCard({
                     <button
                       type="button"
                       onClick={(event) => void handleShareProduct(previewProduct, event)}
-                      className="inline-flex h-11 min-w-[7.25rem] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
+                      className="inline-flex h-9 min-w-0 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-white/10 bg-bg-950/40 px-2 py-2 text-xs text-white/80 hover:bg-bg-950/60 sm:h-11 sm:min-w-[7.25rem] sm:gap-2 sm:px-3 sm:text-sm"
                     >
                       <Share2 className="h-4 w-4" />
                       Share
@@ -883,7 +892,7 @@ export default function ProductCard({
                     <button
                       type="button"
                       onClick={closePreview}
-                      className="inline-flex h-11 min-w-[7.25rem] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
+                      className="inline-flex h-9 min-w-0 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-white/10 bg-bg-950/40 px-2 py-2 text-xs text-white/80 hover:bg-bg-950/60 sm:h-11 sm:min-w-[7.25rem] sm:gap-2 sm:px-3 sm:text-sm"
                     >
                       <X className="h-4 w-4" />
                       Close
@@ -893,7 +902,7 @@ export default function ProductCard({
               </div>
 
               <div className="p-4 sm:p-5">
-                <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+                <div className="grid gap-3 lg:gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
                   <div>
                     <div
                       className="group relative overflow-hidden rounded-2xl border border-white/10 bg-bg-950/40"
@@ -911,7 +920,7 @@ export default function ProductCard({
                           srcSet={activeImageSrcSet || undefined}
                           sizes="(min-width: 1024px) 720px, 90vw"
                           alt={previewDisplayTitle}
-                          className="h-80 w-full object-contain bg-neutral-50"
+                          className="h-64 w-full object-contain bg-neutral-50 sm:h-80"
                           loading="lazy"
                           decoding="async"
                           onError={(e) =>
@@ -919,7 +928,7 @@ export default function ProductCard({
                           }
                         />
                       ) : (
-                        <div className="flex h-80 items-center justify-center text-sm text-white/50">
+                        <div className="flex h-64 items-center justify-center text-sm text-white/50 sm:h-80">
                           No image available.
                         </div>
                       )}
@@ -943,47 +952,14 @@ export default function ProductCard({
                         </>
                       ) : null}
                     </div>
-
                   </div>
 
                   <div className="space-y-3">
-                    <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3 space-y-2">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-white/60">Selected Condition</span>
-                        <span className="text-white/90">
-                          {formatConditionLabel(previewSelected?.condition ?? "-", {
-                            shipClass: previewSelected?.ship_class,
-                          })}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-white/60">Price</span>
-                        <span className="text-price">
-                          {previewStrikePrice ? (
-                            <span className="flex items-baseline gap-2">
-                              <span>{previewDisplayPrice}</span>
-                              <span className="text-[11px] text-white/40 line-through">
-                                {previewStrikePrice}
-                              </span>
-                            </span>
-                          ) : (
-                            previewDisplayPrice
-                          )}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-white/60">Available</span>
-                        <span className="text-white/80">
-                          {previewSelected?.qty ?? 0} left
-                        </span>
-                      </div>
-                    </div>
-
                     <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3">
                       <div className="text-xs font-semibold tracking-wide text-white/50">
                         Conditions
                       </div>
-                      <div className="mt-2 space-y-2 text-sm">
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-sm lg:grid-cols-1 xl:grid-cols-2">
                         {previewProduct.options.map((o) => {
                           const isSelected = o.id === previewSelected?.id;
                           const pricing = getOptionPricing(o);
@@ -998,15 +974,17 @@ export default function ProductCard({
                               onClick={() => selectPreviewCondition(o.id)}
                               aria-pressed={isSelected}
                               className={[
-                                "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left transition",
+                                "flex min-h-[3rem] w-full items-center justify-between gap-2 rounded-xl border px-2.5 py-2 text-left transition",
                                 isSelected
-                                  ? "bg-white/10 ring-1 ring-white/15"
-                                  : "hover:bg-white/5",
+                                  ? "border-amber-300/45 bg-white/10 ring-1 ring-white/15"
+                                  : "border-white/10 bg-bg-900/25 hover:bg-white/5",
                               ].join(" ")}
                             >
                               <span
                                 className={
-                                  isSelected ? "text-white" : "text-white/70"
+                                  isSelected
+                                    ? "min-w-0 truncate text-white"
+                                    : "min-w-0 truncate text-white/70"
                                 }
                               >
                                 {formatConditionLabel(o.condition, {
@@ -1015,58 +993,62 @@ export default function ProductCard({
                               </span>
                               <span
                                 className={
-                                  isSelected ? "text-white/90" : "text-white/60"
+                                  isSelected
+                                    ? "ml-auto flex shrink-0 items-baseline gap-1 whitespace-nowrap text-xs text-white/90"
+                                    : "ml-auto flex shrink-0 items-baseline gap-1 whitespace-nowrap text-xs text-white/60"
                                 }
                               >
                                 {strikePrice ? (
-                                  <span className="flex items-baseline gap-2">
+                                  <>
                                     <span>{displayPrice}</span>
-                                    <span className="text-[10px] text-white/40 line-through">
+                                    <span className="hidden text-[10px] text-white/40 line-through sm:inline">
                                       {strikePrice}
                                     </span>
-                                  </span>
+                                  </>
                                 ) : (
-                                  displayPrice
-                                )}{" "}
-                                - {o.qty} left
+                                  <span>{displayPrice}</span>
+                                )}
+                                <span>-</span>
+                                <span>{o.qty} left</span>
                               </span>
                             </button>
                           );
                         })}
                       </div>
-                    </div>
 
-                    <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
-                        Notes
-                      </div>
-                      <div
-                        className={`mt-2 text-sm ${noteTone} flex items-center gap-2`}
-                      >
-                        {showNoteIndicator ? (
-                          <span
-                            className={`h-2 w-2 rounded-full ${noteIndicatorTone}`}
-                            aria-hidden="true"
-                          />
-                        ) : null}
-                        <span>
-                          {unifiedNotes
-                            ? unifiedNotes
-                            : "No notes for this item."}
-                        </span>
-                      </div>
-                      {previewHasIssueDetails ? (
-                        <button
-                          type="button"
-                          onClick={openPreviewIssueDetails}
-                          className="mt-3 w-full rounded-xl border border-white/10 px-3 py-2 text-xs text-white/70 hover:bg-white/10"
+                      <div className="mt-3 border-t border-white/10 pt-3">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
+                          Notes
+                        </div>
+                        <div
+                          className={`mt-2 text-sm ${noteTone} flex items-start gap-2`}
                         >
-                          See issue
-                        </button>
-                      ) : null}
+                          {showNoteIndicator ? (
+                            <span
+                              className={`mt-1 h-2 w-2 shrink-0 rounded-full ${noteIndicatorTone}`}
+                              aria-hidden="true"
+                            />
+                          ) : null}
+                          <span className="line-clamp-3">
+                            {unifiedNotes
+                              ? unifiedNotes
+                              : "No notes for this item."}
+                          </span>
+                        </div>
+                        {previewHasIssueDetails ? (
+                          <button
+                            type="button"
+                            onClick={openPreviewIssueDetails}
+                            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-amber-300/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/15"
+                          >
+                            <AlertTriangle className="h-4 w-4" />
+                            See issue
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
 
-                    <div className="rounded-xl border border-amber-300/70 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-100">
+                    <div className="hidden rounded-xl border border-amber-300/70 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-100 lg:block">
                       Photos are for reference only. For more
                       photos/details, please message our Facebook page.
                     </div>
@@ -1178,7 +1160,7 @@ export default function ProductCard({
                 ) : null}
               </div>
 
-              <div className="sticky bottom-0 z-10 border-t border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:hidden">
+              <div className="sticky bottom-0 z-10 border-t border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur lg:hidden">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-[11px] text-white/50">Selected</div>
