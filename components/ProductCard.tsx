@@ -332,7 +332,6 @@ export default function ProductCard({
 
   const isOut = !selected || (selected.qty ?? 0) <= 0;
   const hasMultipleVariants = product.options.length > 1;
-  const variantCount = product.options.length;
   const wideDisplayPrice = hasMultipleVariants
     ? peso(effectiveMinPrice)
     : displayPrice;
@@ -445,8 +444,11 @@ export default function ProductCard({
     selected?.condition ?? "-",
     selected?.ship_class
   );
+  const cardVariantLabel = hasMultipleVariants
+    ? "Multiple variants"
+    : compactConditionLabel;
   const wideVariantLabel = hasMultipleVariants
-    ? `${variantCount} variants`
+    ? "Multiple variants"
     : compactConditionLabel;
   const proofBits = [
     socialProof?.inCarts ? `${socialProof.inCarts} in carts` : null,
@@ -1463,7 +1465,7 @@ export default function ProductCard({
 
           <div className="mt-2 flex items-center justify-between">
             <span className="rounded-full border border-amber-300/60 bg-amber-400/10 px-3 py-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-teal-200 shadow-[0_6px_12px_rgba(0,0,0,0.25)]">
-              {compactConditionLabel}
+              {cardVariantLabel}
             </span>
             <div className="flex items-center gap-2">
               <button
@@ -1601,8 +1603,14 @@ export default function ProductCard({
             </div>
             {!wideView ? (
               <div className="min-w-0 text-right text-[10px] text-white/60 truncate sm:text-xs">
-                <span className="sm:hidden">{compactConditionLabel}</span>
-                <span className="hidden sm:inline">{conditionLabel}</span>
+                {hasMultipleVariants ? (
+                  "Multiple variants"
+                ) : (
+                  <>
+                    <span className="sm:hidden">{compactConditionLabel}</span>
+                    <span className="hidden sm:inline">{conditionLabel}</span>
+                  </>
+                )}
               </div>
             ) : null}
           </div>
@@ -1641,6 +1649,14 @@ export default function ProductCard({
               <div className="flex items-center justify-between rounded-full border border-white/10 bg-bg-900/60 px-2 py-1 text-[9px] uppercase tracking-wide text-white/70">
                 <span className="truncate">{wideVariantLabel}</span>
               </div>
+            ) : hasMultipleVariants ? (
+              <button
+                type="button"
+                onClick={() => setVariantPickerOpen(true)}
+                className="inline-flex rounded-full border border-white/20 bg-bg-900/60 px-2 py-0.5 text-[9px] uppercase leading-none tracking-wide text-white/80 transition hover:bg-bg-900/80 dark:border-white/10 dark:bg-paper/5 dark:text-white/70 dark:hover:bg-paper/10 sm:text-[10px]"
+              >
+                Multiple variants
+              </button>
             ) : (
               <div className="flex flex-wrap gap-1">
                 {product.options.map((o) => {

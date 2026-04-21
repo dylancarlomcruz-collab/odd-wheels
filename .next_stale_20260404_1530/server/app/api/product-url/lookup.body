@@ -1,0 +1,1 @@
+{"ok":false,"error":"Dynamic server usage: Route /api/product-url/lookup couldn't be rendered statically because it used `request.url`. See more info here: https://nextjs.org/docs/messages/dynamic-server-error"}
