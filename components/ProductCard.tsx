@@ -1,14 +1,16 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronLeft, ShoppingCart, X } from "lucide-react";
+import { ChevronLeft, ExternalLink, Share2, ShoppingCart, X } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 import { recordRecentView } from "@/lib/recentViews";
-import { normalizeSearchTerm } from "@/lib/search";
 import {
   formatConditionLabel,
   isIssueCondition,
   isNearMintCondition,
+  supportsIssueDetailCondition,
 } from "@/lib/conditions";
 import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
 import { applyImageFallback, buildSrcSet, getOptimizedImageUrl } from "@/lib/imageUrl";
@@ -19,6 +21,12 @@ import {
   normalizeProductSpecialTags,
   type ProductSpecialTag,
 } from "@/lib/productTags";
+import {
+  getAbsoluteProductPageUrl,
+  getProductPageHref,
+  getRelatedProducts,
+  normalizeProductImageUrl,
+} from "@/lib/productDetail";
 import { formatTitle } from "@/lib/text";
 import { supabase } from "@/lib/supabase/browser";
 import { getOrCreateGuestSessionId } from "@/lib/guestSession";
@@ -49,6 +57,14 @@ type PreviewEntry = {
   selectedId: string;
 };
 
+type IssueViewer = {
+  title: string;
+  condition: string | null | undefined;
+  shipClass?: string | null;
+  notes: string;
+  images: string[];
+};
+
 const COMPACT_CONDITION_LABELS: Record<string, string> = {
   sealed: "SEALED",
   resealed: "RESEAL",
@@ -62,13 +78,13 @@ const COMPACT_CONDITION_LABELS: Record<string, string> = {
   unsealed_no_acrylic: "NO ACRYL",
   unsealed_near_mint_box: "U-NM BOX",
   unsealed_near_mint_blister: "U-NM BL",
+  wheelswapped: "W-SWAP",
+  customized: "CUSTOM",
   with_issues: "ISSUES",
   sealed_blister: "BLISTER",
   unsealed_blister: "BLISTER",
   blistered: "BLISTER",
 };
-const SUPABASE_PUBLIC_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-
 function getCompactConditionLabel(
   value: string | null | undefined,
   _shipClass?: string | null
@@ -77,20 +93,6 @@ function getCompactConditionLabel(
   const label =
     COMPACT_CONDITION_LABELS[key] ?? String(value ?? "-").toUpperCase();
   return label;
-}
-
-function normalizeImageUrl(raw: string | null | undefined) {
-  const trimmed = String(raw ?? "").trim();
-  if (!trimmed) return "";
-  if (trimmed.startsWith("data:")) return trimmed;
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  const base = SUPABASE_PUBLIC_URL.replace(/\/$/, "");
-  if (!base) return trimmed;
-  if (trimmed.startsWith("/storage/") || trimmed.startsWith("storage/")) {
-    const path = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-    return `${base}${path}`;
-  }
-  return trimmed;
 }
 
 
@@ -169,6 +171,7 @@ export default function ProductCard({
   mobileVariant,
   primaryActionLabel = "Add",
   primaryActionLabelLong,
+  showCardPageActions = true,
 }: {
   product: ShopProduct;
   onAddToCart: (option: ConditionOption) => void | Promise<void>;
@@ -184,6 +187,7 @@ export default function ProductCard({
   mobileVariant?: "diecast";
   primaryActionLabel?: string;
   primaryActionLabelLong?: string;
+  showCardPageActions?: boolean;
 }) {
   const actionLabelCompact = primaryActionLabel?.trim() || "Add";
   const actionLabelExpanded =
@@ -200,7 +204,7 @@ export default function ProductCard({
   const [isOpen, setIsOpen] = React.useState(false);
   const [previewStack, setPreviewStack] = React.useState<PreviewEntry[]>([]);
   const [activeIndex, setActiveIndex] = React.useState(0);
-  const [issueOpen, setIssueOpen] = React.useState(false);
+  const [issueViewer, setIssueViewer] = React.useState<IssueViewer | null>(null);
   const [issueIndex, setIssueIndex] = React.useState(0);
   const [variantPickerOpen, setVariantPickerOpen] = React.useState(false);
   const touchStartX = React.useRef<number | null>(null);
@@ -209,7 +213,6 @@ export default function ProductCard({
   const issueTouchStartY = React.useRef<number | null>(null);
   const previewScrollRef = React.useRef<HTMLDivElement | null>(null);
   const cardRef = React.useRef<HTMLDivElement | null>(null);
-  const loggedPreviewIds = React.useRef(new Set<string>());
 
   const selected = React.useMemo(
     () =>
@@ -220,6 +223,7 @@ export default function ProductCard({
   const previewProduct = previewEntry?.product ?? product;
   const displayTitle = formatTitle(product.title) || product.title;
   const previewDisplayTitle = formatTitle(previewProduct.title) || previewProduct.title;
+  const issueOpen = Boolean(issueViewer);
   const previewSelectedId =
     previewEntry?.selectedId ?? previewProduct.options[0]?.id ?? "";
   const previewSelected = React.useMemo(
@@ -242,10 +246,10 @@ export default function ProductCard({
 
   const cardImages = React.useMemo(() => {
     const raw = (product.image_urls ?? [])
-      .map(normalizeImageUrl)
+      .map(normalizeProductImageUrl)
       .filter(Boolean) as string[];
     const list = raw.length ? raw.slice() : [];
-    const primary = normalizeImageUrl(product.image_url);
+    const primary = normalizeProductImageUrl(product.image_url);
     if (primary) {
       const primaryBase = parseImageCrop(primary).src;
       const hasMatch = list.some(
@@ -260,10 +264,10 @@ export default function ProductCard({
 
   const previewImages = React.useMemo(() => {
     const raw = (previewProduct.image_urls ?? [])
-      .map(normalizeImageUrl)
+      .map(normalizeProductImageUrl)
       .filter(Boolean) as string[];
     const list = raw.length ? raw.slice() : [];
-    const primary = normalizeImageUrl(previewProduct.image_url);
+    const primary = normalizeProductImageUrl(previewProduct.image_url);
     if (primary) {
       const primaryBase = parseImageCrop(primary).src;
       const hasMatch = list.some(
@@ -276,12 +280,12 @@ export default function ProductCard({
     return list;
   }, [previewProduct.image_url, previewProduct.image_urls]);
 
-  const issueImages = React.useMemo(
+  const previewIssueImages = React.useMemo(
     () =>
-      (selected?.issue_photo_urls ?? [])
-        .map(normalizeImageUrl)
+      (previewSelected?.issue_photo_urls ?? [])
+        .map(normalizeProductImageUrl)
         .filter(Boolean) as string[],
-    [selected?.issue_photo_urls],
+    [previewSelected?.issue_photo_urls],
   );
   const previewIsOut = !previewSelected || (previewSelected.qty ?? 0) <= 0;
 
@@ -327,7 +331,8 @@ export default function ProductCard({
     : displayPrice;
   const wideStrikePrice = hasMultipleVariants ? null : strikePrice;
   const activeImage = previewImages[activeIndex] ?? "";
-  const cardImage = cardImages[0] ?? normalizeImageUrl(product.image_url) ?? null;
+  const cardImage =
+    cardImages[0] ?? normalizeProductImageUrl(product.image_url) ?? null;
   const parsedCardImage = React.useMemo(
     () => (cardImage ? parseImageCrop(cardImage) : null),
     [cardImage]
@@ -376,7 +381,8 @@ export default function ProductCard({
         : "",
     [activeImage]
   );
-  const activeIssueImage = issueImages[issueIndex] ?? "";
+  const issueViewerImages = issueViewer?.images ?? [];
+  const activeIssueImage = issueViewerImages[issueIndex] ?? "";
   const activeIssueImageSrc = React.useMemo(
     () =>
       activeIssueImage
@@ -398,12 +404,18 @@ export default function ProductCard({
         : "",
     [activeIssueImage]
   );
-  const hasIssuePhotos = issueImages.length > 0;
   const publicNotes = String(previewSelected?.public_notes ?? "").trim();
   const issueNotes = String(previewSelected?.issue_notes ?? "").trim();
   const unifiedNotes = publicNotes || issueNotes;
   const isNearMint = isNearMintCondition(previewSelected?.condition);
   const isWithIssues = isIssueCondition(previewSelected?.condition);
+  const previewSupportsIssueDetails = supportsIssueDetailCondition(
+    previewSelected?.condition
+  );
+  const previewHasIssueDetails = Boolean(
+    previewSupportsIssueDetails &&
+      (previewIssueImages.length > 0 || unifiedNotes)
+  );
   const showNoteIndicator = isNearMint || isWithIssues;
   const noteIndicatorTone = isWithIssues
     ? "bg-red-400"
@@ -477,6 +489,12 @@ export default function ProductCard({
         : "",
     [parsedMobilePrimaryImage]
   );
+  const productPageHref = getProductPageHref(product.key);
+  const previewProductPageHref = getProductPageHref(previewProduct.key);
+
+  function stopCardPropagation(event: React.SyntheticEvent) {
+    event.stopPropagation();
+  }
 
   function renderFeatureTagOverlay(mode: "mobile" | "desktop") {
     if (!visibleFeatureTags.length) return null;
@@ -531,56 +549,9 @@ export default function ProductCard({
   }
 
   const relatedItems = React.useMemo(() => {
-    if (!isOpen || !relatedPool?.length) return [];
-    const targetText = normalizeSearchTerm(
-      `${previewProduct.title} ${previewProduct.brand ?? ""} ${previewProduct.model ?? ""}`,
-    );
-    const targetTokens = new Set(
-      targetText
-        .split(" ")
-        .map((token) => token.trim())
-        .filter(Boolean),
-    );
-    const targetBrand = normalizeSearchTerm(previewProduct.brand ?? "");
-    const targetModel = normalizeSearchTerm(previewProduct.model ?? "");
-    const scored = relatedPool
-      .filter((p) => p.key !== previewProduct.key)
-      .map((p) => {
-        let score = 0;
-        const text = normalizeSearchTerm(
-          `${p.title} ${p.brand ?? ""} ${p.model ?? ""}`,
-        );
-        if (targetBrand && normalizeSearchTerm(p.brand ?? "") === targetBrand) {
-          score += 3;
-        }
-        if (targetModel && text.includes(targetModel)) {
-          score += 2;
-        }
-        const tokens = text.split(" ").filter(Boolean);
-        const overlap = tokens.reduce(
-          (acc, token) => acc + (targetTokens.has(token) ? 1 : 0),
-          0,
-        );
-        score += overlap;
-        return { product: p, score };
-      })
-      .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .map((item) => item.product);
-
-    const picked = new Set(scored.map((item) => item.key));
-    const fallback = relatedPool.filter(
-      (p) => p.key !== previewProduct.key && !picked.has(p.key),
-    );
-    return scored.concat(fallback).slice(0, 6);
-  }, [
-    isOpen,
-    relatedPool,
-    previewProduct.key,
-    previewProduct.title,
-    previewProduct.brand,
-    previewProduct.model,
-  ]);
+    if (!isOpen) return [];
+    return getRelatedProducts(previewProduct, relatedPool, 6);
+  }, [isOpen, previewProduct, relatedPool]);
   const canGoBack = previewStack.length > 1;
 
   React.useEffect(() => {
@@ -597,13 +568,13 @@ export default function ProductCard({
   React.useEffect(() => {
     if (!issueOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setIssueOpen(false);
+      if (e.key === "Escape") setIssueViewer(null);
       if (e.key === "ArrowLeft") stepIssue(-1);
       if (e.key === "ArrowRight") stepIssue(1);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [issueOpen, issueImages.length]);
+  }, [issueOpen, issueViewerImages.length]);
 
   React.useEffect(() => {
     if (activeIndex >= previewImages.length) setActiveIndex(0);
@@ -620,7 +591,7 @@ export default function ProductCard({
   }, [product.options]);
 
   React.useEffect(() => {
-    setIssueOpen(false);
+    setIssueViewer(null);
     setIssueIndex(0);
   }, [selectedId]);
 
@@ -630,7 +601,7 @@ export default function ProductCard({
     setIsOpen(false);
     setPreviewStack([]);
     setActiveIndex(0);
-    setIssueOpen(false);
+    setIssueViewer(null);
     setIssueIndex(0);
   }
 
@@ -655,44 +626,50 @@ export default function ProductCard({
       );
   }
 
-  function logProductPreviewOnce(productId: string) {
+  async function logProductInteraction(productId: string) {
     if (!productId) return;
-    if (loggedPreviewIds.current.has(productId)) return;
-    loggedPreviewIds.current.add(productId);
-    void logProductPreview(productId);
+    try {
+      const sessionId = getOrCreateGuestSessionId();
+      await supabase.rpc("increment_product_click_detailed", {
+        p_product_id: productId,
+        p_session_id: sessionId,
+      });
+    } catch (e) {
+      console.error("Failed to log product interaction", e);
+    }
   }
 
   function openPreview() {
     if (isOpen) return;
     setActiveIndex(0);
-    setIssueOpen(false);
+    setIssueViewer(null);
     setIssueIndex(0);
     const nextSelectedId = selectedId || product.options[0]?.id || "";
     setPreviewStack([{ product, selectedId: nextSelectedId }]);
     setIsOpen(true);
     recordRecentView(product.key);
-    void logProductPreviewOnce(product.key);
+    void logProductPreview(product.key);
     onProductClick?.(product);
   }
 
   function pushPreview(item: ShopProduct) {
     if (item.key === previewProduct.key) return;
     setActiveIndex(0);
-    setIssueOpen(false);
+    setIssueViewer(null);
     setIssueIndex(0);
     setPreviewStack((prev) => [
       ...prev,
       { product: item, selectedId: item.options[0]?.id ?? "" },
     ]);
     recordRecentView(item.key);
-    void logProductPreviewOnce(item.key);
+    void logProductPreview(item.key);
     onProductClick?.(item);
   }
 
   function goBackPreview() {
     if (!canGoBack) return;
     setActiveIndex(0);
-    setIssueOpen(false);
+    setIssueViewer(null);
     setIssueIndex(0);
     setPreviewStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev));
   }
@@ -704,10 +681,36 @@ export default function ProductCard({
     );
   }
 
-  function openIssuePhotos() {
-    if (!issueImages.length) return;
+  function openIssueDetails(viewer: IssueViewer) {
+    if (!viewer.images.length && !viewer.notes) return;
     setIssueIndex(0);
-    setIssueOpen(true);
+    setIssueViewer(viewer);
+  }
+
+  function openPreviewIssueDetails() {
+    openIssueDetails({
+      title: previewDisplayTitle,
+      condition: previewSelected?.condition,
+      shipClass: previewSelected?.ship_class,
+      notes: unifiedNotes,
+      images: previewIssueImages,
+    });
+  }
+
+  function selectPreviewCondition(optionId: string) {
+    if (!optionId || optionId === previewSelectedId) return;
+    setIssueViewer(null);
+    setIssueIndex(0);
+    setPreviewStack((prev) => {
+      if (!prev.length) {
+        return [{ product: previewProduct, selectedId: optionId }];
+      }
+      const next = prev.slice();
+      const current = next[next.length - 1];
+      if (!current) return prev;
+      next[next.length - 1] = { ...current, selectedId: optionId };
+      return next;
+    });
   }
 
   function handleAddClick(event?: React.MouseEvent) {
@@ -720,7 +723,55 @@ export default function ProductCard({
       return;
     }
     if (selected) {
+      void logProductInteraction(product.key);
       void onAddToCart(selected);
+    }
+  }
+
+  async function handleShareProduct(
+    item: ShopProduct,
+    event?: React.MouseEvent<HTMLElement>
+  ) {
+    event?.preventDefault();
+    event?.stopPropagation();
+
+    const title = formatTitle(item.title) || item.title;
+    const url = getAbsoluteProductPageUrl(item.key);
+
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+      try {
+        await navigator.share({
+          title,
+          text: title,
+          url,
+        });
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+      }
+    }
+
+    try {
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.clipboard &&
+        typeof navigator.clipboard.writeText === "function"
+      ) {
+        await navigator.clipboard.writeText(url);
+        toast({
+          title: "Link copied",
+          message: "Product page link copied to clipboard.",
+        });
+        return;
+      }
+    } catch {
+      // Fall through to the prompt fallback below.
+    }
+
+    if (typeof window !== "undefined") {
+      window.prompt("Copy product link", url);
     }
   }
 
@@ -729,9 +780,9 @@ export default function ProductCard({
   }
 
   function stepIssue(delta: number) {
-    if (issueImages.length <= 1) return;
+    if (issueViewerImages.length <= 1) return;
     setIssueIndex(
-      (prev) => (prev + delta + issueImages.length) % issueImages.length,
+      (prev) => (prev + delta + issueViewerImages.length) % issueViewerImages.length,
     );
   }
 
@@ -787,7 +838,7 @@ export default function ProductCard({
               className="max-h-[85vh] overflow-y-auto sm:max-h-[90vh]"
             >
               <div className="sticky top-0 z-10 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
-                <div className="flex items-start justify-between gap-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="flex min-w-0 items-start gap-3">
                     {canGoBack ? (
                       <button
@@ -813,14 +864,31 @@ export default function ProductCard({
                       </div>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={closePreview}
-                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
-                  >
-                    <X className="h-4 w-4" />
-                    Close
-                  </button>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+                    <Link
+                      href={previewProductPageHref}
+                      className="inline-flex h-11 min-w-[7.25rem] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      View page
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={(event) => void handleShareProduct(previewProduct, event)}
+                      className="inline-flex h-11 min-w-[7.25rem] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
+                    >
+                      <Share2 className="h-4 w-4" />
+                      Share
+                    </button>
+                    <button
+                      type="button"
+                      onClick={closePreview}
+                      className="inline-flex h-11 min-w-[7.25rem] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
+                    >
+                      <X className="h-4 w-4" />
+                      Close
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -876,24 +944,15 @@ export default function ProductCard({
                       ) : null}
                     </div>
 
-                    {hasIssuePhotos ? (
-                      <button
-                        type="button"
-                        onClick={openIssuePhotos}
-                        className="mt-3 w-full rounded-xl border border-white/10 px-3 py-2 text-xs text-white/70 hover:bg-white/10"
-                      >
-                        View issue photos
-                      </button>
-                    ) : null}
                   </div>
 
                   <div className="space-y-3">
                     <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3 space-y-2">
                       <div className="flex items-center justify-between text-sm">
-                        <span className="text-white/60">Selected condition</span>
+                        <span className="text-white/60">Selected Condition</span>
                         <span className="text-white/90">
                           {formatConditionLabel(previewSelected?.condition ?? "-", {
-                            upper: true,
+                            shipClass: previewSelected?.ship_class,
                           })}
                         </span>
                       </div>
@@ -921,7 +980,7 @@ export default function ProductCard({
                     </div>
 
                     <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
+                      <div className="text-xs font-semibold tracking-wide text-white/50">
                         Conditions
                       </div>
                       <div className="mt-2 space-y-2 text-sm">
@@ -933,16 +992,26 @@ export default function ProductCard({
                             ? peso(o.price)
                             : null;
                           return (
-                            <div
+                            <button
+                              type="button"
                               key={o.id}
-                              className="flex items-center justify-between gap-2"
+                              onClick={() => selectPreviewCondition(o.id)}
+                              aria-pressed={isSelected}
+                              className={[
+                                "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left transition",
+                                isSelected
+                                  ? "bg-white/10 ring-1 ring-white/15"
+                                  : "hover:bg-white/5",
+                              ].join(" ")}
                             >
                               <span
                                 className={
                                   isSelected ? "text-white" : "text-white/70"
                                 }
                               >
-                                {o.condition}
+                                {formatConditionLabel(o.condition, {
+                                  shipClass: o.ship_class,
+                                })}
                               </span>
                               <span
                                 className={
@@ -961,7 +1030,7 @@ export default function ProductCard({
                                 )}{" "}
                                 - {o.qty} left
                               </span>
-                            </div>
+                            </button>
                           );
                         })}
                       </div>
@@ -986,6 +1055,15 @@ export default function ProductCard({
                             : "No notes for this item."}
                         </span>
                       </div>
+                      {previewHasIssueDetails ? (
+                        <button
+                          type="button"
+                          onClick={openPreviewIssueDetails}
+                          className="mt-3 w-full rounded-xl border border-white/10 px-3 py-2 text-xs text-white/70 hover:bg-white/10"
+                        >
+                          See issue
+                        </button>
+                      ) : null}
                     </div>
 
                     <div className="rounded-xl border border-amber-300/70 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-100">
@@ -1002,7 +1080,7 @@ export default function ProductCard({
                     </div>
                     <div className="mt-3 flex gap-3 overflow-x-auto pb-2">
                       {relatedItems.map((item) => {
-                        const image = normalizeImageUrl(
+                        const image = normalizeProductImageUrl(
                           item.image_url ?? item.image_urls?.[0] ?? null
                         );
                         const defaultOption = item.options[0];
@@ -1106,7 +1184,7 @@ export default function ProductCard({
                     <div className="text-[11px] text-white/50">Selected</div>
                     <div className="text-sm text-white/80 line-clamp-1">
                       {formatConditionLabel(previewSelected?.condition ?? "-", {
-                        upper: true,
+                        shipClass: previewSelected?.ship_class,
                       })}
                     </div>
                   </div>
@@ -1144,7 +1222,7 @@ export default function ProductCard({
           <button
             type="button"
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={() => setIssueOpen(false)}
+            onClick={() => setIssueViewer(null)}
             aria-label="Close issue photos"
           />
           <div
@@ -1156,19 +1234,19 @@ export default function ProductCard({
               <div className="sticky top-0 z-10 border-b border-white/10 bg-bg-900/95 px-4 py-3 backdrop-blur sm:px-5 sm:py-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-xs text-white/50">Issue photos</div>
+                    <div className="text-xs text-white/50">Issue details</div>
                     <div className="text-base font-semibold leading-snug line-clamp-2 sm:text-lg">
-                      {displayTitle}
+                      {issueViewer?.title ?? displayTitle}
                     </div>
                     <div className="text-xs text-white/60 sm:text-sm">
-                      {formatConditionLabel(selected?.condition ?? "-", {
-                        upper: true,
+                      {formatConditionLabel(issueViewer?.condition ?? "-", {
+                        shipClass: issueViewer?.shipClass,
                       })}
                     </div>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setIssueOpen(false)}
+                    onClick={() => setIssueViewer(null)}
                     className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-950/40 px-3 py-2 text-sm text-white/80 hover:bg-bg-950/60"
                   >
                     <X className="h-4 w-4" />
@@ -1178,6 +1256,11 @@ export default function ProductCard({
               </div>
 
               <div className="p-4 sm:p-5">
+                {issueViewer?.notes ? (
+                  <div className="mb-4 rounded-xl border border-white/10 bg-bg-950/40 p-3 text-sm text-white/80">
+                    {issueViewer.notes}
+                  </div>
+                ) : null}
                 <div
                   className="group relative overflow-hidden rounded-xl border border-white/10 bg-bg-950/50"
                   onTouchStart={(event) =>
@@ -1203,10 +1286,10 @@ export default function ProductCard({
                     />
                   ) : (
                     <div className="flex h-72 items-center justify-center text-sm text-white/50">
-                      No issue photos available.
+                      No issue photos uploaded for this item.
                     </div>
                   )}
-                  {issueImages.length > 1 ? (
+                  {issueViewerImages.length > 1 ? (
                     <>
                       <button
                         type="button"
@@ -1221,7 +1304,7 @@ export default function ProductCard({
                         aria-label="Next issue photo"
                       />
                       <div className="pointer-events-none absolute bottom-3 right-3 rounded-full bg-black/60 px-2 py-0.5 text-[10px] text-white/80">
-                        {issueIndex + 1}/{issueImages.length}
+                        {issueIndex + 1}/{issueViewerImages.length}
                       </div>
                     </>
                   ) : null}
@@ -1318,6 +1401,7 @@ export default function ProductCard({
                 disabled={!selected || (selected.qty ?? 0) <= 0}
                 onClick={() => {
                   if (selected) {
+                    void logProductInteraction(product.key);
                     void onAddToCart(selected);
                   }
                   closeVariantPicker();
@@ -1421,6 +1505,28 @@ export default function ProductCard({
               </div>
             </div>
           </div>
+
+          {showCardPageActions ? (
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <Link
+                href={productPageHref}
+                onClick={stopCardPropagation}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/15 bg-black/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/80 transition hover:bg-black/35"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                View page
+              </Link>
+              <button
+                type="button"
+                onClick={(event) => void handleShareProduct(product, event)}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/15 bg-black/25 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/80 transition hover:bg-black/35"
+              >
+                <Share2 className="h-3.5 w-3.5" />
+                Share
+              </button>
+            </div>
+          ) : null}
+
         </div>
       </div>
     </div>
@@ -1595,15 +1701,32 @@ export default function ProductCard({
               {actionLabelCompact}
             </button>
 
-            {!wideView && hasIssuePhotos ? (
-              <button
-                type="button"
-                onClick={openIssuePhotos}
-                className="w-full rounded-xl border border-white/10 px-3 py-1.5 text-[11px] sm:text-xs text-white/80 hover:bg-white/10"
+            {showCardPageActions ? (
+              <div
+                className={[
+                  "grid grid-cols-2 gap-2",
+                  wideView ? "text-[10px]" : "text-[11px] sm:text-xs",
+                ].join(" ")}
               >
-                Show issue photos
-              </button>
+                <Link
+                  href={productPageHref}
+                  onClick={stopCardPropagation}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-bg-950/50 px-2 py-2 text-white/80 transition hover:bg-bg-950/70"
+                >
+                  <ExternalLink className={wideView ? "h-3 w-3" : "h-3.5 w-3.5"} />
+                  {wideView ? "View" : "View page"}
+                </Link>
+                <button
+                  type="button"
+                  onClick={(event) => void handleShareProduct(product, event)}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-bg-950/50 px-2 py-2 text-white/80 transition hover:bg-bg-950/70"
+                >
+                  <Share2 className={wideView ? "h-3 w-3" : "h-3.5 w-3.5"} />
+                  Share
+                </button>
+              </div>
             ) : null}
+
           </div>
 
           {!wideView && isOut ? (

@@ -44,7 +44,11 @@ export function recordRecentView(productId: string) {
 
 export function readRecentViewEntries(): RecentEntry[] {
   if (typeof window === "undefined") return [];
-  return parseEntries(window.localStorage.getItem(RECENT_VIEWS_KEY));
+  try {
+    return parseEntries(window.localStorage.getItem(RECENT_VIEWS_KEY));
+  } catch {
+    return [];
+  }
 }
 
 export function readRecentViews() {

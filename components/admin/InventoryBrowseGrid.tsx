@@ -28,6 +28,8 @@ export type AdminVariant = {
     | "unsealed_no_acrylic"
     | "unsealed_near_mint_box"
     | "unsealed_near_mint_blister"
+    | "wheelswapped"
+    | "customized"
     | "with_issues"
     | "blistered"
     | "sealed_blister"
@@ -70,6 +72,8 @@ const CONDITION_OPTIONS: AdminVariant["condition"][] = [
   "unsealed_no_box",
   "unsealed_no_acrylic",
   "unsealed_near_mint_box",
+  "wheelswapped",
+  "customized",
   "with_issues",
   "blistered",
   "sealed_blister",

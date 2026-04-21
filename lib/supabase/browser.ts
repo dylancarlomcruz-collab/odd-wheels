@@ -24,6 +24,40 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function safeStorageGet(
+  storage: Storage | undefined,
+  key: string
+): string | null {
+  if (!storage) return null;
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeStorageSet(
+  storage: Storage | undefined,
+  key: string,
+  value: string
+) {
+  if (!storage) return;
+  try {
+    storage.setItem(key, value);
+  } catch {
+    // Ignore storage failures in restrictive browsers.
+  }
+}
+
+function safeStorageRemove(storage: Storage | undefined, key: string) {
+  if (!storage) return;
+  try {
+    storage.removeItem(key);
+  } catch {
+    // Ignore storage failures in restrictive browsers.
+  }
+}
+
 async function resilientFetch(
   input: RequestInfo | URL,
   init?: RequestInit
@@ -67,23 +101,28 @@ async function resilientFetch(
 
 function getActiveStorage() {
   if (typeof window === "undefined") return undefined;
-  const remember = window.localStorage.getItem(REMEMBER_ME_KEY) === "true";
-  return remember ? window.localStorage : window.sessionStorage;
+  const remember = safeStorageGet(window.localStorage, REMEMBER_ME_KEY) === "true";
+  if (remember) return window.localStorage;
+  try {
+    return window.sessionStorage;
+  } catch {
+    return window.localStorage;
+  }
 }
 
 const authStorage = {
   getItem: (key: string) => {
     const store = getActiveStorage();
-    return store ? store.getItem(key) : null;
+    return safeStorageGet(store, key);
   },
   setItem: (key: string, value: string) => {
     const store = getActiveStorage();
-    if (store) store.setItem(key, value);
+    safeStorageSet(store, key, value);
   },
   removeItem: (key: string) => {
     if (typeof window === "undefined") return;
-    window.localStorage.removeItem(key);
-    window.sessionStorage.removeItem(key);
+    safeStorageRemove(window.localStorage, key);
+    safeStorageRemove(window.sessionStorage, key);
   }
 };
 

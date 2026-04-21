@@ -14,10 +14,16 @@ import {
 } from "lucide-react";
 import { RequireAuth } from "@/components/auth/RequireAuth";
 import { useAuth } from "@/components/auth/AuthProvider";
+import {
+  SalesTrendChart,
+  type SalesTrendGranularity,
+  type SalesTrendMetric,
+} from "@/components/admin/SalesTrendChart";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
+import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
 import { supabase } from "@/lib/supabase/browser";
 import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
@@ -46,6 +52,56 @@ function ymd(d: Date) {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function parseLocalDate(value: string) {
+  const [year, month, day] = value.split("-").map((part) => Number(part));
+  if (!year || !month || !day) return null;
+  const date = new Date(year, month - 1, day);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function startOfWeek(date: Date) {
+  const result = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const offset = (result.getDay() + 6) % 7;
+  result.setDate(result.getDate() - offset);
+  return new Date(result.getFullYear(), result.getMonth(), result.getDate());
+}
+
+function endOfWeek(date: Date) {
+  const start = startOfWeek(date);
+  return new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+}
+
+function startOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function endOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0);
+}
+
+function getBucketRange(date: Date, granularity: SalesTrendGranularity) {
+  if (granularity === "weekly") {
+    const start = startOfWeek(date);
+    return { start, end: endOfWeek(start) };
+  }
+  if (granularity === "monthly") {
+    const start = startOfMonth(date);
+    return { start, end: endOfMonth(start) };
+  }
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return { start, end: start };
+}
+
+function advanceBucket(date: Date, granularity: SalesTrendGranularity) {
+  if (granularity === "weekly") {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 7);
+  }
+  if (granularity === "monthly") {
+    return new Date(date.getFullYear(), date.getMonth() + 1, 1);
+  }
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
 }
 
 function formatDateTimeLocalInput(value: string | null | undefined) {
@@ -424,6 +480,12 @@ export default function AdminSalesPage() {
   const [selectedKpi, setSelectedKpi] = React.useState<
     "sales" | "orders" | "aov" | "cogs" | "profit" | "margin" | null
   >(null);
+  const [chartMetric, setChartMetric] = React.useState<SalesTrendMetric>("sales");
+  const [chartGranularity, setChartGranularity] =
+    React.useState<SalesTrendGranularity>("daily");
+  const [chartSelectionKey, setChartSelectionKey] = React.useState<string | null>(
+    null
+  );
   const [topItems, setTopItems] = React.useState<
     { key: string; name: string; qty: number; sales: number; cogs: number; profit: number }[]
   >([]);
@@ -931,6 +993,115 @@ export default function AdminSalesPage() {
       String(b.created_at).localeCompare(String(a.created_at))
     );
   }, [orderSummaries]);
+  const chartPoints = React.useMemo(() => {
+    const rangeStart = parseLocalDate(from);
+    const rangeEnd = parseLocalDate(to);
+    if (!rangeStart || !rangeEnd || rangeEnd.getTime() < rangeStart.getTime()) {
+      return [];
+    }
+
+    const byDate = new Map<
+      string,
+      {
+        bucketStart: string;
+        bucketEnd: string;
+        sales: number;
+        orders: number;
+        cogs: number;
+        profit: number;
+      }
+    >();
+
+    orderSummaries.forEach((summary) => {
+      const soldAt = new Date(summary.created_at);
+      if (Number.isNaN(soldAt.getTime())) return;
+      const soldDay = new Date(
+        soldAt.getFullYear(),
+        soldAt.getMonth(),
+        soldAt.getDate()
+      );
+      const bucket = getBucketRange(soldDay, chartGranularity);
+      const key = ymd(bucket.start);
+      const sales = Number(summary.revenue ?? 0);
+      const cogs = Number(summary.cogs ?? 0);
+      const current = byDate.get(key) ?? {
+        bucketStart: ymd(bucket.start),
+        bucketEnd: ymd(bucket.end),
+        sales: 0,
+        orders: 0,
+        cogs: 0,
+        profit: 0,
+      };
+      current.sales += Number.isFinite(sales) ? sales : 0;
+      current.orders += 1;
+      current.cogs += Number.isFinite(cogs) ? cogs : 0;
+      current.profit +=
+        (Number.isFinite(sales) ? sales : 0) - (Number.isFinite(cogs) ? cogs : 0);
+      byDate.set(key, current);
+    });
+
+    const rows: Array<{
+      key: string;
+      bucketStart: string;
+      bucketEnd: string;
+      sales: number;
+      orders: number;
+      aov: number;
+      cogs: number;
+      profit: number;
+      margin: number;
+    }> = [];
+    const alignedStart = getBucketRange(rangeStart, chartGranularity).start;
+    const alignedEnd = getBucketRange(rangeEnd, chartGranularity).start;
+    const cursor = new Date(alignedStart);
+
+    while (cursor.getTime() <= alignedEnd.getTime()) {
+      const bucket = getBucketRange(cursor, chartGranularity);
+      const key = ymd(bucket.start);
+      const current = byDate.get(key) ?? {
+        bucketStart: ymd(bucket.start),
+        bucketEnd: ymd(bucket.end),
+        sales: 0,
+        orders: 0,
+        cogs: 0,
+        profit: 0,
+      };
+      rows.push({
+        key,
+        bucketStart: current.bucketStart,
+        bucketEnd: current.bucketEnd,
+        sales: current.sales,
+        orders: current.orders,
+        aov: current.orders ? current.sales / current.orders : 0,
+        cogs: current.cogs,
+        profit: current.profit,
+        margin: current.sales ? (current.profit / current.sales) * 100 : 0,
+      });
+      const next = advanceBucket(bucket.start, chartGranularity);
+      cursor.setTime(next.getTime());
+    }
+
+    return rows;
+  }, [chartGranularity, from, orderSummaries, to]);
+  React.useEffect(() => {
+    if (chartGranularity !== "daily" || !selectedDailyDate) return;
+    if (!chartPoints.some((point) => point.key === selectedDailyDate)) {
+      setSelectedDailyDate(null);
+    }
+  }, [chartGranularity, chartPoints, selectedDailyDate]);
+  React.useEffect(() => {
+    if (!chartSelectionKey) return;
+    if (!chartPoints.some((point) => point.key === chartSelectionKey)) {
+      setChartSelectionKey(null);
+    }
+  }, [chartPoints, chartSelectionKey]);
+  React.useEffect(() => {
+    if (chartGranularity !== "daily" || !selectedDailyDate) return;
+    const match = chartPoints.find((point) => point.key === selectedDailyDate);
+    if (match && chartSelectionKey !== match.key) {
+      setChartSelectionKey(match.key);
+    }
+  }, [chartGranularity, chartPoints, chartSelectionKey, selectedDailyDate]);
   const channelOrders = React.useMemo(() => {
     if (!selectedChannel) return [];
     return orderSummarySorted.filter(
@@ -963,6 +1134,15 @@ export default function AdminSalesPage() {
   const selectedSoldItem = React.useMemo(
     () => soldItems.find((item) => item.key === selectedSoldItemKey) ?? null,
     [soldItems, selectedSoldItemKey]
+  );
+  const handleChartPointSelect = React.useCallback(
+    (pointKey: string) => {
+      setChartSelectionKey(pointKey);
+      if (chartGranularity !== "daily") return;
+      const match = chartPoints.find((point) => point.key === pointKey);
+      if (match) setSelectedDailyDate(match.bucketStart);
+    },
+    [chartGranularity, chartPoints]
   );
   const selectedDailyOrders = React.useMemo(() => {
     if (!selectedDailyDate) return [];
@@ -1410,7 +1590,10 @@ export default function AdminSalesPage() {
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
               <button
                 type="button"
-                onClick={() => setSelectedKpi("sales")}
+                onClick={() => {
+                  setChartMetric("sales");
+                  setSelectedKpi("sales");
+                }}
                 className="text-left rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 transition hover:border-amber-500/40 hover:bg-amber-500/10"
               >
                 <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
@@ -1423,7 +1606,10 @@ export default function AdminSalesPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setSelectedKpi("orders")}
+                onClick={() => {
+                  setChartMetric("orders");
+                  setSelectedKpi("orders");
+                }}
                 className="text-left rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 transition hover:border-sky-500/40 hover:bg-sky-500/10"
               >
                 <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
@@ -1436,7 +1622,10 @@ export default function AdminSalesPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setSelectedKpi("aov")}
+                onClick={() => {
+                  setChartMetric("aov");
+                  setSelectedKpi("aov");
+                }}
                 className="text-left rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4 transition hover:border-violet-500/40 hover:bg-violet-500/10"
               >
                 <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
@@ -1449,7 +1638,10 @@ export default function AdminSalesPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setSelectedKpi("cogs")}
+                onClick={() => {
+                  setChartMetric("cogs");
+                  setSelectedKpi("cogs");
+                }}
                 className="text-left rounded-2xl border border-orange-500/20 bg-orange-500/5 p-4 transition hover:border-orange-500/40 hover:bg-orange-500/10"
               >
                 <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
@@ -1462,7 +1654,10 @@ export default function AdminSalesPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setSelectedKpi("profit")}
+                onClick={() => {
+                  setChartMetric("profit");
+                  setSelectedKpi("profit");
+                }}
                 className="text-left rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 transition hover:border-emerald-500/40 hover:bg-emerald-500/10"
               >
                 <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
@@ -1475,7 +1670,10 @@ export default function AdminSalesPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setSelectedKpi("margin")}
+                onClick={() => {
+                  setChartMetric("margin");
+                  setSelectedKpi("margin");
+                }}
                 className="text-left rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-4 transition hover:border-indigo-500/40 hover:bg-indigo-500/10"
               >
                 <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
@@ -1487,6 +1685,18 @@ export default function AdminSalesPage() {
                 <div className="mt-2 text-2xl font-semibold text-indigo-200">{formatPercent(totals.grossMargin)}</div>
               </button>
             </div>
+
+            <SalesTrendChart
+              from={from}
+              to={to}
+              loading={loading}
+              metric={chartMetric}
+              granularity={chartGranularity}
+              points={chartPoints}
+              selectedPointKey={chartSelectionKey}
+              onMetricChange={setChartMetric}
+              onPointSelect={handleChartPointSelect}
+            />
 
             <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
               <div className="flex items-center gap-2 font-semibold">
@@ -1512,6 +1722,19 @@ export default function AdminSalesPage() {
                     className="w-full rounded-xl border border-white/10 bg-bg-800 px-4 py-2 text-white sm:w-[180px]"
                   />
                 </label>
+                <Select
+                  label="Compare by"
+                  value={chartGranularity}
+                  onChange={(e) =>
+                    setChartGranularity(e.target.value as SalesTrendGranularity)
+                  }
+                  className="sm:w-[190px]"
+                  hint="Group the graph by day, week, or month."
+                >
+                  <option value="daily">Daily sales</option>
+                  <option value="weekly">Weekly sales</option>
+                  <option value="monthly">Monthly sales</option>
+                </Select>
                 <Button variant="secondary" onClick={run} disabled={loading} className="gap-2">
                   <RefreshCw className="h-4 w-4" />
                   {loading ? "Refreshing..." : "Refresh"}

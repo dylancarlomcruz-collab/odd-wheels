@@ -18,6 +18,7 @@ import {
   isBlisterCondition,
   isLoosePackagingCondition,
   isNearMintCondition,
+  supportsIssueDetailCondition,
 } from "@/lib/conditions";
 import {
   applyImageCrop,
@@ -64,6 +65,8 @@ const CONDITION_OPTIONS: Array<VariantDraft["condition"]> = [
   "unsealed_blister",
   "unsealed_near_mint_blister",
   "blistered",
+  "wheelswapped",
+  "customized",
   "unsealed",
   "with_issues",
 ];
@@ -209,6 +212,9 @@ export function InventoryEditorDrawer({
   const productId = product.id;
   const isQuickThumbUploading = Boolean(quickThumbUploadingByProductId[productId]);
   const editableVariants = variants.filter((v) => !v._delete);
+  const issuePhotoVariants = editableVariants.filter((v) =>
+    supportsIssueDetailCondition(v.condition)
+  );
 
   function setQuickThumbUploading(productIdForUpload: string, active: boolean) {
     if (!mountedRef.current) return;
@@ -452,6 +458,78 @@ export function InventoryEditorDrawer({
     const fromIndex = Number(raw);
     if (!Number.isFinite(fromIndex)) return;
     reorderImages(fromIndex, targetIndex);
+  }
+
+  function renderIssuePhotoManager(v: VariantDraft) {
+    const issuePhotos = v.issue_photo_urls ?? [];
+    const conditionLabel = formatConditionLabel(v.condition, {
+      shipClass: v.ship_class,
+    });
+
+    return (
+      <div
+        key={v.id}
+        className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium">Issue Photos</div>
+            <div className="text-xs text-white/50">{conditionLabel}</div>
+          </div>
+          <Badge>{issuePhotos.length}</Badge>
+        </div>
+        <input
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={(e) => {
+            const list = Array.from(e.target.files ?? []);
+            if (!list.length) return;
+            void uploadIssueFiles(v, list);
+            e.currentTarget.value = "";
+          }}
+        />
+        <div className="text-xs text-white/50">
+          Mobile opens your photo library.
+        </div>
+        <div
+          className="rounded-lg border border-dashed border-white/15 bg-bg-900/40 p-2 text-xs text-white/60"
+          tabIndex={0}
+          onClick={(e) => (e.currentTarget as HTMLDivElement).focus()}
+          onPaste={(e) => handleIssuePaste(v, e)}
+        >
+          Paste issue photo here (click box, then press Ctrl+V).
+        </div>
+        {issueUploadId === v.id ? (
+          <div className="text-xs text-white/60">Uploading...</div>
+        ) : null}
+
+        {issuePhotos.length ? (
+          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+            {issuePhotos.map((u) => (
+              <div
+                key={u}
+                className="overflow-hidden rounded-xl border border-white/10 bg-bg-900/40"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={u} alt="" className="h-32 w-full object-cover" />
+                <div className="p-2">
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    onClick={() => removeIssuePhoto(v, u)}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-xs text-white/50">No issue photos yet.</div>
+        )}
+      </div>
+    );
   }
 
   function updateVariant(id: string, patch: Partial<VariantDraft>) {
@@ -911,7 +989,7 @@ export function InventoryEditorDrawer({
                       : v.public_notes || null,
                   issue_notes: null,
                   issue_photo_urls:
-                    v.condition === "with_issues"
+                    supportsIssueDetailCondition(v.condition)
                       ? (v.issue_photo_urls?.length ? v.issue_photo_urls : null)
                       : null,
                 })
@@ -968,7 +1046,7 @@ export function InventoryEditorDrawer({
                 : v.public_notes || null,
             issue_notes: null,
             issue_photo_urls:
-              v.condition === "with_issues"
+              supportsIssueDetailCondition(v.condition)
                 ? (v.issue_photo_urls?.length ? v.issue_photo_urls : null)
                 : null,
           });
@@ -1355,6 +1433,22 @@ export function InventoryEditorDrawer({
             >
               Paste image here (click box, then press Ctrl+V).
             </div>
+            {issuePhotoVariants.length ? (
+              <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium">Issue Image Uploads</div>
+                    <div className="text-xs text-white/50">
+                      For Near Mint, Not Mint, and With Issues variants.
+                    </div>
+                  </div>
+                  <Badge>{issuePhotoVariants.length}</Badge>
+                </div>
+                <div className="grid gap-3">
+                  {issuePhotoVariants.map((v) => renderIssuePhotoManager(v))}
+                </div>
+              </div>
+            ) : null}
             {images.length ? (
               <>
                 <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
@@ -1665,69 +1759,6 @@ export function InventoryEditorDrawer({
                           }
                           className="md:col-span-3"
                         />
-                        {v.condition === "with_issues" ? (
-                          <div className="md:col-span-3 space-y-3">
-                            <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3">
-                              <div className="text-sm font-medium">Issue photos</div>
-                              <input
-                                type="file"
-                                accept="image/*"
-                                multiple
-                                onChange={(e) => {
-                                  const list = Array.from(e.target.files ?? []);
-                                  if (!list.length) return;
-                                  void uploadIssueFiles(v, list);
-                                  e.currentTarget.value = "";
-                                }}
-                              />
-                              <div className="text-xs text-white/50">
-                                Mobile opens your photo library.
-                              </div>
-                              <div
-                                className="rounded-lg border border-dashed border-white/15 bg-bg-900/40 p-2 text-xs text-white/60"
-                                tabIndex={0}
-                                onClick={(e) =>
-                                  (e.currentTarget as HTMLDivElement).focus()
-                                }
-                                onPaste={(e) => handleIssuePaste(v, e)}
-                              >
-                                Paste issue photo here (click box, then press Ctrl+V).
-                              </div>
-                              {issueUploadId === v.id ? (
-                                <div className="text-xs text-white/60">
-                                  Uploading...
-                                </div>
-                              ) : null}
-
-                              {v.issue_photo_urls?.length ? (
-                                <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
-                                  {v.issue_photo_urls.map((u) => (
-                                    <div
-                                      key={u}
-                                      className="rounded-xl border border-white/10 bg-bg-900/40 overflow-hidden"
-                                    >
-                                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                                      <img src={u} alt="" className="h-32 w-full object-cover" />
-                                      <div className="p-2">
-                                        <Button
-                                          variant="ghost"
-                                          type="button"
-                                          onClick={() => removeIssuePhoto(v, u)}
-                                        >
-                                          Remove
-                                        </Button>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div className="text-xs text-white/50">
-                                  No issue photos yet.
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        ) : null}
                       </div>
                     </div>
                   ))}

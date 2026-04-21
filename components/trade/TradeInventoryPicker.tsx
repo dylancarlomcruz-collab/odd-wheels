@@ -34,6 +34,8 @@ type TradeVariant = {
     | "unsealed_no_acrylic"
     | "unsealed_near_mint_box"
     | "unsealed_near_mint_blister"
+    | "wheelswapped"
+    | "customized"
     | "with_issues"
     | "blistered"
     | "sealed_blister"
@@ -159,6 +161,8 @@ function TradeProductCard({
       (v) => v.condition === "unsealed_near_mint_blister"
     );
     const blistered = variants.find((v) => v.condition === "blistered");
+    const wheelswapped = variants.find((v) => v.condition === "wheelswapped");
+    const customized = variants.find((v) => v.condition === "customized");
     const unsealed = variants.find((v) => v.condition === "unsealed");
     if (
       sealed ||
@@ -175,7 +179,9 @@ function TradeProductCard({
       notMintBlister ||
       unsealedBlister ||
       unsealedNearMintBlister ||
-      blistered
+      blistered ||
+      wheelswapped ||
+      customized
     ) {
       return [
         sealed,
@@ -193,6 +199,8 @@ function TradeProductCard({
         unsealedBlister,
         unsealedNearMintBlister,
         blistered,
+        wheelswapped,
+        customized,
       ].filter((v): v is TradeVariant => Boolean(v));
     }
     return variants;

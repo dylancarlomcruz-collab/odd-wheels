@@ -101,6 +101,20 @@ const CONDITION_FILTER_CHIP_STYLES: Record<string, FilterChipToneStyles> = {
       "border-rose-400/30 bg-rose-500/10 text-rose-100/85 hover:border-rose-300/45 hover:bg-rose-500/16 hover:text-rose-50",
     dot: "bg-rose-300",
   },
+  wheelswapped: {
+    active:
+      "border-cyan-300/75 bg-cyan-400/18 text-cyan-50 shadow-[0_10px_18px_rgba(34,211,238,0.22)]",
+    idle:
+      "border-cyan-400/30 bg-cyan-500/10 text-cyan-100/85 hover:border-cyan-300/45 hover:bg-cyan-500/16 hover:text-cyan-50",
+    dot: "bg-cyan-300",
+  },
+  customized: {
+    active:
+      "border-fuchsia-300/75 bg-fuchsia-400/18 text-fuchsia-50 shadow-[0_10px_18px_rgba(232,121,249,0.22)]",
+    idle:
+      "border-fuchsia-400/30 bg-fuchsia-500/10 text-fuchsia-100/85 hover:border-fuchsia-300/45 hover:bg-fuchsia-500/16 hover:text-fuchsia-50",
+    dot: "bg-fuchsia-300",
+  },
 };
 const RARITY_FILTER_CHIP_STYLES: Record<ProductSpecialTag, FilterChipToneStyles> =
   {
@@ -732,6 +746,8 @@ export default function ShopPageClient() {
       { key: "sealed", label: formatConditionLabel("sealed") },
       { key: "unsealed", label: formatConditionLabel("unsealed") },
       { key: "near_mint", label: formatConditionLabel("near_mint") },
+      { key: "wheelswapped", label: formatConditionLabel("wheelswapped") },
+      { key: "customized", label: formatConditionLabel("customized") },
       { key: "with_issues", label: formatConditionLabel("with_issues") },
     ],
     []
@@ -2142,6 +2158,7 @@ export default function ShopPageClient() {
                       product={p}
                       wideView={isQuadView}
                       mobileVariant={isSingleView ? "diecast" : undefined}
+                      showCardPageActions={false}
                       primaryActionLabel="Add"
                       onAddToCart={(opt) => onAdd(p, opt)}
                       onImageClick={
@@ -2164,6 +2181,7 @@ export default function ShopPageClient() {
                   product={p}
                   wideView={isQuadView}
                   mobileVariant={isSingleView ? "diecast" : undefined}
+                  showCardPageActions={false}
                   primaryActionLabel="Add"
                   onAddToCart={(opt) => onAdd(p, opt)}
                   onImageClick={

@@ -13,8 +13,10 @@ import {
   RefreshCw,
   Settings2,
   StickyNote,
+  TrendingUp,
   Truck,
   Ticket,
+  Users,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -30,9 +32,65 @@ const PREPARING_SHIPPING_STATUSES = [
   "NONE",
 ];
 
+type GrowthSnapshot = {
+  funnelViews: number;
+  paidOrders: number;
+  viewToPaidRate: number;
+  cartToPaidRate: number;
+  sellThroughRate: number;
+  avgDaysToFirstSale: number;
+  soldOutProducts: number;
+  soldOutViews: number;
+  soldOutCartAdds: number;
+  returningRevenueShare: number;
+  returningRevenue: number;
+  newRevenue: number;
+  staleVariants: number;
+  staleRetailValue: number;
+};
+
+const EMPTY_GROWTH_SNAPSHOT: GrowthSnapshot = {
+  funnelViews: 0,
+  paidOrders: 0,
+  viewToPaidRate: 0,
+  cartToPaidRate: 0,
+  sellThroughRate: 0,
+  avgDaysToFirstSale: 0,
+  soldOutProducts: 0,
+  soldOutViews: 0,
+  soldOutCartAdds: 0,
+  returningRevenueShare: 0,
+  returningRevenue: 0,
+  newRevenue: 0,
+  staleVariants: 0,
+  staleRetailValue: 0,
+};
+
+function peso(value: number) {
+  try {
+    return new Intl.NumberFormat("en-PH", {
+      style: "currency",
+      currency: "PHP",
+      maximumFractionDigits: 0,
+    }).format(value);
+  } catch {
+    return `PHP ${Math.round(value)}`;
+  }
+}
+
+function formatPercent(value: number) {
+  if (!Number.isFinite(value)) return "0%";
+  return `${value.toFixed(1)}%`;
+}
+
+function formatCount(value: number) {
+  return new Intl.NumberFormat("en-PH").format(Math.max(0, Math.round(value)));
+}
+
 export default function AdminDashboard() {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [growthError, setGrowthError] = React.useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = React.useState<Date | null>(null);
   const [counts, setCounts] = React.useState({
     pendingApproval: 0,
@@ -43,6 +101,8 @@ export default function AdminDashboard() {
     lowStock: 0,
     soldOut: 0,
   });
+  const [growthSnapshot, setGrowthSnapshot] =
+    React.useState<GrowthSnapshot>(EMPTY_GROWTH_SNAPSHOT);
 
   const loadCounts = React.useCallback(async () => {
     setLoading(true);
@@ -119,6 +179,64 @@ export default function AdminDashboard() {
         lowStock: lowStock.count ?? 0,
         soldOut: soldOut.count ?? 0,
       });
+
+      try {
+        const today = new Date();
+        const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+        const toYmd = (date: Date) => {
+          const yyyy = date.getFullYear();
+          const mm = String(date.getMonth() + 1).padStart(2, "0");
+          const dd = String(date.getDate()).padStart(2, "0");
+          return `${yyyy}-${mm}-${dd}`;
+        };
+
+        const [analyticsRes, stockHealthRes] = await Promise.all([
+          supabase.rpc("fn_admin_growth_analytics", {
+            p_from: toYmd(startOfMonth),
+            p_to: toYmd(today),
+            p_item_limit: 5,
+          }),
+          supabase.rpc("fn_admin_inventory_stock_health", {
+            include_archived: false,
+            stale_days: 60,
+            recent_sales_days: 30,
+            item_limit: 5,
+          }),
+        ]);
+
+        if (analyticsRes.error) throw analyticsRes.error;
+        if (stockHealthRes.error) throw stockHealthRes.error;
+
+        const analytics = analyticsRes.data as any;
+        const stockHealth = stockHealthRes.data as any;
+
+        setGrowthSnapshot({
+          funnelViews: Number(analytics?.funnel?.views ?? 0) || 0,
+          paidOrders: Number(analytics?.funnel?.paid_orders ?? 0) || 0,
+          viewToPaidRate: Number(analytics?.funnel?.view_to_paid_rate ?? 0) || 0,
+          cartToPaidRate: Number(analytics?.funnel?.cart_to_paid_rate ?? 0) || 0,
+          sellThroughRate:
+            Number(analytics?.sell_through?.overall_sell_through_rate ?? 0) || 0,
+          avgDaysToFirstSale:
+            Number(analytics?.sell_through?.avg_days_to_first_sale ?? 0) || 0,
+          soldOutProducts: Number(analytics?.out_of_stock?.sold_out_products ?? 0) || 0,
+          soldOutViews: Number(analytics?.out_of_stock?.views ?? 0) || 0,
+          soldOutCartAdds: Number(analytics?.out_of_stock?.cart_adds ?? 0) || 0,
+          returningRevenueShare:
+            Number(analytics?.customer_mix?.returning_revenue_share ?? 0) || 0,
+          returningRevenue:
+            Number(analytics?.customer_mix?.returning_revenue ?? 0) || 0,
+          newRevenue: Number(analytics?.customer_mix?.new_revenue ?? 0) || 0,
+          staleVariants: Number(stockHealth?.stale_variants ?? 0) || 0,
+          staleRetailValue: Number(stockHealth?.stale_retail_value ?? 0) || 0,
+        });
+        setGrowthError(null);
+      } catch (growthErr: any) {
+        console.error(growthErr);
+        setGrowthSnapshot(EMPTY_GROWTH_SNAPSHOT);
+        setGrowthError(growthErr?.message ?? "Failed to load growth snapshot.");
+      }
+
       setLastUpdated(new Date());
     } catch (err: any) {
       console.error(err);
@@ -255,6 +373,120 @@ export default function AdminDashboard() {
             </div>
 
             <div>
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-semibold text-white/80">Growth watchlist</div>
+                <Link
+                  href="/admin/analytics"
+                  className="text-xs text-accent-200 transition hover:text-accent-100"
+                >
+                  Open analytics
+                </Link>
+              </div>
+              <div className="mt-1 text-xs text-white/50">
+                Month-to-date conversion, sourcing, retention, and dead-stock signals.
+              </div>
+              {growthError ? (
+                <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+                  {growthError}
+                </div>
+              ) : null}
+              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                <Link
+                  href="/admin/analytics"
+                  className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 transition hover:border-sky-500/40"
+                >
+                  <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                    <span>View to paid</span>
+                    <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-sky-500/30 bg-sky-500/10 text-sky-200">
+                      <TrendingUp className="h-4 w-4" />
+                    </span>
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-sky-200">
+                    {formatPercent(growthSnapshot.viewToPaidRate)}
+                  </div>
+                  <div className="text-xs text-white/50">
+                    {formatCount(growthSnapshot.funnelViews)} views •{" "}
+                    {formatCount(growthSnapshot.paidOrders)} paid
+                  </div>
+                </Link>
+
+                <Link
+                  href="/admin/analytics"
+                  className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 transition hover:border-emerald-500/40"
+                >
+                  <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                    <span>Sell-through</span>
+                    <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-200">
+                      <PackageSearch className="h-4 w-4" />
+                    </span>
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-emerald-200">
+                    {formatPercent(growthSnapshot.sellThroughRate)}
+                  </div>
+                  <div className="text-xs text-white/50">
+                    {Math.max(0, Math.round(growthSnapshot.avgDaysToFirstSale))} day avg to first sale
+                  </div>
+                </Link>
+
+                <Link
+                  href="/admin/analytics"
+                  className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 transition hover:border-amber-500/40"
+                >
+                  <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                    <span>Sold-out demand</span>
+                    <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-200">
+                      <PackageX className="h-4 w-4" />
+                    </span>
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-amber-200">
+                    {formatCount(growthSnapshot.soldOutProducts)}
+                  </div>
+                  <div className="text-xs text-white/50">
+                    {formatCount(growthSnapshot.soldOutViews)} views •{" "}
+                    {formatCount(growthSnapshot.soldOutCartAdds)} cart adds
+                  </div>
+                </Link>
+
+                <Link
+                  href="/admin/analytics"
+                  className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4 transition hover:border-violet-500/40"
+                >
+                  <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                    <span>Returning revenue</span>
+                    <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-violet-500/30 bg-violet-500/10 text-violet-200">
+                      <Users className="h-4 w-4" />
+                    </span>
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-violet-200">
+                    {formatPercent(growthSnapshot.returningRevenueShare)}
+                  </div>
+                  <div className="text-xs text-white/50">
+                    {peso(growthSnapshot.returningRevenue)} repeat •{" "}
+                    {peso(growthSnapshot.newRevenue)} new
+                  </div>
+                </Link>
+
+                <Link
+                  href="/admin/analytics"
+                  className="rounded-2xl border border-rose-500/20 bg-rose-500/5 p-4 transition hover:border-rose-500/40"
+                >
+                  <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+                    <span>Dead stock</span>
+                    <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-200">
+                      <AlertTriangle className="h-4 w-4" />
+                    </span>
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-rose-200">
+                    {formatCount(growthSnapshot.staleVariants)}
+                  </div>
+                  <div className="text-xs text-white/50">
+                    {peso(growthSnapshot.staleRetailValue)} tied up
+                  </div>
+                </Link>
+              </div>
+            </div>
+
+            <div>
               <div className="text-sm font-semibold text-white/80">Inventory health</div>
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <Link
@@ -335,6 +567,13 @@ export default function AdminDashboard() {
                 >
                   <Ticket className="h-4 w-4" />
                   Vouchers
+                </Link>
+                <Link
+                  href="/admin/analytics"
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-bg-900/40 px-4 py-2 text-sm text-white/90 transition hover:bg-bg-900/60"
+                >
+                  <TrendingUp className="h-4 w-4" />
+                  Analytics
                 </Link>
                 <Link
                   href="/admin/settings"

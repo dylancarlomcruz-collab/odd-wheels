@@ -10,6 +10,7 @@ import {
   Tags,
   ShoppingBag,
   BarChart3,
+  TrendingUp,
   ShoppingCart,
   ScanBarcode,
   LayoutGrid,
@@ -30,6 +31,7 @@ const links = [
   { href: "/admin/orders", label: "Orders / Approvals", icon: ShoppingBag },
   { href: "/admin/shipments", label: "Shipping Status", icon: Truck },
   { href: "/admin/sell-trade", label: "Sell / Trade Offers", icon: ShoppingBag },
+  { href: "/admin/analytics", label: "Analytics", icon: TrendingUp },
   { href: "/admin/sales", label: "Sales", icon: BarChart3 },
   { href: "/admin/carts", label: "Cart Insights", icon: ShoppingCart },
   { href: "/cashier", label: "POS (Cashier)", icon: ScanBarcode }, // quick access

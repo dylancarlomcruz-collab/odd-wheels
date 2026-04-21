@@ -14,6 +14,10 @@ import { toast } from "@/components/ui/toast";
 import { normalizeBarcode } from "@/lib/barcode";
 import { formatConditionLabel } from "@/lib/conditions";
 import {
+  fetchSalesCustomerSuggestions,
+  type SalesCustomerSuggestion,
+} from "@/lib/salesCustomers";
+import {
   makePosHandoffStorageKey,
   parsePosHandoffPayload,
 } from "@/lib/posHandoff";
@@ -44,6 +48,8 @@ type Variant = {
     | "unsealed_no_acrylic"
     | "unsealed_near_mint_box"
     | "unsealed_near_mint_blister"
+    | "wheelswapped"
+    | "customized"
     | "with_issues"
     | "blistered"
     | "sealed_blister"
@@ -137,7 +143,11 @@ export default function CashierPOSPage() {
   // customer
   const [customerName, setCustomerName] = React.useState("");
   const [customerPhone, setCustomerPhone] = React.useState("");
+  const [customerSuggestions, setCustomerSuggestions] = React.useState<
+    SalesCustomerSuggestion[]
+  >([]);
   const [saveCustomer, setSaveCustomer] = React.useState(true);
+  const customerSuggestionListId = "cashier-pos-customer-suggestions";
 
   // shipping
   const [shippingMethod, setShippingMethod] = React.useState("J&T");
@@ -180,6 +190,40 @@ export default function CashierPOSPage() {
       ? Math.min(subtotal, Math.max(0, subtotal * Math.min(100, discountBase) / 100))
       : Math.min(subtotal, Math.max(0, discountBase));
   const totalAfterDiscount = Math.max(0, subtotal - discountAmount);
+
+  React.useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const suggestions = await fetchSalesCustomerSuggestions(
+          supabase,
+          customerName,
+          8
+        );
+        if (active) setCustomerSuggestions(suggestions);
+      } catch (error) {
+        console.error("Failed to load sales customer suggestions", error);
+        if (active) setCustomerSuggestions([]);
+      }
+    }, 180);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [customerName]);
+
+  React.useEffect(() => {
+    const normalizedName = customerName.trim().toLowerCase();
+    if (!normalizedName || customerPhone.trim()) return;
+
+    const exactMatch = customerSuggestions.find(
+      (suggestion) => suggestion.name.trim().toLowerCase() === normalizedName
+    );
+    if (exactMatch?.phone) {
+      setCustomerPhone(exactMatch.phone);
+    }
+  }, [customerName, customerPhone, customerSuggestions]);
 
   React.useEffect(() => {
     const handoffId = searchParams.get("handoff");
@@ -684,6 +728,10 @@ export default function CashierPOSPage() {
       const shipping_details = {
         method: shippingMethod,
         text: shippingDetailsText,
+        receiver_name: customerName.trim(),
+        receiver_phone: customerPhone.trim(),
+        phone: customerPhone.trim(),
+        source: "pos_checkout",
         discount:
           discountAmount > 0
             ? {
@@ -802,9 +850,25 @@ export default function CashierPOSPage() {
             <div className="grid gap-3 md:grid-cols-2">
               <Input
                 label="Customer Name"
+                list={customerSuggestionListId}
                 value={customerName}
                 onChange={(e) => setCustomerName(e.target.value)}
+                hint={
+                  customerSuggestions.length
+                    ? "Suggestions come from previous POS/admin-cart customers."
+                    : undefined
+                }
               />
+              {customerSuggestions.length ? (
+                <datalist id={customerSuggestionListId}>
+                  {customerSuggestions.map((suggestion) => (
+                    <option
+                      key={suggestion.id}
+                      value={suggestion.name}
+                    >{`${suggestion.phone ?? "No phone"} · ${suggestion.order_count} sale${suggestion.order_count === 1 ? "" : "s"}`}</option>
+                  ))}
+                </datalist>
+              ) : null}
               <Input
                 label="Contact Number"
                 value={customerPhone}

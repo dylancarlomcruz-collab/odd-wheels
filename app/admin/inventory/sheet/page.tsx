@@ -1273,6 +1273,8 @@ const COMPACT_CONDITION_LABELS: Record<string, string> = {
   unsealed_no_acrylic: "NO ACRYL",
   unsealed_near_mint_box: "U-NM BOX",
   unsealed_near_mint_blister: "U-NM BL",
+  wheelswapped: "W-SWAP",
+  customized: "CUSTOM",
   with_issues: "ISSUES",
   sealed_blister: "BLISTER",
   unsealed_blister: "BLISTER",

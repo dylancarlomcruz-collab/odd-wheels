@@ -15,12 +15,17 @@ function fallbackUuid() {
 
 export function getOrCreateGuestSessionId(): string | null {
   if (typeof window === "undefined") return null;
-  let existing = window.localStorage.getItem(GUEST_SESSION_KEY);
-  if (existing) return existing;
   const next =
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
       : fallbackUuid();
-  window.localStorage.setItem(GUEST_SESSION_KEY, next);
+  try {
+    const existing = window.localStorage.getItem(GUEST_SESSION_KEY);
+    if (existing) return existing;
+    window.localStorage.setItem(GUEST_SESSION_KEY, next);
+  } catch {
+    // Some mobile/in-app browsers can throw on storage access.
+    // Return an ephemeral id so analytics RPCs still run.
+  }
   return next;
 }

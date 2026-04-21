@@ -23,6 +23,7 @@ import {
   Truck,
   ShoppingBag,
   BarChart3,
+  TrendingUp,
   ScanBarcode,
   Tags,
   StickyNote,
@@ -368,6 +369,12 @@ export function SiteHeader() {
     { key: "admin-inventory", href: "/admin/inventory", label: "Inventory", icon: PackageSearch },
     { key: "admin-inventory-browse", href: "/admin/inventory/browse", label: "Inventory Browse", icon: LayoutGrid },
     { key: "admin-inventory-sheet", href: "/admin/inventory/sheet", label: "Inventory Sheet", icon: FileSpreadsheet },
+    {
+      key: "admin-analytics",
+      href: "/admin/analytics",
+      label: "Analytics",
+      icon: TrendingUp,
+    },
     {
       key: "admin-orders",
       href: "/admin/orders",

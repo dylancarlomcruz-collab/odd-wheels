@@ -24,6 +24,10 @@ import { resolveEffectivePrice } from "@/lib/pricing";
 import { formatTitle } from "@/lib/text";
 import { applyImageFallback, buildSrcSet, getOptimizedImageUrl } from "@/lib/imageUrl";
 import {
+  fetchSalesCustomerSuggestions,
+  type SalesCustomerSuggestion,
+} from "@/lib/salesCustomers";
+import {
   PROTECTOR_ADDON_FEE,
   isProtectorEligibleShipClass,
   protectorKindFromShipClass,
@@ -470,6 +474,9 @@ function CartContent() {
   const [activeImage, setActiveImage] = React.useState("");
   const [unsealedAck, setUnsealedAck] = React.useState(false);
   const [fbCustomerName, setFbCustomerName] = React.useState("");
+  const [fbCustomerSuggestions, setFbCustomerSuggestions] = React.useState<
+    SalesCustomerSuggestion[]
+  >([]);
   const [fbShippingMethod, setFbShippingMethod] = React.useState("LBC");
   const [fbShippingDetails, setFbShippingDetails] = React.useState("");
   const [fbDiscountType, setFbDiscountType] = React.useState<"AMOUNT" | "PERCENT">(
@@ -479,6 +486,7 @@ function CartContent() {
   const [sellingAsPos, setSellingAsPos] = React.useState(false);
   const [generatingInvoice, setGeneratingInvoice] = React.useState(false);
   const [clearingCart, setClearingCart] = React.useState(false);
+  const adminCustomerSuggestionListId = "admin-cart-customer-suggestions";
 
   const selectedLines = React.useMemo(
     () => lines.filter((line) => selectedIds.includes(line.id)),
@@ -624,7 +632,6 @@ function CartContent() {
   const adminSoldDisabled =
     selectedLines.length === 0 ||
     !fbCustomerName.trim() ||
-    !fbShippingMethod.trim() ||
     sellingAsPos ||
     profileLoading;
   const freeShippingThreshold = Number(settings?.free_shipping_threshold ?? 0);
@@ -759,6 +766,33 @@ function CartContent() {
       })
     );
   }, [isAdminMode, fbCustomerName, fbShippingMethod, fbShippingDetails, fbDiscountType, fbDiscountValue]);
+
+  React.useEffect(() => {
+    if (!isAdminMode) {
+      setFbCustomerSuggestions([]);
+      return;
+    }
+
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const suggestions = await fetchSalesCustomerSuggestions(
+          supabase,
+          fbCustomerName,
+          8
+        );
+        if (active) setFbCustomerSuggestions(suggestions);
+      } catch (error) {
+        console.error("Failed to load sales customer suggestions", error);
+        if (active) setFbCustomerSuggestions([]);
+      }
+    }, 180);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [fbCustomerName, isAdminMode]);
 
   function openPreview(line: CartLine) {
     setPreviewLine(line);
@@ -909,6 +943,7 @@ function CartContent() {
         method: shippingMethod,
         text: shippingText || "FB checkout from admin cart",
         shipping_notes: shippingText || null,
+        receiver_name: customerName,
         source: "admin_cart_checkout",
         admin_cart_checkout: true,
         discount:
@@ -927,11 +962,11 @@ function CartContent() {
 
       const basePayload = {
         p_customer_name: customerName,
-        p_customer_phone: "N/A",
+        p_customer_phone: null,
         p_shipping_method: shippingMethod,
         p_shipping_details: shippingDetails,
         p_payment_method: "CASH",
-        p_save_customer: false,
+        p_save_customer: true,
         p_items: items,
       };
 
@@ -1079,15 +1114,30 @@ function CartContent() {
               <Input
                 label="Customer name"
                 placeholder="Enter customer name"
+                list={adminCustomerSuggestionListId}
                 value={fbCustomerName}
                 onChange={(e) => setFbCustomerName(e.target.value)}
+                hint={
+                  fbCustomerSuggestions.length
+                    ? "Suggestions come from previous POS/admin-cart customers."
+                    : undefined
+                }
                 required
               />
+              {fbCustomerSuggestions.length ? (
+                <datalist id={adminCustomerSuggestionListId}>
+                  {fbCustomerSuggestions.map((suggestion) => (
+                    <option
+                      key={suggestion.id}
+                      value={suggestion.name}
+                    >{`${suggestion.phone ?? "No phone"} · ${suggestion.order_count} sale${suggestion.order_count === 1 ? "" : "s"}`}</option>
+                  ))}
+                </datalist>
+              ) : null}
               <Select
-                label="Shipping courier"
+                label="Shipping courier (optional)"
                 value={fbShippingMethod}
                 onChange={(e) => setFbShippingMethod(e.target.value)}
-                required
               >
                 <option value="LBC">LBC</option>
                 <option value="J&T">J&amp;T</option>

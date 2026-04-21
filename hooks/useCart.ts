@@ -317,8 +317,14 @@ export function useCart() {
         await reload();
 
         if (productId) {
+          const sessionId = getOrCreateGuestSessionId();
           supabase
-            .rpc("increment_product_add_to_cart", { p_product_id: productId })
+            .rpc("increment_product_add_to_cart_detailed", {
+              p_product_id: productId,
+              p_variant_id: variantId,
+              p_qty: Math.max(1, Number(qty) || 1),
+              p_session_id: sessionId,
+            })
             .then(
               () => undefined,
               (err) => console.error("Failed to log add-to-cart", err)
@@ -351,8 +357,11 @@ export function useCart() {
 
       if (payload.productId || productId) {
         supabase
-          .rpc("increment_product_add_to_cart", {
+          .rpc("increment_product_add_to_cart_detailed", {
             p_product_id: payload.productId || productId,
+            p_variant_id: variantId,
+            p_qty: Math.max(1, Number(qty) || 1),
+            p_session_id: null,
           })
           .then(
             () => undefined,

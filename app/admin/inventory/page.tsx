@@ -32,6 +32,7 @@ import {
   isIssueCondition,
   isLoosePackagingCondition,
   isNearMintCondition,
+  supportsIssueDetailCondition,
 } from "@/lib/conditions";
 import { isLalamoveOnlyShipClass } from "@/lib/shipping/shipClass";
 import {
@@ -88,6 +89,8 @@ type Variant = {
     | "unsealed_no_acrylic"
     | "unsealed_near_mint_box"
     | "unsealed_near_mint_blister"
+    | "wheelswapped"
+    | "customized"
     | "with_issues"
     | "blistered"
     | "sealed_blister"
@@ -154,6 +157,36 @@ type InventoryValuation = {
   cost_value: number;
   retail_value: number;
   missing_cost_variants: number;
+};
+type InventoryStockHealthItem = {
+  variant_id: string;
+  product_id: string;
+  title: string;
+  brand: string | null;
+  model: string | null;
+  variation: string | null;
+  condition: VariantCondition;
+  qty: number;
+  price: number;
+  retail_value: number;
+  days_in_stock: number;
+  in_stock_since: string | null;
+  first_stocked_at: string | null;
+  last_stock_added_at: string | null;
+  last_qty_changed_at: string | null;
+  sold_recent: number;
+  sold_lifetime: number;
+  last_sold_at: string | null;
+  image_url: string | null;
+};
+type InventoryStockHealth = {
+  threshold_days: number;
+  recent_sales_days: number;
+  stale_variants: number;
+  stale_units: number;
+  stale_retail_value: number;
+  max_days_in_stock: number;
+  items: InventoryStockHealthItem[];
 };
 type BarcodeLog = {
   id: string;
@@ -478,6 +511,11 @@ function normalizeBulkCondition(
     unsealed_near_mint_blister: "unsealed_near_mint_blister",
     unsealed_no_acrylic: "unsealed_no_acrylic",
     no_acrylic: "unsealed_no_acrylic",
+    wheelswap: "wheelswapped",
+    wheel_swap: "wheelswapped",
+    wheelswapped: "wheelswapped",
+    custom: "customized",
+    customized: "customized",
     not_mint_box: "sealed_not_mint_box",
     sealed_not_mint_box: "sealed_not_mint_box",
     not_mint_blister: "sealed_not_mint_blister",
@@ -590,6 +628,77 @@ function parseValuation(raw: any): InventoryValuation | null {
     cost_value: n((data as any).cost_value),
     retail_value: n((data as any).retail_value),
     missing_cost_variants: Math.trunc(n((data as any).missing_cost_variants)),
+  };
+}
+
+function parseStockHealthItem(raw: any): InventoryStockHealthItem | null {
+  if (!raw || typeof raw !== "object") return null;
+  const record = raw as Record<string, any>;
+  const variantId = String(record.variant_id ?? "").trim();
+  const productId = String(record.product_id ?? "").trim();
+  const title = String(record.title ?? "").trim();
+  if (!variantId || !productId || !title) return null;
+
+  const maybeString = (value: any) => {
+    const text = typeof value === "string" ? value.trim() : "";
+    return text || null;
+  };
+
+  return {
+    variant_id: variantId,
+    product_id: productId,
+    title,
+    brand: maybeString(record.brand),
+    model: maybeString(record.model),
+    variation: maybeString(record.variation),
+    condition: String(record.condition ?? "unsealed") as VariantCondition,
+    qty: Math.max(0, Math.trunc(n(record.qty))),
+    price: n(record.price),
+    retail_value: n(record.retail_value),
+    days_in_stock: Math.max(0, Math.trunc(n(record.days_in_stock))),
+    in_stock_since: maybeString(record.in_stock_since),
+    first_stocked_at: maybeString(record.first_stocked_at),
+    last_stock_added_at: maybeString(record.last_stock_added_at),
+    last_qty_changed_at: maybeString(record.last_qty_changed_at),
+    sold_recent: Math.max(0, Math.trunc(n(record.sold_recent))),
+    sold_lifetime: Math.max(0, Math.trunc(n(record.sold_lifetime))),
+    last_sold_at: maybeString(record.last_sold_at),
+    image_url: maybeString(record.image_url),
+  };
+}
+
+function parseStockHealth(raw: any): InventoryStockHealth | null {
+  if (!raw) return null;
+  let data = raw;
+  if (typeof data === "string") {
+    try {
+      data = JSON.parse(data);
+    } catch {
+      return null;
+    }
+  }
+  if (!data || typeof data !== "object") return null;
+
+  const items = Array.isArray((data as any).items)
+    ? ((data as any).items
+        .map(parseStockHealthItem)
+        .filter(Boolean) as InventoryStockHealthItem[])
+    : [];
+
+  return {
+    threshold_days: Math.max(1, Math.trunc(n((data as any).threshold_days, 60))),
+    recent_sales_days: Math.max(
+      1,
+      Math.trunc(n((data as any).recent_sales_days, 30))
+    ),
+    stale_variants: Math.max(0, Math.trunc(n((data as any).stale_variants))),
+    stale_units: Math.max(0, Math.trunc(n((data as any).stale_units))),
+    stale_retail_value: n((data as any).stale_retail_value),
+    max_days_in_stock: Math.max(
+      0,
+      Math.trunc(n((data as any).max_days_in_stock))
+    ),
+    items,
   };
 }
 
@@ -712,7 +821,7 @@ function VariantDraftPanel({
           disabled
         />
 
-        {draft.condition === "with_issues" ? (
+        {supportsIssueDetailCondition(draft.condition) ? (
           <div className="space-y-3 md:col-span-2">
             <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3">
               <div className="text-sm font-medium">Issue Photos (optional)</div>
@@ -780,7 +889,7 @@ function brandFromNormalizedTitle(titleValue: string) {
 }
 
 export default function AdminInventoryPage() {
-  // Inventory valuation
+  // Inventory analytics
   const [includeArchived, setIncludeArchived] = React.useState(false);
   const [assumeZeroCost, setAssumeZeroCost] = React.useState(true);
   const router = useRouter();
@@ -788,6 +897,10 @@ export default function AdminInventoryPage() {
     React.useState<InventoryValuation | null>(null);
   const [valuationAll, setValuationAll] =
     React.useState<InventoryValuation | null>(null);
+  const [stockHealthActive, setStockHealthActive] =
+    React.useState<InventoryStockHealth | null>(null);
+  const [stockHealthAll, setStockHealthAll] =
+    React.useState<InventoryStockHealth | null>(null);
   const [valuationLoading, setValuationLoading] = React.useState(false);
   const [valuationError, setValuationError] = React.useState<string | null>(null);
 
@@ -1370,27 +1483,63 @@ export default function AdminInventoryPage() {
     setValuationLoading(true);
     setValuationError(null);
 
-    const [activeRes, allRes] = await Promise.all([
+    const [activeRes, allRes, activeHealthRes, allHealthRes] = await Promise.all([
       supabase.rpc("fn_admin_inventory_valuation", {
         include_archived: false,
       }),
       supabase.rpc("fn_admin_inventory_valuation", {
         include_archived: true,
       }),
+      supabase.rpc("fn_admin_inventory_stock_health", {
+        include_archived: false,
+      }),
+      supabase.rpc("fn_admin_inventory_stock_health", {
+        include_archived: true,
+      }),
     ]);
 
-    if (activeRes.error || allRes.error) {
-      const msg = [activeRes.error?.message, allRes.error?.message]
+    if (
+      activeRes.error ||
+      allRes.error ||
+      activeHealthRes.error ||
+      allHealthRes.error
+    ) {
+      const msg = [
+        activeRes.error?.message
+          ? `Active valuation: ${activeRes.error.message}`
+          : null,
+        allRes.error?.message ? `All valuation: ${allRes.error.message}` : null,
+        activeHealthRes.error?.message
+          ? `Active stock health: ${activeHealthRes.error.message}`
+          : null,
+        allHealthRes.error?.message
+          ? `All stock health: ${allHealthRes.error.message}`
+          : null,
+      ]
         .filter(Boolean)
         .join(" | ");
-      setValuationError(msg || "Failed to load inventory valuation.");
+      setValuationError(msg || "Failed to load inventory analytics.");
     }
 
     if (!activeRes.error) {
       setValuationActive(parseValuation(activeRes.data));
+    } else {
+      setValuationActive(null);
     }
     if (!allRes.error) {
       setValuationAll(parseValuation(allRes.data));
+    } else {
+      setValuationAll(null);
+    }
+    if (!activeHealthRes.error) {
+      setStockHealthActive(parseStockHealth(activeHealthRes.data));
+    } else {
+      setStockHealthActive(null);
+    }
+    if (!allHealthRes.error) {
+      setStockHealthAll(parseStockHealth(allHealthRes.data));
+    } else {
+      setStockHealthAll(null);
     }
 
     setValuationLoading(false);
@@ -1772,7 +1921,9 @@ export default function AdminInventoryPage() {
         public_notes: resolvedNotes,
         issue_notes: null,
         issue_photo_urls:
-          condition === "with_issues" && issuePhotos.length ? issuePhotos : null,
+          supportsIssueDetailCondition(condition) && issuePhotos.length
+            ? issuePhotos
+            : null,
         cost: costN,
         price: priceN,
         qty: qtyN,
@@ -2114,6 +2265,8 @@ export default function AdminInventoryPage() {
     "unsealed_no_box",
     "unsealed_no_acrylic",
     "unsealed_near_mint_box",
+    "wheelswapped",
+    "customized",
     "sealed",
     "with_issues",
     "resealed",
@@ -4004,7 +4157,8 @@ export default function AdminInventoryPage() {
             public_notes: resolvedNotes,
             issue_notes: null,
             issue_photo_urls:
-              draft.condition === "with_issues" && draft.issuePhotos.length
+              supportsIssueDetailCondition(draft.condition) &&
+              draft.issuePhotos.length
                 ? draft.issuePhotos
                 : null,
             cost: costN,
@@ -4312,7 +4466,9 @@ export default function AdminInventoryPage() {
         public_notes: resolvedNotes,
         issue_notes: null,
         issue_photo_urls:
-          v.issue_photo_urls && v.issue_photo_urls.length
+          supportsIssueDetailCondition(v.condition) &&
+          v.issue_photo_urls &&
+          v.issue_photo_urls.length
             ? v.issue_photo_urls
             : null,
       });
@@ -4385,6 +4541,17 @@ export default function AdminInventoryPage() {
   function formatLogDate(value: string) {
     const d = new Date(value);
     return Number.isNaN(d.getTime()) ? value : d.toLocaleString("en-PH");
+  }
+
+  function formatDateTimeLabel(value: string | null | undefined) {
+    if (!value) return "Never";
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? value : d.toLocaleString("en-PH");
+  }
+
+  function formatDaysLabel(value: number) {
+    const days = Math.max(0, Math.trunc(value));
+    return `${formatCount(days)} day${days === 1 ? "" : "s"}`;
   }
 
   function getBarcodeDetail(log: BarcodeLog) {
@@ -4462,9 +4629,21 @@ export default function AdminInventoryPage() {
     retail_value: 0,
     missing_cost_variants: 0,
   };
+  const emptyStockHealth: InventoryStockHealth = {
+    threshold_days: 60,
+    recent_sales_days: 30,
+    stale_variants: 0,
+    stale_units: 0,
+    stale_retail_value: 0,
+    max_days_in_stock: 0,
+    items: [],
+  };
   const activeValuation = valuationActive ?? emptyValuation;
   const allValuation = valuationAll ?? emptyValuation;
+  const activeStockHealth = stockHealthActive ?? emptyStockHealth;
+  const allStockHealth = stockHealthAll ?? emptyStockHealth;
   const primaryValuation = includeArchived ? allValuation : activeValuation;
+  const primaryStockHealth = includeArchived ? allStockHealth : activeStockHealth;
   const primaryMissing = primaryValuation.missing_cost_variants;
   const showUnknownCost = !assumeZeroCost && primaryMissing > 0;
   const costValueLabel = showUnknownCost
@@ -4604,6 +4783,138 @@ export default function AdminInventoryPage() {
                 | Retail {formatPHP(allValuation.retail_value)} | Missing cost{" "}
                 {formatCount(allValuation.missing_cost_variants)}
               </div>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-paper/5 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold">Slow Stock</div>
+                  <div className="text-xs text-white/60">
+                    Variants still in stock after{" "}
+                    {formatCount(primaryStockHealth.threshold_days)}+ days with
+                    no paid sales in the last{" "}
+                    {formatCount(primaryStockHealth.recent_sales_days)} days.
+                  </div>
+                </div>
+                <div className="text-xs text-white/50">
+                  Oldest current stock:{" "}
+                  {formatDaysLabel(primaryStockHealth.max_days_in_stock)}
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3">
+                  <div className="text-xs text-white/60">Stale variants</div>
+                  <div className="text-lg font-semibold">
+                    {formatCount(primaryStockHealth.stale_variants)}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3">
+                  <div className="text-xs text-white/60">Units sitting</div>
+                  <div className="text-lg font-semibold">
+                    {formatCount(primaryStockHealth.stale_units)}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3">
+                  <div className="text-xs text-white/60">
+                    Retail value at risk
+                  </div>
+                  <div className="text-lg font-semibold">
+                    {formatPHP(primaryStockHealth.stale_retail_value)}
+                  </div>
+                </div>
+              </div>
+
+              {primaryStockHealth.items.length ? (
+                <div className="space-y-2">
+                  {primaryStockHealth.items.map((item) => {
+                    const metaLine = [item.brand, item.model, item.variation]
+                      .filter(Boolean)
+                      .join(" • ");
+
+                    const safeMetaLine = [item.brand, item.model, item.variation]
+                      .filter(Boolean)
+                      .join(" | ");
+
+                    return (
+                      <div
+                        key={item.variant_id}
+                        className="rounded-xl border border-white/10 bg-bg-900/40 p-3"
+                      >
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
+                          <div className="h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-black/20">
+                            {item.image_url ? (
+                              <img
+                                src={item.image_url}
+                                alt={item.title}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-[10px] uppercase tracking-[0.2em] text-white/35">
+                                No Image
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <div className="font-medium leading-tight">
+                              {item.title}
+                            </div>
+                            {safeMetaLine ? (
+                              <div className="text-xs text-white/55">
+                                {safeMetaLine}
+                              </div>
+                            ) : null}
+                            <div className="text-xs text-white/65">
+                              {formatConditionLabel(item.condition)} | Qty{" "}
+                              {formatCount(item.qty)} | In stock{" "}
+                              {formatDaysLabel(item.days_in_stock)}
+                            </div>
+                            <div className="text-xs text-white/50">
+                              In stock since{" "}
+                              {formatDateTimeLabel(
+                                item.in_stock_since ?? item.first_stocked_at
+                              )}
+                              {" | "}Last added{" "}
+                              {formatDateTimeLabel(item.last_stock_added_at)}
+                              {" | "}Last qty change{" "}
+                              {formatDateTimeLabel(item.last_qty_changed_at)}
+                            </div>
+                            <div className="text-xs text-white/50">
+                              Recent sold: {formatCount(item.sold_recent)}
+                              {" | "}Lifetime sold:{" "}
+                              {formatCount(item.sold_lifetime)}
+                              {" | "}Last sold{" "}
+                              {formatDateTimeLabel(item.last_sold_at)}
+                            </div>
+                          </div>
+
+                          <div className="shrink-0 text-left lg:text-right">
+                            <div className="text-sm font-semibold">
+                              {formatPHP(item.retail_value)}
+                            </div>
+                            <div className="text-xs text-white/50">
+                              on hand value
+                            </div>
+                            <Button
+                              variant="ghost"
+                              className="mt-2"
+                              onClick={() => router.push(`/product/${item.product_id}`)}
+                            >
+                              View page
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-sm text-white/60">
+                  No in-stock variants currently meet the slow-stock rule for
+                  this scope.
+                </div>
+              )}
             </div>
           </div>
           ) : null}
@@ -5431,7 +5742,7 @@ export default function AdminInventoryPage() {
                         />
                       </div>
 
-                      {v.condition === "with_issues" ? (
+                      {supportsIssueDetailCondition(v.condition) ? (
                         <div className="md:col-span-6 space-y-3">
                           <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3">
                             <div className="text-sm font-medium">
@@ -5625,7 +5936,7 @@ export default function AdminInventoryPage() {
                 className="md:col-span-2"
               />
 
-              {condition === "with_issues" ? (
+              {supportsIssueDetailCondition(condition) ? (
                 <div className="space-y-3 md:col-span-2">
                   <div className="rounded-xl border border-white/10 bg-bg-900/40 p-3 space-y-3">
                     <div className="text-sm font-medium">
@@ -6602,7 +6913,7 @@ export default function AdminInventoryPage() {
                   />
                 </div>
 
-                {condition === "with_issues" ? (
+                {supportsIssueDetailCondition(condition) ? (
                   <div className="text-xs text-white/60">
                     Issue photos can be added after saving from the variant editor.
                   </div>
