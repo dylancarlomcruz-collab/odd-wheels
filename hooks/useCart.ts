@@ -6,6 +6,7 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { getOrCreateGuestSessionId } from "@/lib/guestSession";
 import { notifyAdminPushEvent } from "@/lib/push/adminClient";
 import { fetchAuthedJson, fetchJson } from "@/lib/api/client";
+import { SHOP_ADD_TO_CART_DISABLED_MESSAGE } from "@/lib/shopControls";
 
 export type CartLine = {
   id: string;
@@ -272,11 +273,16 @@ export function useCart() {
         ok: true;
         available: number;
         productId: string;
+        allowAddToCart?: boolean;
       }>("/api/cart", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "variantSummary", variantId }),
       });
+
+      if (summary.allowAddToCart === false) {
+        throw new Error(SHOP_ADD_TO_CART_DISABLED_MESSAGE);
+      }
 
       const available = Number(summary.available ?? 0);
       const productId = summary.productId || undefined;
@@ -394,7 +400,11 @@ export function useCart() {
   const updateQty = React.useCallback(
     async (lineId: string, qty: number) => {
       if (!user) {
-        const summary = await fetchJson<{ ok: true; available: number }>(
+        const summary = await fetchJson<{
+          ok: true;
+          available: number;
+          allowAddToCart?: boolean;
+        }>(
           "/api/cart",
           {
             method: "POST",
@@ -404,14 +414,17 @@ export function useCart() {
         );
 
         const desired = Number(qty);
+        const guestItems = readGuestCart();
+        const existing = guestItems.find((item) => item.variant_id === lineId);
+        if (!existing) return;
+        const currentQty = Number(existing.qty ?? 0);
+        if (summary.allowAddToCart === false && desired > currentQty) {
+          throw new Error(SHOP_ADD_TO_CART_DISABLED_MESSAGE);
+        }
         const nextQty = Math.max(
           1,
           Math.min(Number.isFinite(desired) ? desired : 1, summary.available)
         );
-
-        const guestItems = readGuestCart();
-        const existing = guestItems.find((item) => item.variant_id === lineId);
-        if (!existing) return;
 
         existing.qty = nextQty;
         writeGuestCart(guestItems);

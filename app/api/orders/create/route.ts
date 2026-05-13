@@ -4,6 +4,10 @@ import { insertSingleRowWithSchemaFallback } from "@/lib/supabase/insertWithSche
 import { resolveEffectivePrice } from "@/lib/pricing";
 import { protectorUnitFee } from "@/lib/addons";
 import { sendAdminOrderEventNotification } from "@/lib/push/server";
+import {
+  resolveShopControls,
+  SHOP_CHECKOUT_DISABLED_MESSAGE,
+} from "@/lib/shopControls";
 
 const PAYMENT_WINDOW_MS = 12 * 60 * 60 * 1000;
 
@@ -204,6 +208,21 @@ export async function POST(req: Request) {
       return NextResponse.json(
         { ok: false, error: "Cart lines and checkout details are required." },
         { status: 400 }
+      );
+    }
+
+    const { data: settingsRow, error: settingsError } = await sb
+      .from("settings")
+      .select("show_prices,allow_add_to_cart,allow_checkout")
+      .eq("id", 1)
+      .maybeSingle();
+    if (settingsError) throw settingsError;
+
+    const shopControls = resolveShopControls((settingsRow as any) ?? null);
+    if (!shopControls.allowCheckout) {
+      return NextResponse.json(
+        { ok: false, error: SHOP_CHECKOUT_DISABLED_MESSAGE },
+        { status: 403 }
       );
     }
 

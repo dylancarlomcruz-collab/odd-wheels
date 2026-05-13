@@ -174,6 +174,9 @@ export default function AdminSettingsPage() {
 
   const [schedule, setSchedule] = React.useState("");
   const [cutoff, setCutoff] = React.useState("");
+  const [showPrices, setShowPrices] = React.useState(true);
+  const [allowAddToCart, setAllowAddToCart] = React.useState(true);
+  const [allowCheckout, setAllowCheckout] = React.useState(true);
   const [priorityAvailable, setPriorityAvailable] = React.useState(false);
   const [priorityNote, setPriorityNote] = React.useState("");
   const [freeShippingThreshold, setFreeShippingThreshold] = React.useState("");
@@ -220,6 +223,9 @@ export default function AdminSettingsPage() {
     if (data) {
       setSchedule(data.shipping_schedule_text ?? "");
       setCutoff(data.shipping_cutoff_text ?? "");
+      setShowPrices((data as any).show_prices !== false);
+      setAllowAddToCart((data as any).allow_add_to_cart !== false);
+      setAllowCheckout((data as any).allow_checkout !== false);
       setPriorityAvailable(!!data.priority_shipping_available);
       setPriorityNote(data.priority_shipping_note ?? "");
       setFreeShippingThreshold(
@@ -306,6 +312,9 @@ export default function AdminSettingsPage() {
     const { error } = await supabase.from("settings").update({
       shipping_schedule_text: schedule || null,
       shipping_cutoff_text: cutoff || null,
+      show_prices: showPrices,
+      allow_add_to_cart: allowAddToCart,
+      allow_checkout: allowCheckout,
       priority_shipping_available: priorityAvailable,
       priority_shipping_note: priorityNote || null,
       free_shipping_threshold: threshold,
@@ -365,6 +374,29 @@ export default function AdminSettingsPage() {
         </CardHeader>
         <CardBody className="space-y-4">
           {loading ? <div className="text-white/60">Loading...</div> : null}
+
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+            <div className="font-semibold">Shop controls</div>
+            <div className="text-sm text-white/60">
+              Use these switches when you need to pause buyer activity while
+              you are away.
+            </div>
+            <Checkbox
+              checked={showPrices}
+              onChange={setShowPrices}
+              label="Show prices on the shop"
+            />
+            <Checkbox
+              checked={allowAddToCart}
+              onChange={setAllowAddToCart}
+              label="Allow buyers to add items to cart"
+            />
+            <Checkbox
+              checked={allowCheckout}
+              onChange={setAllowCheckout}
+              label="Allow buyers to proceed to checkout"
+            />
+          </div>
 
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
             <div className="font-semibold">Branding</div>

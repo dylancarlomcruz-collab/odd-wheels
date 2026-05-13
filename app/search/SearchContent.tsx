@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { toast } from "@/components/ui/toast";
 import { useCart } from "@/hooks/useCart";
+import { useSettings } from "@/hooks/useSettings";
 import { useSearchProducts } from "@/hooks/useSearchProducts";
 import { formatConditionLabel } from "@/lib/conditions";
 import { resolveEffectivePrice } from "@/lib/pricing";
@@ -20,6 +21,10 @@ import { readRecentViews } from "@/lib/recentViews";
 import { buildSearchOr } from "@/lib/search";
 import { SHOP_CATEGORY_OPTIONS, matchesShopCategory } from "@/lib/shopCategories";
 import { mapProductsToShopProducts } from "@/lib/shopProducts";
+import {
+  resolveShopControls,
+  SHOP_ADD_TO_CART_DISABLED_MESSAGE,
+} from "@/lib/shopControls";
 import { supabase } from "@/lib/supabase/browser";
 import { isNewArrivalCreatedAt } from "@/lib/newArrivals";
 
@@ -121,6 +126,11 @@ export default function SearchContent() {
   const q = sp.get("q") ?? "";
   const { products, loading, error, normalizedQuery } = useSearchProducts(q);
   const cart = useCart();
+  const { settings } = useSettings();
+  const shopControls = React.useMemo(
+    () => resolveShopControls(settings),
+    [settings]
+  );
   const [closestMatches, setClosestMatches] = React.useState<any[]>([]);
   const [topSellers, setTopSellers] = React.useState<any[]>([]);
   const [recentlyViewed, setRecentlyViewed] = React.useState<any[]>([]);
@@ -618,6 +628,13 @@ export default function SearchContent() {
   }
 
   async function onAdd(product: any, option: any) {
+    if (!shopControls.allowAddToCart) {
+      toast({
+        title: "Shop update",
+        message: SHOP_ADD_TO_CART_DISABLED_MESSAGE,
+      });
+      return;
+    }
     try {
       const result = await cart.add(option.id, 1);
       const effectivePrice = resolveEffectivePrice({
@@ -1042,6 +1059,8 @@ export default function SearchContent() {
                   <ProductCard
                     key={product.key}
                     product={product}
+                    showPrices={shopControls.showPrices}
+                    canAddToCart={shopControls.allowAddToCart}
                     wideView={isQuadView}
                     mobileVariant={isSingleView ? "diecast" : undefined}
                     onAddToCart={(option) => onAdd(product, option)}
@@ -1061,6 +1080,8 @@ export default function SearchContent() {
                   <ProductCard
                     key={product.key}
                     product={product}
+                    showPrices={shopControls.showPrices}
+                    canAddToCart={shopControls.allowAddToCart}
                     wideView={isQuadView}
                     mobileVariant={isSingleView ? "diecast" : undefined}
                     onAddToCart={(option) => onAdd(product, option)}
@@ -1080,6 +1101,8 @@ export default function SearchContent() {
                   <ProductCard
                     key={product.key}
                     product={product}
+                    showPrices={shopControls.showPrices}
+                    canAddToCart={shopControls.allowAddToCart}
                     wideView={isQuadView}
                     mobileVariant={isSingleView ? "diecast" : undefined}
                     onAddToCart={(option) => onAdd(product, option)}
@@ -1120,6 +1143,8 @@ export default function SearchContent() {
             <ProductCard
               key={product.key}
               product={product}
+              showPrices={shopControls.showPrices}
+              canAddToCart={shopControls.allowAddToCart}
               wideView={isQuadView}
               mobileVariant={isSingleView ? "diecast" : undefined}
               onAddToCart={(option) => onAdd(product, option)}

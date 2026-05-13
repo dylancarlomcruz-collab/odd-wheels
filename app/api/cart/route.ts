@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { requireUserRequest } from "@/lib/api/auth";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import {
+  resolveShopControls,
+  SHOP_ADD_TO_CART_DISABLED_MESSAGE,
+} from "@/lib/shopControls";
 
 const CART_SELECT =
   "id,user_id,variant_id,qty,protector_selected,variant:product_variants(id,condition,issue_notes,public_notes,price,sale_price,discount_percent,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,product:products(id,title,brand,model,image_urls))";
@@ -139,6 +143,17 @@ async function fetchVariantSummary(
   };
 }
 
+async function fetchShopControls(sb: ReturnType<typeof supabaseAdmin>) {
+  const { data, error } = await sb
+    .from("settings")
+    .select("show_prices,allow_add_to_cart,allow_checkout")
+    .eq("id", 1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return resolveShopControls((data as any) ?? null);
+}
+
 export async function GET(req: Request) {
   try {
     const authResult = await requireUserRequest(req);
@@ -175,8 +190,12 @@ export async function POST(req: Request) {
         );
       }
 
+      const controls = await fetchShopControls(sb);
       const summary = await fetchVariantSummary(sb, variantId);
-      return NextResponse.json({ ok: true, ...summary }, { status: 200 });
+      return NextResponse.json(
+        { ok: true, ...summary, allowAddToCart: controls.allowAddToCart },
+        { status: 200 }
+      );
     }
 
     const authResult = await requireUserRequest(req);
@@ -282,6 +301,14 @@ export async function POST(req: Request) {
     }
 
     if (action === "add") {
+      const controls = await fetchShopControls(authedSb);
+      if (!controls.allowAddToCart) {
+        return NextResponse.json(
+          { ok: false, error: SHOP_ADD_TO_CART_DISABLED_MESSAGE },
+          { status: 403 }
+        );
+      }
+
       const variantId = String(body?.variantId ?? "").trim();
       const qty = Math.max(1, Math.trunc(Number(body?.qty ?? 1) || 1));
       const protectorSelected = Boolean(body?.protectorSelected);
@@ -366,7 +393,7 @@ export async function POST(req: Request) {
 
       const { data: row, error: rowError } = await authedSb
         .from("cart_items")
-        .select("id,variant_id")
+        .select("id,variant_id,qty")
         .eq("id", lineId)
         .eq("user_id", userId)
         .maybeSingle();
@@ -375,6 +402,15 @@ export async function POST(req: Request) {
         return NextResponse.json(
           { ok: false, error: "Cart line not found." },
           { status: 404 }
+        );
+      }
+
+      const controls = await fetchShopControls(authedSb);
+      const currentQty = Number((row as any)?.qty ?? 0);
+      if (!controls.allowAddToCart && desired > currentQty) {
+        return NextResponse.json(
+          { ok: false, error: SHOP_ADD_TO_CART_DISABLED_MESSAGE },
+          { status: 403 }
         );
       }
 

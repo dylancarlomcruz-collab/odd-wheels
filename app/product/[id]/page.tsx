@@ -14,6 +14,7 @@ import {
 import type { ShopProduct } from "@/components/ProductCard";
 import { toast } from "@/components/ui/toast";
 import { useCart } from "@/hooks/useCart";
+import { useSettings } from "@/hooks/useSettings";
 import {
   useProductDetail,
   type ProductDetail,
@@ -42,6 +43,11 @@ import {
   buildSrcSet,
   getOptimizedImageUrl,
 } from "@/lib/imageUrl";
+import {
+  resolveShopControls,
+  SHOP_ADD_TO_CART_DISABLED_MESSAGE,
+  SHOP_PRICE_HIDDEN_LABEL,
+} from "@/lib/shopControls";
 
 function peso(amount: number) {
   try {
@@ -91,6 +97,11 @@ export default function ProductDetailPage() {
   const id = params.id;
   const { product, loading } = useProductDetail(id);
   const cart = useCart();
+  const { settings } = useSettings();
+  const shopControls = React.useMemo(
+    () => resolveShopControls(settings),
+    [settings]
+  );
   const [selectedId, setSelectedId] = React.useState("");
   const [activeIndex, setActiveIndex] = React.useState(0);
   const [issueOpen, setIssueOpen] = React.useState(false);
@@ -165,9 +176,15 @@ export default function ProductDetailPage() {
     product?.variants[0] ??
     null;
   const selectedPricing = selected ? getOptionPricing(selected) : null;
-  const displayPrice = selectedPricing ? peso(selectedPricing.effectivePrice) : "-";
+  const displayPrice = !shopControls.showPrices
+    ? SHOP_PRICE_HIDDEN_LABEL
+    : selectedPricing
+      ? peso(selectedPricing.effectivePrice)
+      : "-";
   const strikePrice =
-    selected && selectedPricing?.hasSale ? peso(Number(selected.price ?? 0)) : null;
+    shopControls.showPrices && selected && selectedPricing?.hasSale
+      ? peso(Number(selected.price ?? 0))
+      : null;
   const activeImage = images[activeIndex] ?? "";
   const issueImages = React.useMemo(
     () =>
@@ -298,6 +315,13 @@ export default function ProductDetailPage() {
   }
 
   async function addVariantToCart(variant: Variant) {
+    if (!shopControls.allowAddToCart) {
+      toast({
+        title: "Shop update",
+        message: SHOP_ADD_TO_CART_DISABLED_MESSAGE,
+      });
+      return;
+    }
     try {
       const pricing = getOptionPricing(variant);
       const result = await cart.add(variant.id, 1);
@@ -330,6 +354,13 @@ export default function ProductDetailPage() {
   }
 
   async function addSuggestionToCart(item: ShopProduct, option: ShopProduct["options"][0]) {
+    if (!shopControls.allowAddToCart) {
+      toast({
+        title: "Shop update",
+        message: SHOP_ADD_TO_CART_DISABLED_MESSAGE,
+      });
+      return;
+    }
     try {
       const pricing = getOptionPricing(option);
       const result = await cart.add(option.id, 1);
@@ -670,6 +701,12 @@ export default function ProductDetailPage() {
                   </div>
                 </div>
 
+                {!shopControls.allowAddToCart ? (
+                  <div className="rounded-xl border border-amber-300/35 bg-amber-500/10 p-3 text-sm text-amber-100">
+                    {SHOP_ADD_TO_CART_DISABLED_MESSAGE}
+                  </div>
+                ) : null}
+
                 <div className="rounded-xl border border-white/10 bg-bg-950/40 p-3">
                   <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
                     Conditions
@@ -678,7 +715,11 @@ export default function ProductDetailPage() {
                     {product.variants.map((variant) => {
                       const isSelected = variant.id === selected?.id;
                       const pricing = getOptionPricing(variant);
-                      const variantStrike = pricing.hasSale
+                      const variantPrice = shopControls.showPrices
+                        ? peso(pricing.effectivePrice)
+                        : SHOP_PRICE_HIDDEN_LABEL;
+                      const variantStrike =
+                        shopControls.showPrices && pricing.hasSale
                         ? peso(Number(variant.price ?? 0))
                         : null;
                       return (
@@ -702,13 +743,13 @@ export default function ProductDetailPage() {
                           <span className={isSelected ? "text-white/90" : "text-white/60"}>
                             {variantStrike ? (
                               <span className="flex items-baseline gap-2">
-                                <span>{peso(pricing.effectivePrice)}</span>
+                                <span>{variantPrice}</span>
                                 <span className="text-[10px] text-white/40 line-through">
                                   {variantStrike}
                                 </span>
                               </span>
                             ) : (
-                              peso(pricing.effectivePrice)
+                              variantPrice
                             )}{" "}
                             - {variant.qty} left
                           </span>
@@ -741,7 +782,8 @@ export default function ProductDetailPage() {
                   <button
                     type="button"
                     onClick={() => void addVariantToCart(selected)}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-black hover:bg-amber-500"
+                    disabled={!shopControls.allowAddToCart}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-black hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <ShoppingCart className="h-4 w-4" />
                     Add to cart
@@ -807,7 +849,9 @@ export default function ProductDetailPage() {
                       {item.model ? ` · ${item.model}` : ""}
                     </div>
                     <div className="mt-2 text-sm text-price">
-                      {peso(getSuggestionPrice(item))}
+                      {shopControls.showPrices
+                        ? peso(getSuggestionPrice(item))
+                        : SHOP_PRICE_HIDDEN_LABEL}
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <Link
@@ -821,7 +865,8 @@ export default function ProductDetailPage() {
                         <button
                           type="button"
                           onClick={() => void addSuggestionToCart(item, defaultOption)}
-                          className="inline-flex items-center gap-2 rounded-xl border border-amber-300/35 bg-amber-500/12 px-3 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/20"
+                          disabled={!shopControls.allowAddToCart}
+                          className="inline-flex items-center gap-2 rounded-xl border border-amber-300/35 bg-amber-500/12 px-3 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <ShoppingCart className="h-3.5 w-3.5" />
                           Add
@@ -881,7 +926,7 @@ export default function ProductDetailPage() {
                   </div>
                 ) : null}
                 <div
-                  className="group relative overflow-hidden rounded-xl border border-white/10 bg-bg-950/50"
+                  className="group relative aspect-[4/3] w-full overflow-hidden rounded-xl border border-white/10 bg-bg-950/50"
                   onTouchStart={(event) =>
                     handleTouchStart(event, issueTouchStartX, issueTouchStartY)
                   }
@@ -903,7 +948,7 @@ export default function ProductDetailPage() {
                       })}
                       sizes="(min-width: 1024px) 720px, 90vw"
                       alt="Issue photo"
-                      className="h-72 w-full object-contain bg-neutral-50"
+                      className="h-full w-full object-contain bg-neutral-50"
                       loading="lazy"
                       decoding="async"
                       onError={(event) =>
@@ -914,7 +959,7 @@ export default function ProductDetailPage() {
                       }
                     />
                   ) : (
-                    <div className="flex h-72 items-center justify-center text-sm text-white/50">
+                    <div className="flex h-full items-center justify-center text-sm text-white/50">
                       No issue photos uploaded for this item.
                     </div>
                   )}

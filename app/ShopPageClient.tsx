@@ -24,11 +24,16 @@ import {
 } from "@/lib/productTags";
 import { SHOP_CATEGORY_OPTIONS, matchesShopCategory } from "@/lib/shopCategories";
 import { useProfile } from "@/hooks/useProfile";
+import { useSettings } from "@/hooks/useSettings";
 import { InventoryEditorDrawer } from "@/components/admin/InventoryEditorDrawer";
 import type { AdminProduct } from "@/components/admin/InventoryBrowseGrid";
 import { resolveEffectivePrice } from "@/lib/pricing";
 import { useShopSort } from "@/hooks/useShopSort";
 import { isNewArrivalCreatedAt } from "@/lib/newArrivals";
+import {
+  resolveShopControls,
+  SHOP_ADD_TO_CART_DISABLED_MESSAGE,
+} from "@/lib/shopControls";
 
 const BRAND_ALL_KEY = "__all__";
 const MAX_PRIMARY_BRAND_TABS = 9;
@@ -289,7 +294,12 @@ export default function ShopPageClient() {
   const hasSearch = Boolean(searchQuery);
   const cart = useCart();
   const { profile } = useProfile();
+  const { settings } = useSettings();
   const isAdminUser = profile?.role === "admin";
+  const shopControls = React.useMemo(
+    () => resolveShopControls(settings),
+    [settings]
+  );
   const [loading, setLoading] = React.useState(true);
   const [err, setErr] = React.useState<string | null>(null);
   const [rows, setRows] = React.useState<VariantRow[]>([]);
@@ -1386,6 +1396,13 @@ export default function ShopPageClient() {
       qty: number;
     }
   ) {
+    if (!shopControls.allowAddToCart) {
+      toast({
+        title: "Shop update",
+        message: SHOP_ADD_TO_CART_DISABLED_MESSAGE,
+      });
+      return;
+    }
     try {
       const result = await cart.add(option.id, 1);
       const effectivePrice = resolveEffectivePrice({
@@ -2156,6 +2173,8 @@ export default function ShopPageClient() {
                     <ProductCard
                       key={`${section.key}-${p.key}`}
                       product={p}
+                      showPrices={shopControls.showPrices}
+                      canAddToCart={shopControls.allowAddToCart}
                       wideView={isQuadView}
                       mobileVariant={isSingleView ? "diecast" : undefined}
                       showCardPageActions={false}
@@ -2179,6 +2198,8 @@ export default function ShopPageClient() {
                 <ProductCard
                   key={`all-${p.key}`}
                   product={p}
+                  showPrices={shopControls.showPrices}
+                  canAddToCart={shopControls.allowAddToCart}
                   wideView={isQuadView}
                   mobileVariant={isSingleView ? "diecast" : undefined}
                   showCardPageActions={false}

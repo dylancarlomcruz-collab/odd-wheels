@@ -33,9 +33,29 @@ import {
   protectorKindFromShipClass,
   protectorUnitFee,
 } from "@/lib/addons";
+import {
+  JNT_CAPACITY,
+  LBC_CAPACITY,
+  REGION_LABEL,
+  type JntPouch,
+  type LbcPackage,
+  type Region,
+} from "@/lib/shipping/config";
+import {
+  fitsCapacity,
+  jntFee,
+  lbcFee,
+  recommendLbcPackage,
+  shipCountsFromLines,
+} from "@/lib/shipping/logic";
 import { supabase } from "@/lib/supabase/browser";
 import { useProfile } from "@/hooks/useProfile";
 import { useAuth } from "@/components/auth/AuthProvider";
+import {
+  resolveShopControls,
+  SHOP_ADD_TO_CART_DISABLED_MESSAGE,
+  SHOP_CHECKOUT_DISABLED_MESSAGE,
+} from "@/lib/shopControls";
 
 function normalizeValue(value: string | null | undefined) {
   const normalized = String(value ?? "").trim().toUpperCase();
@@ -71,6 +91,166 @@ function parseNumberInput(value: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function roundMoney(value: number) {
+  return Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
+}
+
+function formatEditableMoneyInput(value: number) {
+  const rounded = roundMoney(value);
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+}
+
+function normalizeSettingList(
+  values?: Array<string | null | undefined> | string | null,
+) {
+  if (Array.isArray(values)) return values;
+  if (typeof values === "string") {
+    const trimmed = values.replace(/[{}]/g, "").trim();
+    if (!trimmed) return [];
+    return trimmed.split(",").map((value) => value.trim());
+  }
+  return [];
+}
+
+function normalizeSettingListUpper(
+  values?: Array<string | null | undefined> | string | null,
+) {
+  return normalizeSettingList(values)
+    .map((value) => String(value ?? "").trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function intersectLists<T>(lists: T[][]) {
+  if (!lists.length) return [];
+  return lists.reduce((acc, list) => acc.filter((value) => list.includes(value)));
+}
+
+type AdminShippingMethod = "LBC" | "JNT" | "LALAMOVE" | "PICKUP";
+type AdminSelectableLbcPackage = LbcPackage | "MEDIUM_APPROVAL";
+const ADMIN_SHIPPING_METHODS: AdminShippingMethod[] = [
+  "LBC",
+  "JNT",
+  "LALAMOVE",
+  "PICKUP",
+];
+
+type AdminShippingMeta =
+  | {
+      ok: true;
+      shippingFee: number;
+      packagingCode: JntPouch | AdminSelectableLbcPackage | null;
+      packagingLabel: string | null;
+      note?: string;
+      warning?: string;
+    }
+  | {
+      ok: false;
+      shippingFee: number;
+      packagingCode: null;
+      packagingLabel: null;
+      error: string;
+    };
+
+function normalizeAdminShippingMethod(
+  value: string | null | undefined,
+): AdminShippingMethod {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  if (
+    normalized === "J&T" ||
+    normalized === "J&T EXPRESS" ||
+    normalized === "J&TEXPRESS" ||
+    normalized === "JT"
+  ) {
+    return "JNT";
+  }
+  if (
+    normalized === "LBC" ||
+    normalized === "JNT" ||
+    normalized === "LALAMOVE" ||
+    normalized === "PICKUP"
+  ) {
+    return normalized;
+  }
+  return "LBC";
+}
+
+function normalizeAdminRegion(value: string | null | undefined): Region {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  if (
+    normalized === "METRO_MANILA" ||
+    normalized === "LUZON" ||
+    normalized === "VISAYAS" ||
+    normalized === "MINDANAO"
+  ) {
+    return normalized;
+  }
+  return "METRO_MANILA";
+}
+
+function normalizeAdminJntPouch(value: string | null | undefined): JntPouch {
+  return String(value ?? "").trim().toUpperCase() === "MEDIUM" ? "MEDIUM" : "SMALL";
+}
+
+function normalizeAdminLbcPackage(
+  value: string | null | undefined,
+): AdminSelectableLbcPackage {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  if (
+    normalized === "N_SAKTO" ||
+    normalized === "MINIBOX" ||
+    normalized === "SMALL_BOX" ||
+    normalized === "MEDIUM_APPROVAL"
+  ) {
+    return normalized;
+  }
+  return "N_SAKTO";
+}
+
+function formatAdminRegionLabel(region: Region) {
+  return region === "METRO_MANILA" ? "NCR" : REGION_LABEL[region];
+}
+
+function formatJntPouchLabel(pouch: JntPouch) {
+  return pouch === "MEDIUM" ? "J&T Medium pouch" : "J&T Small pouch";
+}
+
+function formatLbcPackageLabel(pack: AdminSelectableLbcPackage) {
+  switch (pack) {
+    case "N_SAKTO":
+      return "LBC N-Sakto pouch";
+    case "MINIBOX":
+      return "LBC Mini box";
+    case "SMALL_BOX":
+      return "LBC Small box";
+    case "MEDIUM_APPROVAL":
+      return "LBC Medium box (approval required)";
+    default:
+      return pack;
+  }
+}
+
+function recommendAllowedJntPouch(
+  counts: ReturnType<typeof shipCountsFromLines>,
+  allowed: JntPouch[],
+): { ok: true; pouch: JntPouch } | { ok: false; reason: string } {
+  const ordered: JntPouch[] = ["SMALL", "MEDIUM"];
+  const candidates = allowed.length
+    ? ordered.filter((pouch) => allowed.includes(pouch))
+    : ordered;
+  for (const pouch of candidates) {
+    if (fitsCapacity(counts, JNT_CAPACITY[pouch])) {
+      return { ok: true, pouch };
+    }
+  }
+  if (allowed.length) {
+    return {
+      ok: false,
+      reason: "J&T pouch restrictions do not fit this cart.",
+    };
+  }
+  return { ok: false, reason: "Cart is too large for J&T." };
+}
+
 type CartInvoiceItem = {
   name: string;
   qty: number;
@@ -84,11 +264,16 @@ type CartInvoicePayload = {
   customerName: string;
   shippingMethod: string;
   shippingDetails: string;
+  shippingRegion: string | null;
+  packagingLabel: string | null;
   items: CartInvoiceItem[];
   totalQty: number;
   totalLines: number;
   subtotalAmount: number;
+  shippingFeeAmount: number;
   discountAmount: number;
+  manualAdjustmentAmount: number;
+  suggestedTotalAmount: number;
   totalAmount: number;
 };
 
@@ -265,15 +450,31 @@ async function buildAdminCartInvoicePdfBlob(
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(70, 70, 70);
-    doc.text(`Courier: ${formatCourierLabel(payload.shippingMethod)}`, marginX, marginTop + 66);
+    let metaY = marginTop + 66;
+    doc.text(`Courier: ${formatCourierLabel(payload.shippingMethod)}`, marginX, metaY);
+    metaY += 13;
+    if (payload.shippingRegion) {
+      doc.text(`Region: ${payload.shippingRegion}`, marginX, metaY);
+      metaY += 13;
+    }
+    if (payload.packagingLabel) {
+      doc.text(`Packaging: ${payload.packagingLabel}`, marginX, metaY);
+      metaY += 13;
+    }
+    if (payload.shippingFeeAmount > 0) {
+      doc.text(`Shipping fee: ${pdfMoney(payload.shippingFeeAmount)}`, marginX, metaY);
+      metaY += 13;
+    }
     if (payload.shippingDetails) {
       const detailsLines = doc.splitTextToSize(
         `Shipping details: ${payload.shippingDetails}`,
         pageWidth - marginX * 2
       );
-      doc.text(detailsLines, marginX, marginTop + 79);
+      doc.text(detailsLines, marginX, metaY);
+      metaY += detailsLines.length * 10 + 3;
     }
-    doc.text("Source: Admin > Cart (FB checkout)", marginX, marginTop + 92);
+    doc.text("Source: Admin > Cart (FB checkout)", marginX, metaY);
+    return metaY;
   };
 
   const drawTableHeader = (topY: number) => {
@@ -292,8 +493,8 @@ async function buildAdminCartInvoicePdfBlob(
     return textY + 6;
   };
 
-  drawMeta(false);
-  let y = drawTableHeader(148) + 8;
+  let metaBottom = drawMeta(false);
+  let y = drawTableHeader(metaBottom + 18) + 8;
 
   if (payload.items.length === 0) {
     doc.setFont("helvetica", "normal");
@@ -317,8 +518,8 @@ async function buildAdminCartInvoicePdfBlob(
 
       if (y + rowHeight + 90 > pageHeight - marginBottom) {
         doc.addPage();
-        drawMeta(true);
-        y = drawTableHeader(148) + 8;
+        metaBottom = drawMeta(true);
+        y = drawTableHeader(metaBottom + 18) + 8;
       }
 
       doc.setDrawColor(235, 235, 235);
@@ -369,8 +570,8 @@ async function buildAdminCartInvoicePdfBlob(
 
   if (y + 104 > pageHeight - marginBottom) {
     doc.addPage();
-    drawMeta(true);
-    y = 158;
+    metaBottom = drawMeta(true);
+    y = metaBottom + 28;
   }
 
   doc.setDrawColor(220, 220, 220);
@@ -385,19 +586,38 @@ async function buildAdminCartInvoicePdfBlob(
   doc.setFontSize(10);
   doc.text(`Total qty: ${payload.totalQty}`, marginX, y + 48);
   doc.text(`Total lines: ${payload.totalLines}`, marginX, y + 64);
-  doc.text(`Subtotal: ${pdfMoney(payload.subtotalAmount)}`, pageWidth - marginX, y + 30, {
+  let totalsY = y + 30;
+  doc.text(`Subtotal: ${pdfMoney(payload.subtotalAmount)}`, pageWidth - marginX, totalsY, {
     align: "right",
   });
-  if (payload.discountAmount > 0) {
-    doc.text(`Discount: -${pdfMoney(payload.discountAmount)}`, pageWidth - marginX, y + 46, {
+  totalsY += 16;
+  if (payload.shippingFeeAmount > 0) {
+    doc.text(`Shipping fee: ${pdfMoney(payload.shippingFeeAmount)}`, pageWidth - marginX, totalsY, {
       align: "right",
     });
+    totalsY += 16;
+  }
+  if (payload.discountAmount > 0) {
+    doc.text(`Discount: -${pdfMoney(payload.discountAmount)}`, pageWidth - marginX, totalsY, {
+      align: "right",
+    });
+    totalsY += 16;
+  }
+  if (payload.manualAdjustmentAmount !== 0) {
+    const adjustmentText =
+      payload.manualAdjustmentAmount > 0
+        ? `Manual adjustment: +${pdfMoney(payload.manualAdjustmentAmount)}`
+        : `Manual adjustment: -${pdfMoney(Math.abs(payload.manualAdjustmentAmount))}`;
+    doc.text(adjustmentText, pageWidth - marginX, totalsY, {
+      align: "right",
+    });
+    totalsY += 16;
   }
   doc.setFont("helvetica", "bold");
   doc.text(
     `Total amount: ${pdfMoney(payload.totalAmount)}`,
     pageWidth - marginX,
-    y + (payload.discountAmount > 0 ? 64 : 48),
+    totalsY,
     {
       align: "right",
     }
@@ -463,6 +683,10 @@ function CartContent() {
   const isAdminUser = profile?.role === "admin";
   const isAdminMode = isAdminUser;
   const { settings } = useSettings();
+  const shopControls = React.useMemo(
+    () => resolveShopControls(settings),
+    [settings]
+  );
   const selectAllRef = React.useRef<HTMLInputElement>(null);
   const invoiceImageCacheRef = React.useRef(new Map<string, string | null>());
 
@@ -477,12 +701,20 @@ function CartContent() {
   const [fbCustomerSuggestions, setFbCustomerSuggestions] = React.useState<
     SalesCustomerSuggestion[]
   >([]);
-  const [fbShippingMethod, setFbShippingMethod] = React.useState("LBC");
+  const [fbShippingMethod, setFbShippingMethod] =
+    React.useState<AdminShippingMethod>("LBC");
+  const [fbShippingRegion, setFbShippingRegion] =
+    React.useState<Region>("METRO_MANILA");
+  const [fbLbcPackage, setFbLbcPackage] =
+    React.useState<AdminSelectableLbcPackage>("N_SAKTO");
+  const [fbJntPouch, setFbJntPouch] = React.useState<JntPouch>("SMALL");
   const [fbShippingDetails, setFbShippingDetails] = React.useState("");
   const [fbDiscountType, setFbDiscountType] = React.useState<"AMOUNT" | "PERCENT">(
     "AMOUNT"
   );
   const [fbDiscountValue, setFbDiscountValue] = React.useState("");
+  const [adminFinalPriceInput, setAdminFinalPriceInput] = React.useState("");
+  const [adminFinalPriceTouched, setAdminFinalPriceTouched] = React.useState(false);
   const [sellingAsPos, setSellingAsPos] = React.useState(false);
   const [generatingInvoice, setGeneratingInvoice] = React.useState(false);
   const [clearingCart, setClearingCart] = React.useState(false);
@@ -579,22 +811,357 @@ function CartContent() {
       }).effectivePrice,
     []
   );
-  const selectedSubtotal = selectedLines.reduce((acc, l) => {
-    const addOn = protectorUnitFee(
-      l.variant.ship_class,
-      Boolean(l.protector_selected)
+  const selectedSubtotal = roundMoney(
+    selectedLines.reduce((acc, l) => {
+      const addOn = protectorUnitFee(
+        l.variant.ship_class,
+        Boolean(l.protector_selected)
+      );
+      return acc + (lineUnitPrice(l) + addOn) * l.qty;
+    }, 0)
+  );
+  const adminShipCounts = React.useMemo(
+    () =>
+      shipCountsFromLines(
+        selectedLines.map((line) => ({
+          ship_class: (normalizeValue(line.variant.ship_class) as any) ?? null,
+          qty: Math.max(1, Number(line.qty ?? 0)),
+        }))
+      ),
+    [selectedLines]
+  );
+  const adminHasLalamoveOnly = adminShipCounts.LALAMOVE > 0;
+  const adminAllowedCourierValues = React.useMemo(() => {
+    const raw = normalizeSettingListUpper(settings?.allowed_couriers ?? null);
+    const unique = Array.from(new Set(raw));
+    return unique.filter(
+      (value): value is AdminShippingMethod =>
+        value === "LBC" ||
+        value === "JNT" ||
+        value === "LALAMOVE" ||
+        value === "PICKUP"
     );
-    return acc + (lineUnitPrice(l) + addOn) * l.qty;
-  }, 0);
+  }, [settings?.allowed_couriers]);
+  const adminItemCourierValues = React.useMemo(() => {
+    const lists = selectedLines
+      .map((line) => normalizeSettingListUpper(line.variant.allowed_couriers ?? null))
+      .filter((list) => list.length > 0);
+    if (!lists.length) return [];
+    const intersection = intersectLists(lists);
+    return intersection.filter(
+      (value): value is AdminShippingMethod =>
+        value === "LBC" ||
+        value === "JNT" ||
+        value === "LALAMOVE" ||
+        value === "PICKUP"
+    );
+  }, [selectedLines]);
+  const adminCourierRestricted = adminAllowedCourierValues.length > 0;
+  const adminItemCourierRestricted = adminItemCourierValues.length > 0;
+  const adminAllowedCourierSet = React.useMemo(
+    () => new Set(adminAllowedCourierValues),
+    [adminAllowedCourierValues]
+  );
+  const adminItemCourierSet = React.useMemo(
+    () => new Set(adminItemCourierValues),
+    [adminItemCourierValues]
+  );
+  const adminAvailableShippingMethods = React.useMemo(() => {
+    let base = [...ADMIN_SHIPPING_METHODS];
+    if (adminCourierRestricted) {
+      base = base.filter((method) => adminAllowedCourierSet.has(method));
+    }
+    if (adminItemCourierRestricted) {
+      base = base.filter((method) => adminItemCourierSet.has(method));
+    }
+    const restrictionsActive = adminCourierRestricted || adminItemCourierRestricted;
+    if (!base.length && restrictionsActive) return [];
+    const normalized = base.length ? base : [...ADMIN_SHIPPING_METHODS];
+    if (adminHasLalamoveOnly) {
+      return normalized.includes("LALAMOVE")
+        ? (["LALAMOVE"] as AdminShippingMethod[])
+        : [];
+    }
+    return normalized;
+  }, [
+    adminAllowedCourierSet,
+    adminCourierRestricted,
+    adminHasLalamoveOnly,
+    adminItemCourierRestricted,
+    adminItemCourierSet,
+  ]);
+  const adminAllowedLbcPackages = React.useMemo(() => {
+    const raw = normalizeSettingListUpper(settings?.allowed_lbc_packages ?? null);
+    const unique = Array.from(new Set(raw));
+    return unique.filter(
+      (value): value is LbcPackage =>
+        value === "N_SAKTO" || value === "MINIBOX" || value === "SMALL_BOX"
+    );
+  }, [settings?.allowed_lbc_packages]);
+  const adminItemLbcPackages = React.useMemo(() => {
+    const lists = selectedLines
+      .map((line) => normalizeSettingListUpper(line.variant.allowed_lbc_packages ?? null))
+      .filter((list) => list.length > 0);
+    if (!lists.length) return [];
+    const intersection = intersectLists(lists);
+    return intersection.filter(
+      (value): value is LbcPackage =>
+        value === "N_SAKTO" || value === "MINIBOX" || value === "SMALL_BOX"
+    );
+  }, [selectedLines]);
+  const adminAllowedLbcSet = React.useMemo(
+    () => new Set(adminAllowedLbcPackages),
+    [adminAllowedLbcPackages]
+  );
+  const adminItemLbcSet = React.useMemo(
+    () => new Set(adminItemLbcPackages),
+    [adminItemLbcPackages]
+  );
+  const adminLbcRestrictionsActive =
+    adminAllowedLbcPackages.length > 0 || adminItemLbcPackages.length > 0;
+  const adminLbcFitMap = React.useMemo(
+    () => ({
+      N_SAKTO: fitsCapacity(adminShipCounts, LBC_CAPACITY.N_SAKTO),
+      MINIBOX: fitsCapacity(adminShipCounts, LBC_CAPACITY.MINIBOX),
+      SMALL_BOX: fitsCapacity(adminShipCounts, LBC_CAPACITY.SMALL_BOX),
+    }),
+    [adminShipCounts]
+  );
+  const adminAvailableLbcPackages = React.useMemo(() => {
+    const allowed: LbcPackage[] = [];
+    if (adminLbcFitMap.N_SAKTO) allowed.push("N_SAKTO");
+    if (adminLbcFitMap.MINIBOX) allowed.push("MINIBOX");
+    if (adminLbcFitMap.SMALL_BOX) allowed.push("SMALL_BOX");
+    if (!adminLbcRestrictionsActive) return allowed;
+    let filtered = allowed;
+    if (adminAllowedLbcPackages.length) {
+      filtered = filtered.filter((pack) => adminAllowedLbcSet.has(pack));
+    }
+    if (adminItemLbcPackages.length) {
+      filtered = filtered.filter((pack) => adminItemLbcSet.has(pack));
+    }
+    return filtered;
+  }, [
+    adminAllowedLbcPackages.length,
+    adminAllowedLbcSet,
+    adminItemLbcPackages.length,
+    adminItemLbcSet,
+    adminLbcFitMap,
+    adminLbcRestrictionsActive,
+  ]);
+  const adminLbcFallbackWarning = React.useMemo(() => {
+    if (adminLbcRestrictionsActive || adminAvailableLbcPackages.length > 0) {
+      return null;
+    }
+    const recommendation = recommendLbcPackage(adminShipCounts);
+    return recommendation.ok ? null : recommendation.reason;
+  }, [adminAvailableLbcPackages.length, adminLbcRestrictionsActive, adminShipCounts]);
+  const adminAllowedJntPouches = React.useMemo(() => {
+    const raw = normalizeSettingListUpper(settings?.allowed_jnt_pouches ?? null);
+    const unique = Array.from(new Set(raw));
+    return unique.filter(
+      (value): value is JntPouch => value === "SMALL" || value === "MEDIUM"
+    );
+  }, [settings?.allowed_jnt_pouches]);
+  const adminItemJntPouches = React.useMemo(() => {
+    const lists = selectedLines
+      .map((line) => normalizeSettingListUpper(line.variant.allowed_jnt_pouches ?? null))
+      .filter((list) => list.length > 0);
+    if (!lists.length) return [];
+    const intersection = intersectLists(lists);
+    return intersection.filter(
+      (value): value is JntPouch => value === "SMALL" || value === "MEDIUM"
+    );
+  }, [selectedLines]);
+  const adminItemJntSet = React.useMemo(
+    () => new Set(adminItemJntPouches),
+    [adminItemJntPouches]
+  );
+  const adminJntRestrictionsActive =
+    adminAllowedJntPouches.length > 0 || adminItemJntPouches.length > 0;
+  const adminEffectiveJntPouches = React.useMemo(() => {
+    if (!adminJntRestrictionsActive) return [];
+    const base = adminAllowedJntPouches.length
+      ? adminAllowedJntPouches
+      : (["SMALL", "MEDIUM"] as JntPouch[]);
+    if (!adminItemJntPouches.length) return base;
+    return base.filter((pouch) => adminItemJntSet.has(pouch));
+  }, [
+    adminAllowedJntPouches,
+    adminItemJntPouches.length,
+    adminItemJntSet,
+    adminJntRestrictionsActive,
+  ]);
+  const adminAvailableJntPouches = React.useMemo(() => {
+    const base = adminJntRestrictionsActive
+      ? adminEffectiveJntPouches
+      : (["SMALL", "MEDIUM"] as JntPouch[]);
+    return base.filter((pouch) => fitsCapacity(adminShipCounts, JNT_CAPACITY[pouch]));
+  }, [adminEffectiveJntPouches, adminJntRestrictionsActive, adminShipCounts]);
+  React.useEffect(() => {
+    if (!adminAvailableShippingMethods.length) return;
+    if (!adminAvailableShippingMethods.includes(fbShippingMethod)) {
+      setFbShippingMethod(adminAvailableShippingMethods[0]);
+    }
+  }, [adminAvailableShippingMethods, fbShippingMethod]);
+  React.useEffect(() => {
+    if (fbShippingMethod !== "LBC") return;
+    if (adminAvailableLbcPackages.length) {
+      if (!adminAvailableLbcPackages.includes(fbLbcPackage as LbcPackage)) {
+        setFbLbcPackage(adminAvailableLbcPackages[0]);
+      }
+      return;
+    }
+    if (adminLbcFallbackWarning && fbLbcPackage !== "MEDIUM_APPROVAL") {
+      setFbLbcPackage("MEDIUM_APPROVAL");
+    }
+  }, [
+    adminAvailableLbcPackages,
+    adminLbcFallbackWarning,
+    fbLbcPackage,
+    fbShippingMethod,
+  ]);
+  React.useEffect(() => {
+    if (fbShippingMethod !== "JNT") return;
+    if (adminAvailableJntPouches.length && !adminAvailableJntPouches.includes(fbJntPouch)) {
+      setFbJntPouch(adminAvailableJntPouches[0]);
+    }
+  }, [adminAvailableJntPouches, fbJntPouch, fbShippingMethod]);
   const adminDiscountBase = parseNumberInput(fbDiscountValue);
-  const adminDiscountAmount =
+  const adminDiscountAmount = roundMoney(
     fbDiscountType === "PERCENT"
       ? Math.min(
           selectedSubtotal,
           Math.max(0, (selectedSubtotal * Math.min(100, adminDiscountBase)) / 100)
         )
-      : Math.min(selectedSubtotal, Math.max(0, adminDiscountBase));
-  const adminTotalAfterDiscount = Math.max(0, selectedSubtotal - adminDiscountAmount);
+      : Math.min(selectedSubtotal, Math.max(0, adminDiscountBase))
+  );
+  const adminShippingMeta = React.useMemo<AdminShippingMeta>(() => {
+    if (!adminAvailableShippingMethods.length) {
+      return {
+        ok: false,
+        shippingFee: 0,
+        packagingCode: null,
+        packagingLabel: null,
+        error: "No courier is available for the selected cart items.",
+      };
+    }
+    if (!adminAvailableShippingMethods.includes(fbShippingMethod)) {
+      return {
+        ok: false,
+        shippingFee: 0,
+        packagingCode: null,
+        packagingLabel: null,
+        error: "Selected courier is not allowed for the current cart.",
+      };
+    }
+    if (fbShippingMethod === "PICKUP") {
+      return {
+        ok: true,
+        shippingFee: 0,
+        packagingCode: null,
+        packagingLabel: null,
+        note: "Store pickup does not add a shipping fee.",
+      };
+    }
+    if (fbShippingMethod === "LALAMOVE") {
+      return {
+        ok: true,
+        shippingFee: 0,
+        packagingCode: null,
+        packagingLabel: null,
+        note: "Lalamove convenience fee is waived in admin checkout.",
+      };
+    }
+    if (fbShippingMethod === "JNT") {
+      const selectedPouch = adminAvailableJntPouches.includes(fbJntPouch)
+        ? fbJntPouch
+        : adminAvailableJntPouches[0];
+      if (!selectedPouch) {
+        const recommendation = recommendAllowedJntPouch(
+          adminShipCounts,
+          adminJntRestrictionsActive ? adminEffectiveJntPouches : adminAllowedJntPouches
+        );
+        return {
+          ok: false,
+          shippingFee: 0,
+          packagingCode: null,
+          packagingLabel: null,
+          error: recommendation.ok
+            ? "Cart is too large for J&T."
+            : recommendation.reason,
+        };
+      }
+      return {
+        ok: true,
+        shippingFee: jntFee(selectedPouch, fbShippingRegion),
+        packagingCode: selectedPouch,
+        packagingLabel: formatJntPouchLabel(selectedPouch),
+        note: "Packaging is suggested from the shipping chart.",
+      };
+    }
+    if (adminAvailableLbcPackages.length) {
+      const selectedPack = adminAvailableLbcPackages.includes(fbLbcPackage as LbcPackage)
+        ? (fbLbcPackage as LbcPackage)
+        : adminAvailableLbcPackages[0];
+      return {
+        ok: true,
+        shippingFee: lbcFee(selectedPack, fbShippingRegion),
+        packagingCode: selectedPack,
+        packagingLabel: formatLbcPackageLabel(selectedPack),
+        note: "Packaging is suggested from the shipping chart.",
+      };
+    }
+    if (adminLbcFallbackWarning) {
+      return {
+        ok: true,
+        shippingFee: 0,
+        packagingCode: "MEDIUM_APPROVAL",
+        packagingLabel: formatLbcPackageLabel("MEDIUM_APPROVAL"),
+        warning: `${adminLbcFallbackWarning} Shipping fee is not on the current chart, so edit the final price if needed.`,
+      };
+    }
+    return {
+      ok: false,
+      shippingFee: 0,
+      packagingCode: null,
+      packagingLabel: null,
+      error: "LBC package restrictions do not fit this cart.",
+    };
+  }, [
+    adminAllowedJntPouches,
+    adminAvailableJntPouches,
+    adminAvailableLbcPackages,
+    adminAvailableShippingMethods,
+    adminEffectiveJntPouches,
+    adminJntRestrictionsActive,
+    adminLbcFallbackWarning,
+    adminShipCounts,
+    fbJntPouch,
+    fbLbcPackage,
+    fbShippingMethod,
+    fbShippingRegion,
+  ]);
+  const adminShippingFee = adminShippingMeta.ok ? adminShippingMeta.shippingFee : 0;
+  const adminSuggestedTotal = roundMoney(
+    Math.max(0, selectedSubtotal + adminShippingFee - adminDiscountAmount)
+  );
+  React.useEffect(() => {
+    if (!adminFinalPriceTouched) {
+      setAdminFinalPriceInput(formatEditableMoneyInput(adminSuggestedTotal));
+    }
+  }, [adminFinalPriceTouched, adminSuggestedTotal]);
+  const adminFinalPrice = roundMoney(
+    parseNumberInput(
+      adminFinalPriceInput.trim().length
+        ? adminFinalPriceInput
+        : formatEditableMoneyInput(adminSuggestedTotal)
+    )
+  );
+  const adminManualAdjustment = roundMoney(adminFinalPrice - adminSuggestedTotal);
+  const adminExtraDiscount = adminManualAdjustment < 0 ? Math.abs(adminManualAdjustment) : 0;
+  const adminStoredDiscountAmount = roundMoney(adminDiscountAmount + adminExtraDiscount);
+  const adminHasManualFinalPrice = Math.abs(adminManualAdjustment) >= 0.01;
   const selectedInvoiceItems = React.useMemo<CartInvoiceItem[]>(
     () =>
       selectedLines.map((line) => {
@@ -628,10 +1195,13 @@ function CartContent() {
     ? `/checkout?selected=${encodeURIComponent(selectedIds.join(","))}`
     : "/checkout";
   const checkoutDisabled =
-    selectedLines.length === 0 || (!isAdminMode && hasNonSealedSelected && !unsealedAck);
+    selectedLines.length === 0 ||
+    (!isAdminMode && hasNonSealedSelected && !unsealedAck) ||
+    (!isAdminMode && !shopControls.allowCheckout);
   const adminSoldDisabled =
     selectedLines.length === 0 ||
     !fbCustomerName.trim() ||
+    !adminShippingMeta.ok ||
     sellingAsPos ||
     profileLoading;
   const freeShippingThreshold = Number(settings?.free_shipping_threshold ?? 0);
@@ -739,15 +1309,25 @@ function CartContent() {
       const parsed = JSON.parse(raw) as {
         customerName?: string;
         shippingMethod?: string;
+        shippingRegion?: string;
+        lbcPackage?: string;
+        jntPouch?: string;
         shippingDetails?: string;
         discountType?: "AMOUNT" | "PERCENT";
         discountValue?: string;
+        finalPriceInput?: string;
+        finalPriceTouched?: boolean;
       };
       setFbCustomerName(String(parsed.customerName ?? "").trim());
-      setFbShippingMethod(String(parsed.shippingMethod ?? "LBC").trim() || "LBC");
+      setFbShippingMethod(normalizeAdminShippingMethod(parsed.shippingMethod));
+      setFbShippingRegion(normalizeAdminRegion(parsed.shippingRegion));
+      setFbLbcPackage(normalizeAdminLbcPackage(parsed.lbcPackage));
+      setFbJntPouch(normalizeAdminJntPouch(parsed.jntPouch));
       setFbShippingDetails(String(parsed.shippingDetails ?? "").trim());
       setFbDiscountType(parsed.discountType === "PERCENT" ? "PERCENT" : "AMOUNT");
       setFbDiscountValue(String(parsed.discountValue ?? "").trim());
+      setAdminFinalPriceInput(String(parsed.finalPriceInput ?? "").trim());
+      setAdminFinalPriceTouched(Boolean(parsed.finalPriceTouched));
     } catch {
       // ignore bad local state
     }
@@ -760,12 +1340,29 @@ function CartContent() {
       JSON.stringify({
         customerName: fbCustomerName,
         shippingMethod: fbShippingMethod,
+        shippingRegion: fbShippingRegion,
+        lbcPackage: fbLbcPackage,
+        jntPouch: fbJntPouch,
         shippingDetails: fbShippingDetails,
         discountType: fbDiscountType,
         discountValue: fbDiscountValue,
+        finalPriceInput: adminFinalPriceInput,
+        finalPriceTouched: adminFinalPriceTouched,
       })
     );
-  }, [isAdminMode, fbCustomerName, fbShippingMethod, fbShippingDetails, fbDiscountType, fbDiscountValue]);
+  }, [
+    isAdminMode,
+    fbCustomerName,
+    fbShippingMethod,
+    fbShippingRegion,
+    fbLbcPackage,
+    fbJntPouch,
+    fbShippingDetails,
+    fbDiscountType,
+    fbDiscountValue,
+    adminFinalPriceInput,
+    adminFinalPriceTouched,
+  ]);
 
   React.useEffect(() => {
     if (!isAdminMode) {
@@ -849,19 +1446,29 @@ function CartContent() {
       alert("Customer name is required.");
       return;
     }
+    if (!adminShippingMeta.ok) {
+      alert(adminShippingMeta.error);
+      return;
+    }
 
     setGeneratingInvoice(true);
     try {
       const payload: CartInvoicePayload = {
         customerName: fbCustomerName.trim(),
-        shippingMethod: fbShippingMethod.trim() || "LBC",
+        shippingMethod: fbShippingMethod,
         shippingDetails: fbShippingDetails.trim(),
+        shippingRegion:
+          fbShippingMethod === "PICKUP" ? null : formatAdminRegionLabel(fbShippingRegion),
+        packagingLabel: adminShippingMeta.packagingLabel,
         items: selectedInvoiceItems,
         totalQty: selectedLines.reduce((sum, line) => sum + Math.max(1, Number(line.qty ?? 0)), 0),
         totalLines: selectedLines.length,
         subtotalAmount: selectedSubtotal,
+        shippingFeeAmount: adminShippingFee,
         discountAmount: adminDiscountAmount,
-        totalAmount: adminTotalAfterDiscount,
+        manualAdjustmentAmount: adminManualAdjustment,
+        suggestedTotalAmount: adminSuggestedTotal,
+        totalAmount: adminFinalPrice,
       };
       await exportAdminCartInvoicePdf(payload, invoiceImageCacheRef.current);
     } catch (e: any) {
@@ -900,6 +1507,8 @@ function CartContent() {
 
       setSelectedIds([]);
       setUnsealedAck(false);
+      setAdminFinalPriceTouched(false);
+      setAdminFinalPriceInput("");
       toast({
         intent: "success",
         title: "Cart cleared",
@@ -937,7 +1546,8 @@ function CartContent() {
         throw new Error("Staff session not found. Please sign in again.");
       }
 
-      const shippingMethod = fbShippingMethod.trim() || "LBC";
+      const shippingMethod = fbShippingMethod;
+      const shippingRegion = shippingMethod === "PICKUP" ? null : fbShippingRegion;
       const shippingText = fbShippingDetails.trim();
       const shippingDetails = {
         method: shippingMethod,
@@ -946,12 +1556,35 @@ function CartContent() {
         receiver_name: customerName,
         source: "admin_cart_checkout",
         admin_cart_checkout: true,
+        region: shippingRegion,
+        region_label: shippingRegion ? formatAdminRegionLabel(shippingRegion) : null,
+        packaging: adminShippingMeta.packagingCode,
+        packaging_label: adminShippingMeta.packagingLabel,
+        courier_note: adminShippingMeta.ok ? adminShippingMeta.note ?? null : null,
+        courier_warning: adminShippingMeta.ok ? adminShippingMeta.warning ?? null : null,
         discount:
           adminDiscountAmount > 0
             ? {
                 type: fbDiscountType,
                 value: adminDiscountBase,
                 amount: adminDiscountAmount,
+              }
+            : null,
+        pricing: {
+          subtotal: selectedSubtotal,
+          shipping_fee: adminShippingFee,
+          discount_amount: adminDiscountAmount,
+          suggested_total: adminSuggestedTotal,
+          final_total: adminFinalPrice,
+          manual_adjustment: adminManualAdjustment,
+          lalamove_fee_waived: shippingMethod === "LALAMOVE",
+        },
+        final_price_override:
+          adminHasManualFinalPrice
+            ? {
+                suggested_total: adminSuggestedTotal,
+                final_total: adminFinalPrice,
+                adjustment: adminManualAdjustment,
               }
             : null,
       };
@@ -981,17 +1614,28 @@ function CartContent() {
         throw new Error("POS order created, but order id is missing.");
       }
 
-      if (adminDiscountAmount > 0) {
-        const { error: discountError } = await supabase
-          .from("orders")
-          .update({
-            discount_total: adminDiscountAmount,
-            discount: adminDiscountAmount,
-            total: adminTotalAfterDiscount,
-          })
-          .eq("id", orderId);
-        if (discountError) throw discountError;
-      }
+      const normalizedCourier = shippingMethod === "JNT" ? "JNT" : shippingMethod;
+      const { error: pricingError } = await supabase
+        .from("orders")
+        .update({
+          shipping_method: shippingMethod,
+          shipping_region: shippingRegion,
+          shipping_details: shippingDetails,
+          carrier: normalizedCourier,
+          courier: normalizedCourier,
+          subtotal: selectedSubtotal,
+          shipping_fee: adminShippingFee,
+          cop_fee: 0,
+          lalamove_fee: 0,
+          shipping_discount: 0,
+          priority_fee: 0,
+          insurance_fee: 0,
+          discount_total: adminStoredDiscountAmount,
+          discount: adminStoredDiscountAmount,
+          total: adminFinalPrice,
+        })
+        .eq("id", orderId);
+      if (pricingError) throw pricingError;
 
       const shouldMarkToShip = shippingMethod.toUpperCase() !== "PICKUP";
       const res = await fetch("/api/pos/complete", {
@@ -1022,6 +1666,8 @@ function CartContent() {
       }
       setSelectedIds((prev) => prev.filter((id) => !selectedLineIds.includes(id)));
       setUnsealedAck(false);
+      setAdminFinalPriceTouched(false);
+      setAdminFinalPriceInput("");
 
       toast({
         intent: "success",
@@ -1082,6 +1728,14 @@ function CartContent() {
         ? "text-amber-200/80"
         : "text-white/70"
     : "text-white/70";
+  const adminCourierOptions = adminAvailableShippingMethods.length
+    ? adminAvailableShippingMethods
+    : ADMIN_SHIPPING_METHODS;
+  const adminLbcPackageOptions = adminAvailableLbcPackages.length
+    ? adminAvailableLbcPackages
+    : adminLbcFallbackWarning
+      ? (["MEDIUM_APPROVAL"] as AdminSelectableLbcPackage[])
+      : [];
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 space-y-6">
@@ -1135,15 +1789,99 @@ function CartContent() {
                 </datalist>
               ) : null}
               <Select
-                label="Shipping courier (optional)"
+                label="Shipping courier"
                 value={fbShippingMethod}
-                onChange={(e) => setFbShippingMethod(e.target.value)}
+                onChange={(e) =>
+                  setFbShippingMethod(e.target.value as AdminShippingMethod)
+                }
+                hint={
+                  adminHasLalamoveOnly
+                    ? "Selected items require Lalamove handling."
+                    : undefined
+                }
               >
-                <option value="LBC">LBC</option>
-                <option value="J&T">J&amp;T</option>
-                <option value="LALAMOVE">Lalamove</option>
-                <option value="PICKUP">Pickup</option>
+                {adminCourierOptions.map((method) => (
+                  <option key={method} value={method}>
+                    {method === "JNT"
+                      ? "J&T"
+                      : method === "PICKUP"
+                        ? "Pickup"
+                        : formatCourierLabel(method)}
+                  </option>
+                ))}
               </Select>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <Select
+                label="Shipping region"
+                value={fbShippingRegion}
+                onChange={(e) => setFbShippingRegion(e.target.value as Region)}
+                disabled={fbShippingMethod === "PICKUP"}
+                hint={
+                  fbShippingMethod === "PICKUP"
+                    ? "Region is not needed for pickup."
+                    : "Choose NCR, Luzon, Visayas, or Mindanao for the shipping chart."
+                }
+              >
+                <option value="METRO_MANILA">NCR / Metro Manila</option>
+                <option value="LUZON">Luzon</option>
+                <option value="VISAYAS">Visayas</option>
+                <option value="MINDANAO">Mindanao</option>
+              </Select>
+              {fbShippingMethod === "LBC" ? (
+                <Select
+                  label="Packaging"
+                  value={fbLbcPackage}
+                  onChange={(e) =>
+                    setFbLbcPackage(e.target.value as AdminSelectableLbcPackage)
+                  }
+                  disabled={!adminLbcPackageOptions.length}
+                  hint="Suggested from the shipping chart. You can switch to another valid LBC package."
+                >
+                  {adminLbcPackageOptions.length ? (
+                    adminLbcPackageOptions.map((pack) => (
+                      <option key={pack} value={pack}>
+                        {formatLbcPackageLabel(pack)}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">No valid LBC package</option>
+                  )}
+                </Select>
+              ) : fbShippingMethod === "JNT" ? (
+                <Select
+                  label="Packaging"
+                  value={fbJntPouch}
+                  onChange={(e) => setFbJntPouch(e.target.value as JntPouch)}
+                  disabled={!adminAvailableJntPouches.length}
+                  hint="Suggested from the shipping chart. You can switch to another valid J&T pouch."
+                >
+                  {adminAvailableJntPouches.length ? (
+                    adminAvailableJntPouches.map((pouch) => (
+                      <option key={pouch} value={pouch}>
+                        {formatJntPouchLabel(pouch)}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">No valid J&T pouch</option>
+                  )}
+                </Select>
+              ) : (
+                <Input
+                  label="Packaging"
+                  value={
+                    fbShippingMethod === "LALAMOVE"
+                      ? "Not required"
+                      : "Not required for pickup"
+                  }
+                  disabled
+                  hint={
+                    fbShippingMethod === "LALAMOVE"
+                      ? "Lalamove convenience fee is waived in admin checkout."
+                      : undefined
+                  }
+                />
+              )}
             </div>
             <div className="mt-3">
               <Input
@@ -1172,6 +1910,58 @@ function CartContent() {
                 inputMode="decimal"
               />
             </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <Input
+                label="Final price (PHP)"
+                value={adminFinalPriceInput}
+                onChange={(e) => {
+                  setAdminFinalPriceTouched(true);
+                  setAdminFinalPriceInput(e.target.value);
+                }}
+                onBlur={() => {
+                  if (!adminFinalPriceInput.trim()) {
+                    setAdminFinalPriceTouched(false);
+                    setAdminFinalPriceInput(formatEditableMoneyInput(adminSuggestedTotal));
+                  }
+                }}
+                inputMode="decimal"
+                hint="Auto-filled from subtotal + shipping fee - discount. Edit if needed."
+              />
+              <div className="rounded-xl border border-white/10 bg-bg-900/30 p-4">
+                <div className="text-sm text-white/60">Shipping chart result</div>
+                {adminShippingMeta.ok ? (
+                  <div className="mt-1 space-y-1 text-sm text-white/75">
+                    <div>
+                      Region:{" "}
+                      {fbShippingMethod === "PICKUP"
+                        ? "Pickup"
+                        : formatAdminRegionLabel(fbShippingRegion)}
+                    </div>
+                    <div>
+                      Packaging: {adminShippingMeta.packagingLabel ?? "Not required"}
+                    </div>
+                    <div>Shipping fee: {formatPHP(adminShippingFee)}</div>
+                  </div>
+                ) : (
+                  <div className="mt-1 text-sm text-red-300">{adminShippingMeta.error}</div>
+                )}
+              </div>
+            </div>
+            {adminShippingMeta.ok && adminShippingMeta.note ? (
+              <div className="mt-3 rounded-xl border border-white/10 bg-bg-900/30 p-3 text-sm text-white/65">
+                {adminShippingMeta.note}
+              </div>
+            ) : null}
+            {adminShippingMeta.ok && adminShippingMeta.warning ? (
+              <div className="mt-3 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+                {adminShippingMeta.warning}
+              </div>
+            ) : null}
+            {!adminShippingMeta.ok ? (
+              <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
+                {adminShippingMeta.error}
+              </div>
+            ) : null}
           </CardBody>
         </Card>
       ) : null}
@@ -1196,6 +1986,12 @@ function CartContent() {
           {freeShippingNote ? (
             <div className="mt-1 text-xs text-white/50">{freeShippingNote}</div>
           ) : null}
+        </div>
+      ) : null}
+
+      {!isAdminMode && !shopControls.allowCheckout ? (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
+          {SHOP_CHECKOUT_DISABLED_MESSAGE}
         </div>
       ) : null}
 
@@ -1259,7 +2055,10 @@ function CartContent() {
                   : null;
                 const invalid = available <= 0 || l.qty > available;
                 const canDec = l.qty > 1;
-                const canInc = available > 0 && l.qty < available;
+                const canInc =
+                  available > 0 &&
+                  l.qty < available &&
+                  (isAdminMode || shopControls.allowAddToCart);
                 const checked = selectedIds.includes(l.id);
                 const protectorFeeLabel = formatPHP(PROTECTOR_ADDON_FEE);
 
@@ -1424,6 +2223,11 @@ function CartContent() {
                           {protectorEligible && protectorStockForLine > 0 ? (
                             <div className="text-[11px] text-white/40">
                               Protectors left: {protectorRemainingForLine}
+                            </div>
+                          ) : null}
+                          {!isAdminMode && !shopControls.allowAddToCart ? (
+                            <div className="text-[11px] text-amber-200/80">
+                              {SHOP_ADD_TO_CART_DISABLED_MESSAGE}
                             </div>
                           ) : null}
                         </div>
@@ -1600,20 +2404,34 @@ function CartContent() {
       ) : null}
 
       <Card>
-        <CardBody className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <CardBody className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           {isAdminMode ? (
-            <div className="grid flex-1 gap-3 sm:grid-cols-3">
+            <div className="grid flex-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
               <div>
                 <div className="text-sm text-white/60">Selected subtotal</div>
                 <div className="text-xl text-price">{formatPHP(selectedSubtotal)}</div>
+              </div>
+              <div>
+                <div className="text-sm text-white/60">Shipping fee</div>
+                <div className="text-xl text-price">{formatPHP(adminShippingFee)}</div>
               </div>
               <div>
                 <div className="text-sm text-white/60">Discount</div>
                 <div className="text-xl text-white">-{formatPHP(adminDiscountAmount)}</div>
               </div>
               <div>
-                <div className="text-sm text-white/60">Total after discount</div>
-                <div className="text-xl text-price">{formatPHP(adminTotalAfterDiscount)}</div>
+                <div className="text-sm text-white/60">Suggested total</div>
+                <div className="text-xl text-price">{formatPHP(adminSuggestedTotal)}</div>
+              </div>
+              <div>
+                <div className="text-sm text-white/60">Final price</div>
+                <div className="text-xl text-price">{formatPHP(adminFinalPrice)}</div>
+                {adminHasManualFinalPrice ? (
+                  <div className="text-xs text-white/50">
+                    Adjustment {adminManualAdjustment > 0 ? "+" : ""}
+                    {formatPHP(adminManualAdjustment)}
+                  </div>
+                ) : null}
               </div>
             </div>
           ) : (
@@ -1632,7 +2450,8 @@ function CartContent() {
                 disabled={
                   selectedLines.length === 0 ||
                   generatingInvoice ||
-                  !fbCustomerName.trim()
+                  !fbCustomerName.trim() ||
+                  !adminShippingMeta.ok
                 }
               >
                 {generatingInvoice ? "Generating..." : "Generate invoice PDF"}
@@ -1668,6 +2487,8 @@ function CartContent() {
                 <ProductCard
                   key={item.key}
                   product={item}
+                  showPrices={shopControls.showPrices}
+                  canAddToCart={shopControls.allowAddToCart}
                   mobileVariant="diecast"
                   onAddToCart={(opt) => onAddSuggestion(item, opt)}
                   onRelatedAddToCart={(related, opt) =>

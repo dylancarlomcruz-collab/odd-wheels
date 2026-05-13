@@ -103,6 +103,8 @@ const EXPORT_THUMB_HEIGHT = 720;
 const EXPORT_THUMB_QUALITY = 100;
 const ALL_CATEGORY = "ALL";
 const NEW_ARRIVAL_CATEGORY = "New Arrival";
+const TOMICA_CATEGORY = "Tomica";
+const TOMICA_LIMITED_VINTAGE_NEO_CATEGORY = "Tomica Limited Vintage Neo";
 let cachedNoisePattern: CanvasPattern | null = null;
 let cachedNoiseContext: CanvasRenderingContext2D | null = null;
 
@@ -146,6 +148,12 @@ const TOMICA_BRANDS = new Set(
     "Tomica",
     "Takara Tomy",
     "Takara Tomy Tomica",
+  ].map((brand) =>
+    brand.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+  )
+);
+const TOMICA_LIMITED_VINTAGE_NEO_BRANDS = new Set(
+  [
     "TLV",
     "TLVN",
     "TLV-N",
@@ -187,7 +195,8 @@ const DOWNLOAD_CATEGORY_ORDER = [
   "Boxed Truescales",
   "Blistered Truescales",
   "Figures and Dioramas",
-  "Tomica",
+  TOMICA_CATEGORY,
+  TOMICA_LIMITED_VINTAGE_NEO_CATEGORY,
   "Hot Wheels",
   "Trucks",
   "Others",
@@ -195,6 +204,21 @@ const DOWNLOAD_CATEGORY_ORDER = [
 
 function normalizeCategoryBrand(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function getTomicaDownloadCategory(row: SheetRow, brandKey?: string) {
+  const normalizedBrand = brandKey ?? normalizeCategoryBrand(formatBrand(row));
+  const shipClass = String(row.ship_class ?? "").toUpperCase().trim();
+  if (
+    shipClass === "TOMICA_LIMITED_VINTAGE_NEO" ||
+    TOMICA_LIMITED_VINTAGE_NEO_BRANDS.has(normalizedBrand)
+  ) {
+    return TOMICA_LIMITED_VINTAGE_NEO_CATEGORY;
+  }
+  if (shipClass === "TOMICA" || TOMICA_BRANDS.has(normalizedBrand)) {
+    return TOMICA_CATEGORY;
+  }
+  return null;
 }
 
 const JDM_MAKES = new Set(
@@ -312,6 +336,7 @@ function formatBaseDownloadCategory(row: SheetRow) {
     else if (shipClass === "BLISTER") baseCategory = "Blistered Truescales";
     else if (shipClass === "FIGURES_DIORAMA") baseCategory = "Figures and Dioramas";
     else if (shipClass === "TRUCKS") baseCategory = "Trucks";
+    else baseCategory = getTomicaDownloadCategory(row, brandKey) ?? baseCategory;
     if (shipClass === "HOT_WHEELS_MAINLINE" || shipClass === "HOT_WHEELS_PREMIUM") {
       baseCategory = "Hot Wheels";
     }
@@ -325,8 +350,9 @@ function formatBaseDownloadCategory(row: SheetRow) {
     baseCategory = "Mini GT";
   }
   if (baseCategory === "Others") {
+    const tomicaCategory = getTomicaDownloadCategory(row, brandKey);
     if (BOXED_TRUESCALE_BRANDS.has(brandKey)) baseCategory = "Boxed Truescales";
-    else if (TOMICA_BRANDS.has(brandKey)) baseCategory = "Tomica";
+    else if (tomicaCategory) baseCategory = tomicaCategory;
     else if (HOT_WHEELS_BRANDS.has(brandKey)) baseCategory = "Hot Wheels";
   }
 
@@ -361,7 +387,8 @@ function formatBrandDownloadCategory(row: SheetRow) {
   if (INNO64_BRANDS.has(brandKey)) return "Inno64";
   if (KAIDO_HOUSE_BRANDS.has(brandKey)) return "Kaido House";
   if (POP_RACE_BRANDS.has(brandKey)) return "Pop Race";
-  if (TOMICA_BRANDS.has(brandKey)) return "Tomica";
+  const tomicaCategory = getTomicaDownloadCategory(row, brandKey);
+  if (tomicaCategory) return tomicaCategory;
   if (HOT_WHEELS_BRANDS.has(brandKey)) return "Hot Wheels";
   if (MINI_GT_BRANDS.has(brandKey)) {
     return `Mini GT ${isJdmMarket(row) ? "JDM" : "EUR/US"}`;

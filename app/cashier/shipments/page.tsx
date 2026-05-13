@@ -46,9 +46,20 @@ const LBC_PACKAGE_OPTIONS = [
   { value: "SMALL_BOX", label: "Small Box" },
 ] as const;
 
+const MANUAL_SHIPPING_METHOD_OPTIONS = [
+  { value: "LBC", label: "LBC" },
+  { value: "J&T", label: "J&T" },
+  { value: "LALAMOVE", label: "Lalamove" },
+  { value: "PICKUP", label: "Pickup" },
+  { value: "JRS", label: "JRS" },
+  { value: "NINJA VAN", label: "Ninja Van" },
+  { value: "GRAB", label: "Grab" },
+] as const;
+
 type ShippingTabKey = (typeof SHIPPING_TABS)[number]["key"];
 type ShippingStageKey = ShippingTabKey | "TO BOOK";
 type ScanMode = "tracking" | "booking_reference";
+type ShippingFeeDrafts = Record<string, string>;
 type ShippingDraft = {
   courier: string;
   tracking: string;
@@ -59,6 +70,7 @@ type ManualOrderEditDraft = {
   shippingMethod: string;
   lbcPackage: string;
   bookingReference: string;
+  shippingFee: string;
 };
 const EMPTY_SHIPPING_DRAFT: ShippingDraft = {
   courier: "",
@@ -70,6 +82,7 @@ const EMPTY_MANUAL_ORDER_EDIT_DRAFT: ManualOrderEditDraft = {
   shippingMethod: "LBC",
   lbcPackage: "MINIBOX",
   bookingReference: "",
+  shippingFee: "",
 };
 
 function parseJsonMaybe(v: any) {
@@ -348,6 +361,22 @@ function shippingStatusBadge(status: string) {
   }
 }
 
+function parseFeeDraft(raw: string | number | null | undefined) {
+  const cleaned = String(raw ?? "").replace(/[^0-9.]/g, "");
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+}
+
+function formatFeeDraft(amount: number | null | undefined) {
+  const normalized = Number.isFinite(amount) ? Math.max(0, Number(amount)) : 0;
+  if (normalized === 0) return "";
+  return Number.isInteger(normalized) ? String(normalized) : String(normalized);
+}
+
+function normalizeMethodKey(method: string | null | undefined) {
+  return String(method ?? "").trim().toUpperCase() || "LBC";
+}
+
 async function notifyOrderEvent(
   orderId: string,
   event: "shipped" | "completed" | "status_updated"
@@ -453,6 +482,7 @@ function buildManualOrderEditDraft(order: any): ManualOrderEditDraft {
     shippingMethod: getOrderShippingMethod(order, details) || "LBC",
     lbcPackage: normalizeLbcPackage(details?.package ?? details?.package_size),
     bookingReference: getLbcBookingReference(order, details),
+    shippingFee: formatFeeDraft(Number(order?.shipping_fee ?? 0)),
   };
 }
 
@@ -828,6 +858,8 @@ export default function CashierShipmentsPage() {
     React.useState<string>("MINIBOX");
   const [manualBookingReference, setManualBookingReference] =
     React.useState<string>("");
+  const [manualShippingFeeDrafts, setManualShippingFeeDrafts] =
+    React.useState<ShippingFeeDrafts>({});
   const [editingManualOrderId, setEditingManualOrderId] = React.useState<string | null>(null);
   const [manualOrderEditDraft, setManualOrderEditDraft] = React.useState<ManualOrderEditDraft>(
     EMPTY_MANUAL_ORDER_EDIT_DRAFT
@@ -847,6 +879,32 @@ export default function CashierShipmentsPage() {
   const isAdmin = profile?.role === "admin";
   const [labelPrintMode, setLabelPrintMode] = React.useState<"bluetooth" | "browser">(
     "browser"
+  );
+  const manualShippingMethodKey = normalizeMethodKey(manualShippingMethod);
+  const manualShippingFeeInput =
+    manualShippingMethodKey === "PICKUP"
+      ? "0"
+      : manualShippingFeeDrafts[manualShippingMethodKey] ?? "";
+  const manualShippingFeeValue =
+    manualShippingMethodKey === "PICKUP"
+      ? 0
+      : parseFeeDraft(manualShippingFeeDrafts[manualShippingMethodKey] ?? "");
+  const manualOrderTotal = manualShippingFeeValue;
+  const manualMethodFeePreview = React.useMemo(
+    () =>
+      MANUAL_SHIPPING_METHOD_OPTIONS.map((option) => {
+        const methodKey = normalizeMethodKey(option.value);
+        const amount =
+          methodKey === "PICKUP"
+            ? 0
+            : parseFeeDraft(manualShippingFeeDrafts[methodKey] ?? "");
+        return {
+          ...option,
+          methodKey,
+          amount,
+        };
+      }),
+    [manualShippingFeeDrafts]
   );
 
   const shippingDays = React.useMemo(
@@ -1538,12 +1596,19 @@ export default function CashierShipmentsPage() {
       const bookingReference = manualBookingReference.trim();
       const lbcPackage = normalizeLbcPackage(manualLbcPackage);
       const courier = normalizeCourier(shippingMethod);
+      const shippingFee =
+        shippingMethod === "PICKUP"
+          ? 0
+          : parseFeeDraft(manualShippingFeeDrafts[normalizeMethodKey(shippingMethod)] ?? "");
+      const total = shippingFee;
 
       const shippingDetails: Record<string, any> = {
         method: shippingMethod,
         source: "shipments_manual_create",
         receiver_name: customerName,
-      }
+        shipping_fee: shippingFee,
+        total,
+      };
       if (shippingMethod === "LBC") {
         shippingDetails.package = lbcPackage;
         shippingDetails.package_size = lbcPackage;
@@ -1566,12 +1631,12 @@ export default function CashierShipmentsPage() {
         payment_method: "MANUAL",
         payment_status: "PAID",
         subtotal: 0,
-        shipping_fee: 0,
+        shipping_fee: shippingFee,
         discount: 0,
         voucher_id: null,
         shipping_discount: 0,
         discount_total: 0,
-        total: 0,
+        total,
         shipping_method: shippingMethod,
         shipping_region: null,
         shipping_details: shippingDetails,
@@ -1651,6 +1716,13 @@ export default function CashierShipmentsPage() {
     setManualOrderEditDraft((cur) => ({ ...cur, [key]: value }));
   }
 
+  function onManualShippingFeeDraftChange(value: string) {
+    setManualShippingFeeDrafts((cur) => ({
+      ...cur,
+      [manualShippingMethodKey]: value,
+    }));
+  }
+
   async function saveManualOrderEdits(orderId: string) {
     const customerName = String(manualOrderEditDraft.customerName ?? "").trim();
     if (!customerName) {
@@ -1664,12 +1736,15 @@ export default function CashierShipmentsPage() {
       String(manualOrderEditDraft.shippingMethod ?? "").trim().toUpperCase() || "LBC";
     const bookingReference = String(manualOrderEditDraft.bookingReference ?? "").trim();
     const lbcPackage = normalizeLbcPackage(manualOrderEditDraft.lbcPackage);
+    const shippingFee =
+      shippingMethod === "PICKUP" ? 0 : parseFeeDraft(manualOrderEditDraft.shippingFee);
 
     setBusyById((cur) => ({ ...cur, [orderId]: true }));
     setErrorById((cur) => ({ ...cur, [orderId]: "" }));
     try {
       const order = orders.find((entry) => String(entry.id) === String(orderId));
       if (!order) throw new Error("Order not found.");
+      const nextTotal = Math.max(0, Number(order.subtotal ?? 0) + shippingFee);
 
       const details = parseJsonMaybe(order.shipping_details) ?? {};
       const nextDetails: Record<string, any> = {
@@ -1677,6 +1752,8 @@ export default function CashierShipmentsPage() {
         source: "shipments_manual_create",
         method: shippingMethod,
         receiver_name: customerName,
+        shipping_fee: shippingFee,
+        total: nextTotal,
       };
 
       if (shippingMethod === "LBC") {
@@ -1705,6 +1782,8 @@ export default function CashierShipmentsPage() {
           shipping_details: nextDetails,
           carrier: courier,
           courier,
+          shipping_fee: shippingFee,
+          total: nextTotal,
         })
         .eq("id", orderId);
       if (error) throw error;
@@ -2582,13 +2661,11 @@ export default function CashierShipmentsPage() {
                   onChange={(e) => setManualShippingMethod(e.target.value)}
                   className="h-9 text-sm"
                 >
-                  <option value="LBC">LBC</option>
-                  <option value="J&T">J&T</option>
-                  <option value="LALAMOVE">Lalamove</option>
-                  <option value="PICKUP">Pickup</option>
-                  <option value="JRS">JRS</option>
-                  <option value="NINJA VAN">Ninja Van</option>
-                  <option value="GRAB">Grab</option>
+                  {MANUAL_SHIPPING_METHOD_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </Select>
                 {manualShippingMethod.toUpperCase() === "LBC" ? (
                   <Select
@@ -2613,6 +2690,55 @@ export default function CashierShipmentsPage() {
                     <option value="MINIBOX">Only for LBC</option>
                   </Select>
                 )}
+              </div>
+              <div className="grid gap-2 md:grid-cols-[1fr_280px]">
+                <Input
+                  label="Shipping fee (PHP)"
+                  value={manualShippingFeeInput}
+                  onChange={(e) => onManualShippingFeeDraftChange(e.target.value)}
+                  placeholder={manualShippingMethodKey === "PICKUP" ? "0" : "Enter shipping fee"}
+                  className="h-9 text-sm"
+                  inputMode="decimal"
+                  disabled={manualShippingMethodKey === "PICKUP"}
+                  hint={
+                    manualShippingMethodKey === "PICKUP"
+                      ? "Pickup keeps the shipping fee at PHP 0."
+                      : "Each shipping method keeps its own fee while you switch couriers."
+                  }
+                />
+                <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                  <div className="text-[11px] uppercase tracking-wide text-white/50">
+                    Current total
+                  </div>
+                  <div className="mt-1 text-sm text-white/70">
+                    Method: <span className="text-white">{manualShippingMethod}</span>
+                  </div>
+                  <div className="text-sm text-white/70">
+                    Shipping fee: <span className="text-white">{peso(manualShippingFeeValue)}</span>
+                  </div>
+                  <div className="mt-1 text-base font-semibold">
+                    Total: {peso(manualOrderTotal)}
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                <div className="text-[11px] uppercase tracking-wide text-white/50">
+                  Saved method totals
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {manualMethodFeePreview.map((option) => (
+                    <Badge
+                      key={option.value}
+                      className={
+                        option.methodKey === manualShippingMethodKey
+                          ? "border-orange-500/40 text-orange-200"
+                          : "border-white/10 text-white/65"
+                      }
+                    >
+                      {option.label}: {peso(option.amount)}
+                    </Badge>
+                  ))}
+                </div>
               </div>
               <div className="flex justify-end">
                 <Button
@@ -2712,6 +2838,14 @@ export default function CashierShipmentsPage() {
                     String(manualOrderEditDraft.shippingMethod ?? "").trim().toUpperCase() ||
                     "LBC";
                   const editIsLbc = editShippingMethod === "LBC";
+                  const editShippingFeeValue =
+                    editShippingMethod === "PICKUP"
+                      ? 0
+                      : parseFeeDraft(manualOrderEditDraft.shippingFee);
+                  const editTotalPreview = Math.max(
+                    0,
+                    Number(o.subtotal ?? 0) + editShippingFeeValue
+                  );
 
                   return (
                     <div key={o.id} className="rounded-xl border border-white/10 bg-paper/5 p-3">
@@ -2890,13 +3024,11 @@ export default function CashierShipmentsPage() {
                               }
                               className="h-8 text-xs"
                             >
-                              <option value="LBC">LBC</option>
-                              <option value="J&T">J&T</option>
-                              <option value="LALAMOVE">Lalamove</option>
-                              <option value="PICKUP">Pickup</option>
-                              <option value="JRS">JRS</option>
-                              <option value="NINJA VAN">Ninja Van</option>
-                              <option value="GRAB">Grab</option>
+                              {MANUAL_SHIPPING_METHOD_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
                             </Select>
                             {editIsLbc ? (
                               <Select
@@ -2926,6 +3058,36 @@ export default function CashierShipmentsPage() {
                                 <option value="MINIBOX">Only for LBC</option>
                               </Select>
                             )}
+                          </div>
+                          <div className="grid gap-2 md:grid-cols-[1fr_220px]">
+                            <Input
+                              label="Shipping fee (PHP)"
+                              value={editShippingMethod === "PICKUP" ? "0" : manualOrderEditDraft.shippingFee}
+                              onChange={(e) =>
+                                onManualOrderEditDraftChange("shippingFee", e.target.value)
+                              }
+                              placeholder={editShippingMethod === "PICKUP" ? "0" : "Shipping fee"}
+                              className="h-8 text-xs"
+                              inputMode="decimal"
+                              disabled={editShippingMethod === "PICKUP"}
+                              hint={
+                                editShippingMethod === "PICKUP"
+                                  ? "Pickup keeps the shipping fee at PHP 0."
+                                  : undefined
+                              }
+                            />
+                            <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                              <div className="text-[11px] uppercase tracking-wide text-white/50">
+                                Total
+                              </div>
+                              <div className="mt-1 text-xs text-white/70">
+                                Shipping fee:{" "}
+                                <span className="text-white">{peso(editShippingFeeValue)}</span>
+                              </div>
+                              <div className="mt-1 text-sm font-semibold">
+                                {peso(editTotalPreview)}
+                              </div>
+                            </div>
                           </div>
                         </div>
                       ) : stage === "TO BOOK" ? (

@@ -8,6 +8,9 @@ export type Settings = {
   shipping_schedule_text: string | null;
   shipping_cutoff_text: string | null;
   order_approval_enabled: boolean;
+  show_prices: boolean;
+  allow_add_to_cart: boolean;
+  allow_checkout: boolean;
   priority_shipping_available: boolean;
   priority_shipping_note: string | null;
   free_shipping_threshold: number | null;

@@ -34,6 +34,7 @@ import {
   getRelatedProducts,
   normalizeProductImageUrl,
 } from "@/lib/productDetail";
+import { SHOP_PRICE_HIDDEN_LABEL } from "@/lib/shopControls";
 import { formatTitle } from "@/lib/text";
 import { supabase } from "@/lib/supabase/browser";
 import { getOrCreateGuestSessionId } from "@/lib/guestSession";
@@ -178,6 +179,8 @@ export default function ProductCard({
   mobileVariant,
   primaryActionLabel = "Add",
   primaryActionLabelLong,
+  showPrices = true,
+  canAddToCart = true,
   showCardPageActions = true,
 }: {
   product: ShopProduct;
@@ -194,6 +197,8 @@ export default function ProductCard({
   mobileVariant?: "diecast";
   primaryActionLabel?: string;
   primaryActionLabelLong?: string;
+  showPrices?: boolean;
+  canAddToCart?: boolean;
   showCardPageActions?: boolean;
 }) {
   const actionLabelCompact = primaryActionLabel?.trim() || "Add";
@@ -243,13 +248,17 @@ export default function ProductCard({
     () => (previewSelected ? getOptionPricing(previewSelected) : null),
     [previewSelected]
   );
-  const previewDisplayPrice = previewPricing
-    ? previewPricing.hasSale
-      ? peso(previewPricing.effectivePrice)
-      : peso(previewSelected?.price ?? 0)
-    : "-";
+  const previewDisplayPrice = !showPrices
+    ? SHOP_PRICE_HIDDEN_LABEL
+    : previewPricing
+      ? previewPricing.hasSale
+        ? peso(previewPricing.effectivePrice)
+        : peso(previewSelected?.price ?? 0)
+      : "-";
   const previewStrikePrice =
-    previewPricing?.hasSale ? peso(previewSelected?.price ?? 0) : null;
+    showPrices && previewPricing?.hasSale
+      ? peso(previewSelected?.price ?? 0)
+      : null;
 
   const cardImages = React.useMemo(() => {
     const raw = (product.image_urls ?? [])
@@ -296,8 +305,9 @@ export default function ProductCard({
   );
   const previewIsOut = !previewSelected || (previewSelected.qty ?? 0) <= 0;
 
-  const basePriceLabel =
-    product.minPrice === product.maxPrice
+  const basePriceLabel = !showPrices
+    ? SHOP_PRICE_HIDDEN_LABEL
+    : product.minPrice === product.maxPrice
       ? peso(product.minPrice)
       : `${peso(product.minPrice)} - ${peso(product.maxPrice)}`;
   const effectiveRange = React.useMemo(
@@ -308,8 +318,9 @@ export default function ProductCard({
     product.minEffectivePrice ?? effectiveRange.min ?? product.minPrice;
   const effectiveMaxPrice =
     product.maxEffectivePrice ?? effectiveRange.max ?? product.maxPrice;
-  const effectivePriceLabel =
-    effectiveMinPrice === effectiveMaxPrice
+  const effectivePriceLabel = !showPrices
+    ? SHOP_PRICE_HIDDEN_LABEL
+    : effectiveMinPrice === effectiveMaxPrice
       ? peso(effectiveMinPrice)
       : `${peso(effectiveMinPrice)} - ${peso(effectiveMaxPrice)}`;
   const hasSale = product.hasSale ?? effectiveRange.hasSale;
@@ -319,8 +330,9 @@ export default function ProductCard({
     () => (selected ? getOptionPricing(selected) : null),
     [selected]
   );
-  const displayPrice =
-    hasPicked || !hasMultiple
+  const displayPrice = !showPrices
+    ? SHOP_PRICE_HIDDEN_LABEL
+    : hasPicked || !hasMultiple
       ? selected
         ? selectedPricing?.hasSale
           ? peso(selectedPricing.effectivePrice)
@@ -328,7 +340,9 @@ export default function ProductCard({
         : rangeLabel
       : rangeLabel;
   const strikePrice =
-    selected && selectedPricing?.hasSale ? peso(selected.price) : null;
+    showPrices && selected && selectedPricing?.hasSale
+      ? peso(selected.price)
+      : null;
 
   const isOut = !selected || (selected.qty ?? 0) <= 0;
   const hasMultipleVariants = product.options.length > 1;
@@ -450,6 +464,13 @@ export default function ProductCard({
   const wideVariantLabel = hasMultipleVariants
     ? "Multiple variants"
     : compactConditionLabel;
+  const desktopPanelHeight = wideView
+    ? showCardPageActions
+      ? "12.25rem"
+      : "9.5rem"
+    : showCardPageActions
+      ? "17.25rem"
+      : "14.75rem";
   const proofBits = [
     socialProof?.inCarts ? `${socialProof.inCarts} in carts` : null,
     socialProof?.soldThisWeek
@@ -727,6 +748,7 @@ export default function ProductCard({
       event.preventDefault();
       event.stopPropagation();
     }
+    if (!canAddToCart) return;
     if (hasMultipleVariants) {
       setVariantPickerOpen(true);
       return;
@@ -965,10 +987,11 @@ export default function ProductCard({
                         {previewProduct.options.map((o) => {
                           const isSelected = o.id === previewSelected?.id;
                           const pricing = getOptionPricing(o);
-                          const displayPrice = peso(pricing.effectivePrice);
-                          const strikePrice = pricing.hasSale
-                            ? peso(o.price)
-                            : null;
+                          const displayPrice = showPrices
+                            ? peso(pricing.effectivePrice)
+                            : SHOP_PRICE_HIDDEN_LABEL;
+                          const strikePrice =
+                            showPrices && pricing.hasSale ? peso(o.price) : null;
                           return (
                             <button
                               type="button"
@@ -1071,8 +1094,15 @@ export default function ProductCard({
                         const canAdd = Boolean(
                           onRelatedAddToCart &&
                             defaultOption &&
-                            defaultOption.qty > 0,
+                            defaultOption.qty > 0 &&
+                            canAddToCart,
                         );
+                        const relatedDisplayPrice =
+                          defaultOption && showPrices
+                            ? peso(defaultOption.price)
+                            : defaultOption
+                              ? SHOP_PRICE_HIDDEN_LABEL
+                              : "-";
                         return (
                           <div
                             key={item.key}
@@ -1136,9 +1166,7 @@ export default function ProductCard({
                               {item.brand ?? "-"}
                             </div>
                             <div className="mt-2 flex items-center justify-between text-[11px]">
-                              <span className="text-price">
-                                {defaultOption ? peso(defaultOption.price) : "-"}
-                              </span>
+                              <span className="text-price">{relatedDisplayPrice}</span>
                               {canAdd ? (
                                 <button
                                   type="button"
@@ -1187,7 +1215,7 @@ export default function ProductCard({
                   <button
                     type="button"
                     className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-black disabled:opacity-50"
-                    disabled={previewIsOut}
+                    disabled={!canAddToCart || previewIsOut}
                     onClick={() => previewSelected && onAddToCart(previewSelected)}
                   >
                     {actionLabelExpanded}
@@ -1246,7 +1274,7 @@ export default function ProductCard({
                   </div>
                 ) : null}
                 <div
-                  className="group relative overflow-hidden rounded-xl border border-white/10 bg-bg-950/50"
+                  className="group relative aspect-[4/3] w-full overflow-hidden rounded-xl border border-white/10 bg-bg-950/50"
                   onTouchStart={(event) =>
                     handleTouchStart(event, issueTouchStartX, issueTouchStartY)
                   }
@@ -1261,7 +1289,7 @@ export default function ProductCard({
                       srcSet={activeIssueImageSrcSet || undefined}
                       sizes="(min-width: 1024px) 720px, 90vw"
                       alt="Issue photo"
-                      className="h-72 w-full object-contain bg-neutral-50"
+                      className="h-full w-full object-contain bg-neutral-50"
                       loading="lazy"
                       decoding="async"
                       onError={(e) =>
@@ -1269,7 +1297,7 @@ export default function ProductCard({
                       }
                     />
                   ) : (
-                    <div className="flex h-72 items-center justify-center text-sm text-white/50">
+                    <div className="flex h-full items-center justify-center text-sm text-white/50">
                       No issue photos uploaded for this item.
                     </div>
                   )}
@@ -1336,8 +1364,11 @@ export default function ProductCard({
               {product.options.map((o) => {
                 const isSelected = o.id === selectedId;
                 const pricing = getOptionPricing(o);
-                const displayPrice = peso(pricing.effectivePrice);
-                const strike = pricing.hasSale ? peso(o.price) : null;
+                const displayPrice = showPrices
+                  ? peso(pricing.effectivePrice)
+                  : SHOP_PRICE_HIDDEN_LABEL;
+                const strike =
+                  showPrices && pricing.hasSale ? peso(o.price) : null;
                 const out = (o.qty ?? 0) <= 0;
                 return (
                   <button
@@ -1382,7 +1413,7 @@ export default function ProductCard({
               <button
                 type="button"
                 className="w-full rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-black disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                disabled={!selected || (selected.qty ?? 0) <= 0}
+                disabled={!canAddToCart || !selected || (selected.qty ?? 0) <= 0}
                 onClick={() => {
                   if (selected) {
                     void logProductInteraction(product.key);
@@ -1472,7 +1503,7 @@ export default function ProductCard({
                 type="button"
                 onClick={handleAddClick}
                 aria-label={actionLabelExpanded}
-                disabled={!hasMultipleVariants && isOut}
+                disabled={!canAddToCart || (!hasMultipleVariants && isOut)}
                 className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-amber-300/40 bg-amber-500/20 text-amber-200 shadow-[0_6px_12px_rgba(0,0,0,0.3)] hover:bg-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ShoppingCart className="h-4 w-4" />
@@ -1517,7 +1548,7 @@ export default function ProductCard({
   );
 
   const desktopCard = (
-    <div className="rounded-xl sm:rounded-2xl overflow-hidden bg-bg-900/70 dark:bg-paper/5 border border-white/20 dark:border-white/10 shadow-sm">
+    <div className="flex flex-col overflow-hidden rounded-xl border border-white/20 bg-bg-900/70 shadow-sm dark:border-white/10 dark:bg-paper/5 sm:rounded-2xl">
         <button
           type="button"
           onClick={() => {
@@ -1528,7 +1559,7 @@ export default function ProductCard({
             }
             openPreview();
           }}
-          className="relative aspect-[4/3] w-full overflow-hidden bg-black/10 flex items-center justify-center"
+          className="relative flex aspect-[4/3] w-full shrink-0 items-center justify-center overflow-hidden bg-black/10"
           aria-label={`Preview ${displayTitle}`}
         >
           {parsedCardImage ? (
@@ -1559,14 +1590,17 @@ export default function ProductCard({
           {renderFeatureTagOverlay("desktop")}
         </button>
 
-        <div className="p-2.5 sm:p-4">
+        <div
+          className="flex flex-col p-2.5 sm:p-4"
+          style={{ height: desktopPanelHeight }}
+        >
           <button
             type="button"
             onClick={openPreview}
             className={
               wideView
-                ? "min-h-[1.9rem] max-h-[1.9rem] text-left text-[10px] leading-snug text-white font-semibold line-clamp-2 overflow-hidden sm:min-h-[2.3rem] sm:max-h-[2.3rem] sm:text-xs"
-                : "min-h-[3rem] text-left text-base leading-normal text-white font-semibold line-clamp-2 sm:min-h-[3.5rem] sm:text-lg"
+                ? "block h-[1.9rem] max-h-[1.9rem] w-full overflow-hidden text-left text-[10px] font-semibold leading-snug text-white line-clamp-2 sm:h-[2.3rem] sm:max-h-[2.3rem] sm:text-xs"
+                : "block h-[3rem] max-h-[3rem] w-full overflow-hidden text-left text-base font-semibold leading-normal text-white line-clamp-2 sm:h-[3.5rem] sm:max-h-[3.5rem] sm:text-lg"
             }
           >
             {displayTitle}
@@ -1574,7 +1608,7 @@ export default function ProductCard({
 
           <div
             className={[
-              "flex min-h-[1.2rem] items-center justify-between gap-2",
+              "flex h-5 min-h-[1.25rem] items-center justify-between gap-2 overflow-hidden",
               wideView ? "mt-1" : "mt-1.5 sm:mt-3",
             ].join(" ")}
           >
@@ -1617,7 +1651,7 @@ export default function ProductCard({
 
           {!wideView ? (
             <div className="mt-1.5 sm:mt-3">
-              <div className="min-h-[1rem]">
+              <div className="flex h-5 min-h-[1.25rem] items-center overflow-hidden">
                 {onlyOneLeft ? (
                   <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-rose-700 dark:border-rose-400/40 dark:bg-rose-500/20 dark:text-rose-200 sm:px-2 sm:text-[10px]">
                     <span className="sm:hidden">1 left</span>
@@ -1646,19 +1680,19 @@ export default function ProductCard({
             ].join(" ")}
           >
             {wideView ? (
-              <div className="flex items-center justify-between rounded-full border border-white/10 bg-bg-900/60 px-2 py-1 text-[9px] uppercase tracking-wide text-white/70">
+              <div className="flex h-5 items-center justify-between overflow-hidden rounded-full border border-white/10 bg-bg-900/60 px-2 text-[9px] uppercase tracking-wide text-white/70">
                 <span className="truncate">{wideVariantLabel}</span>
               </div>
             ) : hasMultipleVariants ? (
               <button
                 type="button"
                 onClick={() => setVariantPickerOpen(true)}
-                className="inline-flex rounded-full border border-white/20 bg-bg-900/60 px-2 py-0.5 text-[9px] uppercase leading-none tracking-wide text-white/80 transition hover:bg-bg-900/80 dark:border-white/10 dark:bg-paper/5 dark:text-white/70 dark:hover:bg-paper/10 sm:text-[10px]"
+                className="inline-flex h-5 max-w-full items-center rounded-full border border-white/20 bg-bg-900/60 px-2 text-[9px] uppercase leading-none tracking-wide text-white/80 transition hover:bg-bg-900/80 dark:border-white/10 dark:bg-paper/5 dark:text-white/70 dark:hover:bg-paper/10 sm:text-[10px]"
               >
                 Multiple variants
               </button>
             ) : (
-              <div className="flex flex-wrap gap-1">
+              <div className="flex h-5 min-h-[1.25rem] flex-nowrap gap-1 overflow-hidden">
                 {product.options.map((o) => {
                   const isSelected = o.id === selectedId;
                   return (
@@ -1670,7 +1704,7 @@ export default function ProductCard({
                         setHasPicked(true);
                       }}
                       className={[
-                        "rounded-full border px-1.5 py-0.5 text-[9px] leading-none sm:px-2 sm:py-0.5 sm:text-[10px] transition",
+                        "inline-flex h-5 shrink-0 items-center rounded-full border px-1.5 text-[9px] leading-none transition sm:px-2 sm:text-[10px]",
                         isSelected
                           ? "bg-sky-200 text-sky-900 border-sky-300 dark:bg-sky-500/20 dark:text-sky-100 dark:border-sky-400/40"
                           : "border-white/20 bg-bg-900/60 text-white/80 hover:bg-bg-900/80 dark:border-white/10 dark:bg-paper/5 dark:text-white/70 dark:hover:bg-paper/10",
@@ -1692,8 +1726,8 @@ export default function ProductCard({
             )}
 
             <button
-              className="w-full rounded-xl px-3 py-2 text-[12px] font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50 sm:px-4 sm:py-2 sm:text-sm bg-amber-600 hover:bg-amber-500"
-              disabled={isOut}
+              className="flex h-10 w-full items-center justify-center rounded-xl bg-amber-600 px-3 text-[12px] font-semibold text-black hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50 sm:h-11 sm:px-4 sm:text-sm"
+              disabled={!canAddToCart || isOut}
               onClick={handleAddClick}
             >
               {actionLabelCompact}
@@ -1727,11 +1761,6 @@ export default function ProductCard({
 
           </div>
 
-          {!wideView && isOut ? (
-            <div className="mt-2 text-[11px] sm:text-xs text-red-300">
-              Selected condition is out of stock.
-            </div>
-          ) : null}
         </div>
       </div>
   );

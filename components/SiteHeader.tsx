@@ -8,6 +8,8 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  Bell,
+  Check,
   ShoppingCart,
   User2,
   Shield,
@@ -46,6 +48,7 @@ import { Badge } from "@/components/ui/Badge";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { PushNotificationsControl } from "@/components/PushNotificationsControl";
 import { useSettings } from "@/hooks/useSettings";
+import { useNotices } from "@/hooks/useNotices";
 import { fetchAuthedJson } from "@/lib/api/client";
 import { supabase } from "@/lib/supabase/browser";
 import { useShopSort } from "@/hooks/useShopSort";
@@ -61,6 +64,9 @@ type SearchSuggestion = {
   source: "recent" | "popular";
 };
 
+const NOTICE_SEEN_STORAGE_KEY = "oddwheels:last-seen-notice";
+const NOTICE_SUPPRESSED_STORAGE_KEY = "oddwheels:suppressed-notice";
+
 const SHOP_SORT_OPTIONS: Array<{ value: "relevance" | "newest" | "popular"; label: string }> = [
   { value: "relevance", label: "Relevance" },
   { value: "newest", label: "Newest" },
@@ -70,6 +76,7 @@ export function SiteHeader() {
   const { user } = useAuth();
   const { profile } = useProfile();
   const { settings } = useSettings();
+  const { notices, loading: noticesLoading } = useNotices(8);
   const router = useRouter();
   const sp = useSearchParams();
   const pathname = usePathname();
@@ -78,6 +85,8 @@ export function SiteHeader() {
   const searchParamQ = sp.get("q") ?? "";
   const [q, setQ] = React.useState(searchParamQ);
   const [menuOpen, setMenuOpen] = React.useState(false);
+  const [noticeOpen, setNoticeOpen] = React.useState(false);
+  const [neverShowNoticeAgain, setNeverShowNoticeAgain] = React.useState(false);
   const [menuPortalReady, setMenuPortalReady] = React.useState(false);
   const [suggestions, setSuggestions] = React.useState<SearchSuggestion[]>([]);
   const [trending, setTrending] = React.useState<string[]>([]);
@@ -124,6 +133,12 @@ export function SiteHeader() {
   const menuBadgeLabel = menuBadgeCount > 99 ? "99+" : String(menuBadgeCount);
   const showCustomerOrders = Boolean(user) && !isStaff;
   const showShopSort = pathname === "/";
+  const showCustomerNoticeIcon = !isStaff;
+  const noticeCount = showCustomerNoticeIcon ? notices.length : 0;
+  const noticeCountLabel = noticeCount > 99 ? "99+" : String(noticeCount);
+  const featuredNotice = notices[0] ?? null;
+  const activeNotice = featuredNotice;
+  const noticeDialogTitleId = React.useId();
 
   React.useEffect(() => {
     setQ(searchParamQ);
@@ -350,6 +365,7 @@ export function SiteHeader() {
 
   const mobileMenuItems = [
     { key: "announcements", href: "/announcements", label: "Announcements", icon: StickyNote, show: true },
+    { key: "shipped-orders", href: "/shipped-orders", label: "Shipped Orders", icon: Truck, show: true },
     { key: "sell-trade", href: "/sell-trade", label: "Sell/Trade", icon: ArrowLeftRight, show: true },
     { key: "orders", href: "/orders", label: "Orders", icon: ClipboardList, show: Boolean(user) },
       { key: "account", href: "/account", label: "Account", icon: Settings, show: Boolean(user) },
@@ -388,6 +404,12 @@ export function SiteHeader() {
       label: "Shipping Status",
       icon: Truck,
       badge: staffCounts.pendingShipping,
+    },
+    {
+      key: "admin-shipped-orders",
+      href: "/shipped-orders",
+      label: "Public Shipped Board",
+      icon: Truck,
     },
     {
       key: "admin-sell-trade",
@@ -456,6 +478,39 @@ export function SiteHeader() {
     if (!menuOpen || !isStaff) return;
     void loadStaffCounts();
   }, [menuOpen, isStaff, loadStaffCounts]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (pathname !== "/" || isStaff || noticesLoading || !featuredNotice) return;
+    const seen = window.localStorage.getItem(NOTICE_SEEN_STORAGE_KEY);
+    const suppressed = window.localStorage.getItem(NOTICE_SUPPRESSED_STORAGE_KEY);
+    if (seen === featuredNotice.id) return;
+    if (suppressed === featuredNotice.id) return;
+    setNoticeOpen(true);
+  }, [featuredNotice, isStaff, noticesLoading, pathname]);
+
+  function openNoticeDialog() {
+    setNeverShowNoticeAgain(false);
+    setNoticeOpen(true);
+  }
+
+  function rememberNoticeSeen(options?: { suppress?: boolean }) {
+    if (typeof window === "undefined") return;
+    if (!featuredNotice?.id) return;
+    window.localStorage.setItem(NOTICE_SEEN_STORAGE_KEY, featuredNotice.id);
+    if (options?.suppress) {
+      window.localStorage.setItem(
+        NOTICE_SUPPRESSED_STORAGE_KEY,
+        featuredNotice.id
+      );
+    }
+  }
+
+  function closeNoticeDialog(options?: { suppress?: boolean }) {
+    rememberNoticeSeen(options);
+    setNeverShowNoticeAgain(false);
+    setNoticeOpen(false);
+  }
 
   return (
     <>
@@ -642,6 +697,27 @@ export function SiteHeader() {
             </div>
           ) : null}
           <ThemeToggle />
+
+          {showCustomerNoticeIcon ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={
+                noticeCount
+                  ? `Notices (${noticeCountLabel})`
+                  : "Notice board"
+              }
+              className="relative"
+              onClick={openNoticeDialog}
+            >
+              <StickyNote className="h-4 w-4" />
+              {noticeCount > 0 ? (
+                <span className="absolute -top-1 -right-1 min-w-[18px] rounded-full border border-bg-900/80 bg-accent-500 px-1 text-[10px] font-semibold leading-4 text-white">
+                  {noticeCountLabel}
+                </span>
+              ) : null}
+            </Button>
+          ) : null}
 
           {showCustomerOrders ? (
             <Link href="/orders">
@@ -905,6 +981,150 @@ export function SiteHeader() {
         </div>
       ) : null}
       </header>
+
+      {noticeOpen && menuPortalReady
+        ? createPortal(
+            <div className="fixed inset-0 z-[65] flex items-center justify-center p-2.5 sm:p-4">
+              <button
+                type="button"
+                className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+                onClick={() =>
+                  closeNoticeDialog({ suppress: neverShowNoticeAgain })
+                }
+                aria-label="Close notices"
+              />
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={noticeDialogTitleId}
+                className="relative z-10 flex max-h-[calc(100vh-1.2rem)] w-full max-w-[21.75rem] flex-col overflow-hidden rounded-[1.6rem] border border-white/10 bg-[linear-gradient(180deg,rgba(18,18,22,0.94),rgba(12,12,16,0.985))] shadow-[0_32px_100px_rgba(0,0,0,0.58),0_0_0_1px_rgba(255,255,255,0.035),0_0_48px_rgba(245,158,11,0.08)] backdrop-blur-2xl sm:max-h-[calc(100vh-2rem)] sm:max-w-[32rem] sm:rounded-[2rem]"
+              >
+                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(251,191,36,0.12),transparent_34%),radial-gradient(circle_at_bottom_left,rgba(255,255,255,0.04),transparent_28%)]" />
+
+                <div className="relative flex items-start justify-between gap-3 border-b border-white/8 px-3.5 py-3 sm:gap-4 sm:px-6 sm:py-5">
+                  <div className="flex items-center gap-2.5 sm:gap-3">
+                    <div className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-amber-200/10 bg-[linear-gradient(180deg,rgba(251,191,36,0.16),rgba(251,191,36,0.05))] text-amber-100 shadow-[0_10px_30px_rgba(245,158,11,0.14)] sm:h-11 sm:w-11">
+                      <Bell className="h-4 w-4 sm:h-[18px] sm:w-[18px]" />
+                    </div>
+                    <div
+                      id={noticeDialogTitleId}
+                      className="text-[1.18rem] font-semibold tracking-[-0.02em] text-white sm:text-[1.55rem]"
+                    >
+                      Notice
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      closeNoticeDialog({ suppress: neverShowNoticeAgain })
+                    }
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-white/70 transition hover:border-white/15 hover:bg-white/[0.06] hover:text-white sm:h-10 sm:w-10"
+                    aria-label="Close notice board"
+                  >
+                    <X className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                  </button>
+                </div>
+
+                <div className="relative min-h-0 overflow-y-auto px-3 py-3 sm:px-5 sm:py-5">
+                  {noticesLoading ? (
+                    <div className="space-y-2.5">
+                      <div className="h-4 w-24 animate-pulse rounded-full bg-white/8" />
+                      <div className="rounded-[1.25rem] border border-white/10 bg-white/[0.03] p-4 sm:rounded-[1.75rem] sm:p-5">
+                        <div className="h-6 w-3/4 animate-pulse rounded-full bg-white/8" />
+                        <div className="mt-3 h-4 w-full animate-pulse rounded-full bg-white/8" />
+                        <div className="mt-2 h-4 w-5/6 animate-pulse rounded-full bg-white/8" />
+                      </div>
+                    </div>
+                  ) : notices.length === 0 ? (
+                    <div className="rounded-[1.25rem] border border-white/10 bg-white/[0.03] px-4 py-5 text-center text-sm text-white/60 sm:rounded-[1.75rem] sm:px-5 sm:py-6">
+                      No active notices right now.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {activeNotice ? (
+                        <article className="relative overflow-hidden rounded-[1.1rem] border border-amber-400/70 bg-[linear-gradient(135deg,rgba(86,57,15,0.96),rgba(60,41,18,0.95)_42%,rgba(28,24,23,0.98))] shadow-[0_22px_55px_rgba(0,0,0,0.36),0_0_26px_rgba(245,158,11,0.12)] sm:rounded-[1.35rem]">
+                          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(251,191,36,0.18),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.05),transparent_60%)]" />
+                          <div className="pointer-events-none absolute bottom-2 right-2 h-10 w-14 rounded-full bg-[radial-gradient(circle,rgba(251,191,36,0.28)_1px,transparent_1.6px)] bg-[length:6px_6px] opacity-35 sm:bottom-3 sm:right-3 sm:h-16 sm:w-24 sm:bg-[length:8px_8px] sm:opacity-45" />
+                          <div className="relative flex items-start gap-2 px-2.5 py-2.5 sm:gap-4 sm:px-5 sm:py-5">
+                            <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+                              <div className="inline-flex h-10 w-10 items-center justify-center rounded-[0.9rem] border border-amber-300/18 bg-[linear-gradient(180deg,rgba(34,29,21,0.92),rgba(73,52,19,0.78))] shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_0_20px_rgba(245,158,11,0.12)] sm:h-16 sm:w-16 sm:rounded-[1.2rem]">
+                                <div className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-amber-300/24 bg-black/10 text-amber-200 sm:h-11 sm:w-11">
+                                  <Bell className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
+                                </div>
+                              </div>
+                              <div className="h-9 w-px bg-gradient-to-b from-transparent via-amber-200/28 to-transparent sm:h-14" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                                <h3 className="text-[0.92rem] font-semibold leading-snug text-white sm:text-[1.45rem]">
+                                  {activeNotice.title}
+                                </h3>
+                                {activeNotice.pinned ? (
+                                  <Badge className="rounded-full border border-amber-300/16 bg-amber-300/12 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-[0.11em] text-amber-50 shadow-[0_0_14px_rgba(245,158,11,0.12)] sm:px-2.5 sm:py-1 sm:text-[10px] sm:tracking-[0.14em]">
+                                    Pinned
+                                  </Badge>
+                                ) : null}
+                              </div>
+                              <p className="mt-1.5 whitespace-pre-wrap text-[0.89rem] leading-5.5 text-white/82 sm:mt-3 sm:text-base sm:leading-7">
+                                {activeNotice.body}
+                              </p>
+                            </div>
+                          </div>
+                        </article>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+
+                <div className="relative border-t border-white/8 bg-black/10 px-3 py-3 sm:px-5 sm:py-4">
+                  <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+                    <label className="inline-flex min-h-9 cursor-pointer items-center gap-2.5 text-[13px] text-white/72 sm:min-h-10 sm:gap-3 sm:text-sm">
+                      <input
+                        type="checkbox"
+                        checked={neverShowNoticeAgain}
+                        onChange={(event) =>
+                          setNeverShowNoticeAgain(event.target.checked)
+                        }
+                        className="peer sr-only"
+                      />
+                      <span className="inline-flex h-4.5 w-4.5 items-center justify-center rounded-[6px] border border-white/18 bg-white/[0.03] transition peer-checked:border-amber-300/55 peer-checked:bg-amber-300/14 peer-focus-visible:ring-2 peer-focus-visible:ring-amber-300/35 sm:h-5 sm:w-5">
+                        <Check className="h-3 w-3 text-amber-100 opacity-0 transition peer-checked:opacity-100 sm:h-3.5 sm:w-3.5" />
+                      </span>
+                      <span>Never show again</span>
+                    </label>
+
+                    <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-row">
+                      <Button
+                        variant="ghost"
+                        size="md"
+                        className="order-2 h-9 rounded-[1.1rem] border border-white/10 bg-white/[0.04] px-3 text-sm text-white/80 hover:bg-white/[0.07] sm:order-1 sm:h-11 sm:rounded-2xl sm:px-5 sm:text-base"
+                        onClick={() =>
+                          closeNoticeDialog({
+                            suppress: neverShowNoticeAgain,
+                          })
+                        }
+                      >
+                        Dismiss
+                      </Button>
+                      <Button
+                        size="md"
+                        className="order-1 h-9 rounded-[1.1rem] border border-amber-300/20 bg-[linear-gradient(180deg,rgba(245,158,11,0.92),rgba(217,119,6,0.92))] px-3 text-sm text-white shadow-[0_12px_30px_rgba(245,158,11,0.24)] hover:bg-[linear-gradient(180deg,rgba(251,191,36,0.96),rgba(217,119,6,0.96))] sm:order-2 sm:h-11 sm:rounded-2xl sm:px-5 sm:text-base"
+                        onClick={() =>
+                          closeNoticeDialog({
+                            suppress: neverShowNoticeAgain,
+                          })
+                        }
+                      >
+                        Got it
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
 
       {menuOpen && menuPortalReady
         ? createPortal(

@@ -39,6 +39,11 @@ update public.settings
 where order_approval_enabled is null;
 
 alter table public.settings
+  add column if not exists show_prices boolean not null default true,
+  add column if not exists allow_add_to_cart boolean not null default true,
+  add column if not exists allow_checkout boolean not null default true;
+
+alter table public.settings
   add column if not exists header_logo_url text;
 
 alter table public.settings
@@ -1102,7 +1107,8 @@ alter table public.product_variants
   add column if not exists first_stocked_at timestamptz,
   add column if not exists in_stock_since timestamptz,
   add column if not exists last_stock_added_at timestamptz,
-  add column if not exists last_qty_changed_at timestamptz;
+  add column if not exists last_qty_changed_at timestamptz,
+  add column if not exists stale_reviewed_at timestamptz;
 
 alter table public.product_variants
   add constraint product_variants_ship_class_check
@@ -2651,24 +2657,111 @@ begin
     raise exception 'Not authorized';
   end if;
 
-  with sales as (
+  with eligible_order_items as (
     select
-      oi.variant_id,
-      coalesce(sum(oi.qty), 0)::int as sold_lifetime,
+      coalesce(oi.variant_id, oi.item_id) as variant_id,
+      regexp_replace(
+        lower(
+          trim(
+            regexp_replace(
+              coalesce(nullif(trim(oi.item_name), ''), nullif(trim(oi.product_title), ''), sp.title, ''),
+              '\s*\([^)]*\)\s*$',
+              ''
+            )
+          )
+        ),
+        '\s+',
+        ' ',
+        'g'
+      ) as normalized_title,
+      lower(
+        nullif(
+          trim(
+            coalesce(
+              nullif(oi.condition, ''),
+              sv.condition,
+              case
+                when coalesce(oi.item_name, oi.product_title, '') ilike '%(SEALED)%' then 'sealed'
+                when coalesce(oi.item_name, oi.product_title, '') ilike '%(UNSEALED)%' then 'unsealed'
+                else null
+              end,
+              ''
+            )
+          ),
+          ''
+        )
+      ) as normalized_condition,
+      greatest(coalesce(oi.qty, 0), 0)::int as qty,
+      coalesce(o.paid_at, o.created_at) as sold_at
+    from public.order_items oi
+    join public.orders o on o.id = oi.order_id
+    left join public.product_variants sv on sv.id = coalesce(oi.variant_id, oi.item_id)
+    left join public.products sp on sp.id = coalesce(oi.product_id, sv.product_id)
+    where (coalesce(o.payment_status, '') = 'PAID' or upper(coalesce(o.channel, '')) = 'POS')
+      and upper(coalesce(o.status, '')) not in ('VOIDED', 'CANCELLED')
+  ),
+  sales_direct as (
+    select
+      variant_id,
+      coalesce(sum(qty), 0)::int as sold_lifetime,
       coalesce(
         sum(
           case
-            when o.paid_at >= now() - make_interval(days => v_recent_sales_days) then oi.qty
+            when sold_at >= now() - make_interval(days => v_recent_sales_days) then qty
             else 0
           end
         ),
         0
       )::int as sold_recent,
-      max(o.paid_at) as last_sold_at
-    from public.order_items oi
-    join public.orders o on o.id = oi.order_id
-    where o.payment_status = 'PAID'
-    group by oi.variant_id
+      max(sold_at) as last_sold_at
+    from eligible_order_items
+    where variant_id is not null
+    group by variant_id
+  ),
+  sales_by_title as (
+    select
+      normalized_title,
+      normalized_condition,
+      coalesce(sum(qty), 0)::int as sold_lifetime,
+      coalesce(
+        sum(
+          case
+            when sold_at >= now() - make_interval(days => v_recent_sales_days) then qty
+            else 0
+          end
+        ),
+        0
+      )::int as sold_recent,
+      max(sold_at) as last_sold_at
+    from eligible_order_items
+    where normalized_title is not null
+      and normalized_title <> ''
+    group by normalized_title, normalized_condition
+  ),
+  live_carts as (
+    select
+      pv.id as variant_id,
+      count(distinct ci.user_id)::int as live_cart_users,
+      coalesce(sum(ci.qty), 0)::int as live_cart_qty
+    from public.cart_items ci
+    join public.product_variants pv on pv.id = ci.variant_id
+    group by pv.id
+  ),
+  demand as (
+    select
+      pv.id as variant_id,
+      coalesce(pc.clicks, 0)::int as views,
+      coalesce(pac.adds, 0)::int as cart_adds,
+      coalesce(lc.live_cart_users, 0)::int as live_cart_users,
+      coalesce(lc.live_cart_qty, 0)::int as live_cart_qty,
+      greatest(
+        coalesce(pc.last_clicked_at, '-infinity'::timestamptz),
+        coalesce(pac.last_added_at, '-infinity'::timestamptz)
+      ) as last_activity_at
+    from public.product_variants pv
+    left join public.product_clicks pc on pc.product_id = pv.product_id
+    left join public.product_add_to_cart pac on pac.product_id = pv.product_id
+    left join live_carts lc on lc.variant_id = pv.id
   ),
   base as (
     select
@@ -2685,14 +2778,32 @@ begin
       pv.in_stock_since,
       pv.last_stock_added_at,
       pv.last_qty_changed_at,
-      coalesce(s.sold_recent, 0)::int as sold_recent,
-      coalesce(s.sold_lifetime, 0)::int as sold_lifetime,
-      s.last_sold_at,
+      pv.stale_reviewed_at,
+      greatest(
+        coalesce(pv.stale_reviewed_at, '-infinity'::timestamptz),
+        coalesce(pv.in_stock_since, pv.first_stocked_at, pv.created_at)
+      ) as stale_basis_at,
+      coalesce(sd.sold_recent, st.sold_recent, 0)::int as sold_recent,
+      coalesce(sd.sold_lifetime, st.sold_lifetime, 0)::int as sold_lifetime,
+      coalesce(sd.last_sold_at, st.last_sold_at) as last_sold_at,
+      coalesce(d.views, 0)::int as views,
+      coalesce(d.cart_adds, 0)::int as cart_adds,
+      coalesce(d.live_cart_users, 0)::int as live_cart_users,
+      coalesce(d.live_cart_qty, 0)::int as live_cart_qty,
+      (
+        coalesce(d.views, 0)
+        + coalesce(d.cart_adds, 0) * 3
+        + coalesce(d.live_cart_qty, 0) * 5
+      )::int as demand_score,
+      nullif(d.last_activity_at, '-infinity'::timestamptz) as last_activity_at,
       coalesce(p.image_urls[1], '') as image_url,
       greatest(
         floor(
           extract(
-            epoch from now() - coalesce(pv.in_stock_since, pv.first_stocked_at, pv.created_at)
+            epoch from now() - greatest(
+              coalesce(pv.stale_reviewed_at, '-infinity'::timestamptz),
+              coalesce(pv.in_stock_since, pv.first_stocked_at, pv.created_at)
+            )
           ) / 86400
         )::int,
         0
@@ -2700,7 +2811,12 @@ begin
       coalesce(pv.qty * pv.price, 0) as retail_value
     from public.product_variants pv
     join public.products p on p.id = pv.product_id
-    left join sales s on s.variant_id = pv.id
+    left join sales_direct sd on sd.variant_id = pv.id
+    left join sales_by_title st
+      on sd.variant_id is null
+      and st.normalized_title = regexp_replace(lower(trim(p.title)), '\s+', ' ', 'g')
+      and st.normalized_condition = lower(nullif(trim(coalesce(pv.condition, '')), ''))
+    left join demand d on d.variant_id = pv.id
     where pv.qty > 0
       and (include_archived or p.is_active = true)
   ),
@@ -2709,13 +2825,17 @@ begin
     from base
     where days_in_stock >= v_threshold_days
       and sold_recent = 0
-    order by days_in_stock desc, retail_value desc, title asc
+    order by days_in_stock desc, demand_score desc, retail_value desc, title asc
   ),
   summary as (
     select
       count(*)::int as stale_variants,
       coalesce(sum(qty), 0)::int as stale_units,
       coalesce(sum(retail_value), 0) as stale_retail_value,
+      coalesce(sum(views), 0)::int as stale_views,
+      coalesce(sum(cart_adds), 0)::int as stale_cart_adds,
+      coalesce(sum(live_cart_qty), 0)::int as stale_live_cart_qty,
+      coalesce(sum(demand_score), 0)::int as stale_demand_score,
       coalesce(max(days_in_stock), 0)::int as max_days_in_stock
     from stale
   )
@@ -2725,6 +2845,10 @@ begin
     'stale_variants', summary.stale_variants,
     'stale_units', summary.stale_units,
     'stale_retail_value', summary.stale_retail_value,
+    'stale_views', summary.stale_views,
+    'stale_cart_adds', summary.stale_cart_adds,
+    'stale_live_cart_qty', summary.stale_live_cart_qty,
+    'stale_demand_score', summary.stale_demand_score,
     'max_days_in_stock', summary.max_days_in_stock,
     'items', coalesce(
       (
@@ -2745,9 +2869,17 @@ begin
             'first_stocked_at', item.first_stocked_at,
             'last_stock_added_at', item.last_stock_added_at,
             'last_qty_changed_at', item.last_qty_changed_at,
+            'stale_reviewed_at', item.stale_reviewed_at,
+            'stale_basis_at', item.stale_basis_at,
             'sold_recent', item.sold_recent,
             'sold_lifetime', item.sold_lifetime,
             'last_sold_at', item.last_sold_at,
+            'views', item.views,
+            'cart_adds', item.cart_adds,
+            'live_cart_users', item.live_cart_users,
+            'live_cart_qty', item.live_cart_qty,
+            'demand_score', item.demand_score,
+            'last_activity_at', item.last_activity_at,
             'image_url', nullif(item.image_url, '')
           )
         )

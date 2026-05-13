@@ -61,6 +61,10 @@ import {
   type Voucher,
   type VoucherWallet,
 } from "@/lib/vouchers";
+import {
+  resolveShopControls,
+  SHOP_CHECKOUT_DISABLED_MESSAGE,
+} from "@/lib/shopControls";
 
 type ShippingMethod =
   | "LALAMOVE"
@@ -814,6 +818,10 @@ function CheckoutContent() {
   const sp = useSearchParams();
   const { user } = useAuth();
   const { settings } = useSettings();
+  const shopControls = React.useMemo(
+    () => resolveShopControls(settings),
+    [settings]
+  );
   const { lines, loading: cartLoading, reload } = useCart();
 
   const selectedParam = sp.get("selected");
@@ -2038,6 +2046,9 @@ function CheckoutContent() {
     if (!user) return setMsg("Please login first.");
     if (!selectedLines.length)
       return setMsg("Please select at least one item in your cart.");
+    if (!shopControls.allowCheckout) {
+      return setMsg(SHOP_CHECKOUT_DISABLED_MESSAGE);
+    }
 
     const invalidLine = selectedLines.find(
       (l) => l.variant.qty <= 0 || l.qty > l.variant.qty,
@@ -2453,6 +2464,11 @@ function CheckoutContent() {
             }
           >
             {selectionNote}
+          </div>
+        ) : null}
+        {!shopControls.allowCheckout ? (
+          <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
+            {SHOP_CHECKOUT_DISABLED_MESSAGE}
           </div>
         ) : null}
       </div>
@@ -3007,7 +3023,11 @@ function CheckoutContent() {
           <CardFooter className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <Button
               onClick={placeOrder}
-              disabled={cartLoading || selectedLines.length === 0}
+              disabled={
+                cartLoading ||
+                selectedLines.length === 0 ||
+                !shopControls.allowCheckout
+              }
             >
               Place order
             </Button>

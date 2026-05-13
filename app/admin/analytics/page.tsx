@@ -252,9 +252,17 @@ type StockHealthItem = {
   retail_value: number;
   days_in_stock: number;
   in_stock_since: string | null;
+  stale_reviewed_at: string | null;
+  stale_basis_at: string | null;
   sold_recent: number;
   sold_lifetime: number;
   last_sold_at: string | null;
+  views: number;
+  cart_adds: number;
+  live_cart_users: number;
+  live_cart_qty: number;
+  demand_score: number;
+  last_activity_at: string | null;
   image_url: string | null;
 };
 
@@ -264,11 +272,15 @@ type StockHealth = {
   stale_variants: number;
   stale_units: number;
   stale_retail_value: number;
+  stale_views: number;
+  stale_cart_adds: number;
+  stale_live_cart_qty: number;
+  stale_demand_score: number;
   max_days_in_stock: number;
   items: StockHealthItem[];
 };
 
-type StaleTabKey = "variants" | "units" | "value";
+type StaleTabKey = "variants" | "units" | "value" | "demand";
 
 type ProductLookupProduct = {
   id: string;
@@ -459,6 +471,10 @@ const EMPTY_STOCK_HEALTH: StockHealth = {
   stale_variants: 0,
   stale_units: 0,
   stale_retail_value: 0,
+  stale_views: 0,
+  stale_cart_adds: 0,
+  stale_live_cart_qty: 0,
+  stale_demand_score: 0,
   max_days_in_stock: 0,
   items: [],
 };
@@ -640,16 +656,19 @@ function filterOrderDrilldownRows(
 function sortStaleItems(
   items: StockHealthItem[],
   staleTab: StaleTabKey,
-  updatedVariantIds: Record<string, true> = {}
+  reviewedVariantIds: Record<string, string> = {}
 ) {
   const nextItems = items.slice();
   nextItems.sort((left, right) => {
-    const leftUpdated = Boolean(updatedVariantIds[left.variant_id]);
-    const rightUpdated = Boolean(updatedVariantIds[right.variant_id]);
-    if (leftUpdated !== rightUpdated) return leftUpdated ? 1 : -1;
+    const leftReviewed = Boolean(reviewedVariantIds[left.variant_id]);
+    const rightReviewed = Boolean(reviewedVariantIds[right.variant_id]);
+    if (leftReviewed !== rightReviewed) return leftReviewed ? 1 : -1;
 
     if (staleTab === "units") {
       if (right.qty !== left.qty) return right.qty - left.qty;
+      if (right.demand_score !== left.demand_score) {
+        return right.demand_score - left.demand_score;
+      }
       if (right.days_in_stock !== left.days_in_stock) {
         return right.days_in_stock - left.days_in_stock;
       }
@@ -660,7 +679,29 @@ function sortStaleItems(
       if (right.retail_value !== left.retail_value) {
         return right.retail_value - left.retail_value;
       }
+      if (right.demand_score !== left.demand_score) {
+        return right.demand_score - left.demand_score;
+      }
       if (right.qty !== left.qty) return right.qty - left.qty;
+      if (right.days_in_stock !== left.days_in_stock) {
+        return right.days_in_stock - left.days_in_stock;
+      }
+      return left.title.localeCompare(right.title);
+    }
+
+    if (staleTab === "demand") {
+      if (right.demand_score !== left.demand_score) {
+        return right.demand_score - left.demand_score;
+      }
+      if (right.live_cart_qty !== left.live_cart_qty) {
+        return right.live_cart_qty - left.live_cart_qty;
+      }
+      if (right.cart_adds !== left.cart_adds) {
+        return right.cart_adds - left.cart_adds;
+      }
+      if (right.views !== left.views) {
+        return right.views - left.views;
+      }
       if (right.days_in_stock !== left.days_in_stock) {
         return right.days_in_stock - left.days_in_stock;
       }
@@ -670,12 +711,75 @@ function sortStaleItems(
     if (right.days_in_stock !== left.days_in_stock) {
       return right.days_in_stock - left.days_in_stock;
     }
+    if (right.demand_score !== left.demand_score) {
+      return right.demand_score - left.demand_score;
+    }
     if (right.qty !== left.qty) {
       return right.qty - left.qty;
     }
     return left.title.localeCompare(right.title);
   });
   return nextItems;
+}
+
+function applyStaleReviewUpdatesToHealth(
+  current: StockHealth,
+  updates: Array<{
+    item: StockHealthItem;
+    reviewedAt: string;
+    nextPrice?: number;
+    subtractFromSummary: boolean;
+  }>
+): StockHealth {
+  if (!updates.length) return current;
+
+  const existingByVariantId = new Map(current.items.map((item) => [item.variant_id, item]));
+  const updatesByVariantId = new Map(updates.map((update) => [update.item.variant_id, update]));
+  let reviewedVariants = 0;
+  let reviewedUnits = 0;
+  let reviewedRetailValue = 0;
+  let reviewedViews = 0;
+  let reviewedCartAdds = 0;
+  let reviewedLiveCartQty = 0;
+  let reviewedDemandScore = 0;
+
+  updates.forEach((update) => {
+    if (!update.subtractFromSummary) return;
+    const basisItem = existingByVariantId.get(update.item.variant_id) ?? update.item;
+    reviewedVariants += 1;
+    reviewedUnits += Math.max(0, Number(basisItem.qty ?? 0));
+    reviewedRetailValue += Math.max(0, Number(basisItem.retail_value ?? 0));
+    reviewedViews += Math.max(0, Number(basisItem.views ?? 0));
+    reviewedCartAdds += Math.max(0, Number(basisItem.cart_adds ?? 0));
+    reviewedLiveCartQty += Math.max(0, Number(basisItem.live_cart_qty ?? 0));
+    reviewedDemandScore += Math.max(0, Number(basisItem.demand_score ?? 0));
+  });
+
+  return {
+    ...current,
+    stale_variants: Math.max(0, current.stale_variants - reviewedVariants),
+    stale_units: Math.max(0, current.stale_units - reviewedUnits),
+    stale_retail_value: Math.max(0, current.stale_retail_value - reviewedRetailValue),
+    stale_views: Math.max(0, current.stale_views - reviewedViews),
+    stale_cart_adds: Math.max(0, current.stale_cart_adds - reviewedCartAdds),
+    stale_live_cart_qty: Math.max(0, current.stale_live_cart_qty - reviewedLiveCartQty),
+    stale_demand_score: Math.max(0, current.stale_demand_score - reviewedDemandScore),
+    items: current.items.map((entry) => {
+      const update = updatesByVariantId.get(entry.variant_id);
+      if (!update) return entry;
+
+      const nextPrice = update.nextPrice ?? entry.price;
+      const nextRetailValue = Number((entry.qty * nextPrice).toFixed(2));
+      return {
+        ...entry,
+        price: nextPrice,
+        retail_value: nextRetailValue,
+        days_in_stock: 0,
+        stale_reviewed_at: update.reviewedAt,
+        stale_basis_at: update.reviewedAt,
+      };
+    }),
+  };
 }
 
 function normalizePhoneDigits(value: unknown) {
@@ -1041,6 +1145,10 @@ function parseStockHealth(input: any): StockHealth {
     stale_variants: Number(input.stale_variants ?? 0) || 0,
     stale_units: Number(input.stale_units ?? 0) || 0,
     stale_retail_value: Number(input.stale_retail_value ?? 0) || 0,
+    stale_views: Number(input.stale_views ?? 0) || 0,
+    stale_cart_adds: Number(input.stale_cart_adds ?? 0) || 0,
+    stale_live_cart_qty: Number(input.stale_live_cart_qty ?? 0) || 0,
+    stale_demand_score: Number(input.stale_demand_score ?? 0) || 0,
     max_days_in_stock: Number(input.max_days_in_stock ?? 0) || 0,
     items: asArray<StockHealthItem>(input.items).map((item) => ({
       variant_id: String(item.variant_id ?? ""),
@@ -1055,9 +1163,17 @@ function parseStockHealth(input: any): StockHealth {
       retail_value: Number(item.retail_value ?? 0) || 0,
       days_in_stock: Number(item.days_in_stock ?? 0) || 0,
       in_stock_since: item.in_stock_since ? String(item.in_stock_since) : null,
+      stale_reviewed_at: item.stale_reviewed_at ? String(item.stale_reviewed_at) : null,
+      stale_basis_at: item.stale_basis_at ? String(item.stale_basis_at) : null,
       sold_recent: Number(item.sold_recent ?? 0) || 0,
       sold_lifetime: Number(item.sold_lifetime ?? 0) || 0,
       last_sold_at: item.last_sold_at ? String(item.last_sold_at) : null,
+      views: Number(item.views ?? 0) || 0,
+      cart_adds: Number(item.cart_adds ?? 0) || 0,
+      live_cart_users: Number(item.live_cart_users ?? 0) || 0,
+      live_cart_qty: Number(item.live_cart_qty ?? 0) || 0,
+      demand_score: Number(item.demand_score ?? 0) || 0,
+      last_activity_at: item.last_activity_at ? String(item.last_activity_at) : null,
       image_url: item.image_url ? String(item.image_url) : null,
     })),
   };
@@ -1305,8 +1421,8 @@ export default function AdminAnalyticsPage() {
     null
   );
   const [stalePriceDrafts, setStalePriceDrafts] = React.useState<Record<string, string>>({});
-  const [stalePriceUpdatedVariantIds, setStalePriceUpdatedVariantIds] = React.useState<
-    Record<string, true>
+  const [staleReviewedVariantIds, setStaleReviewedVariantIds] = React.useState<
+    Record<string, string>
   >({});
   const [staleEditorProduct, setStaleEditorProduct] = React.useState<AdminProduct | null>(null);
   const [staleEditorLoadingProductId, setStaleEditorLoadingProductId] = React.useState<
@@ -2170,15 +2286,17 @@ export default function AdminAnalyticsPage() {
   const returningRevenueShare =
     totalRevenue > 0 ? (analytics.customer_mix.returning_revenue / totalRevenue) * 100 : 0;
   const staleItems = React.useMemo(() => {
-    return sortStaleItems(stockHealth.items, staleTab, stalePriceUpdatedVariantIds);
-  }, [stalePriceUpdatedVariantIds, staleTab, stockHealth.items]);
+    return sortStaleItems(stockHealth.items, staleTab, staleReviewedVariantIds);
+  }, [staleReviewedVariantIds, staleTab, stockHealth.items]);
 
   const staleSortLabel =
     staleTab === "units"
       ? "largest stale unit piles"
       : staleTab === "value"
         ? "highest stale retail value"
-        : "oldest stale variants";
+        : staleTab === "demand"
+          ? "highest view and cart demand"
+          : "oldest stale variants";
 
   const drilldownFunnelItems = React.useMemo(() => {
     const items = analytics.funnel.top_products.slice();
@@ -2252,14 +2370,20 @@ export default function AdminAnalyticsPage() {
         href: `/product/${item.product_id}`,
         title: item.title,
         image_url: item.image_url,
-        subtitle: `${formatConditionLabel(item.condition || "-")} - ${daysLabel(
-          item.days_in_stock
-        )} in stock`,
+        subtitle: item.stale_reviewed_at
+          ? `${formatConditionLabel(item.condition || "-")} - Last updated: ${formatDateTimeLabel(
+              item.stale_reviewed_at
+            )}`
+          : `${formatConditionLabel(item.condition || "-")} - ${daysLabel(
+              item.days_in_stock
+            )} in stock`,
         metrics: [
           { label: "Qty", value: formatCount(item.qty) },
-          { label: "Unit Price", value: peso(item.price) },
           { label: "Retail Value", value: peso(item.retail_value) },
-          { label: "Last Sold", value: formatDateLabel(item.last_sold_at) },
+          { label: "Views", value: formatCount(item.views) },
+          { label: "Cart Adds", value: formatCount(item.cart_adds) },
+          { label: "Live Carts", value: formatCount(item.live_cart_qty) },
+          { label: "Demand", value: formatCount(item.demand_score) },
         ],
       }));
     }
@@ -2419,9 +2543,9 @@ export default function AdminAnalyticsPage() {
       sortStaleItems(
         drilldownModalStockHealth?.items ?? [],
         staleTab,
-        stalePriceUpdatedVariantIds
+        staleReviewedVariantIds
       ),
-    [drilldownModalStockHealth, stalePriceUpdatedVariantIds, staleTab]
+    [drilldownModalStockHealth, staleReviewedVariantIds, staleTab]
   );
   const modalFilteredStaleItems = React.useMemo(() => {
     if (!drilldownSearchNeedle) return modalStaleItems;
@@ -2523,9 +2647,18 @@ export default function AdminAnalyticsPage() {
     (sum, order) => sum + order.unit_count,
     0
   );
-  const updatedStaleCount = React.useMemo(
-    () => Object.keys(stalePriceUpdatedVariantIds).length,
-    [stalePriceUpdatedVariantIds]
+  const reviewedStaleCount = React.useMemo(
+    () => {
+      const visibleVariantIds = new Set(
+        [...stockHealth.items, ...(drilldownModalStockHealth?.items ?? [])].map(
+          (item) => item.variant_id
+        )
+      );
+      return Object.keys(staleReviewedVariantIds).filter((variantId) =>
+        visibleVariantIds.has(variantId)
+      ).length;
+    },
+    [drilldownModalStockHealth?.items, staleReviewedVariantIds, stockHealth.items]
   );
   const drilldownModalStatusLine = React.useMemo(() => {
     if (drilldownShowsOrders) {
@@ -2534,12 +2667,12 @@ export default function AdminAnalyticsPage() {
       )} orders, ${formatCount(modalOrderUnits)} units, ${peso(modalOrderTotal)} total.`;
     }
     if (activeDrilldown === "stale") {
-      const updatedHint = updatedStaleCount
-        ? ` ${formatCount(updatedStaleCount)} repriced items are moved to the bottom.`
+      const reviewedHint = reviewedStaleCount
+        ? ` ${formatCount(reviewedStaleCount)} last-updated items are moved to the bottom and removed from stale totals.`
         : "";
       return `Showing ${formatCount(modalFilteredStaleItems.length)} of ${formatCount(
         modalStaleItems.length
-      )} stale items, sorted by ${staleSortLabel}.${updatedHint}`;
+      )} stale inventory rows, sorted by ${staleSortLabel}.${reviewedHint}`;
     }
     return `Showing ${formatCount(modalFilteredItemRows.length)} of ${formatCount(
       modalItemRows.length
@@ -2556,7 +2689,7 @@ export default function AdminAnalyticsPage() {
     modalOrderUnits,
     modalStaleItems.length,
     staleSortLabel,
-    updatedStaleCount,
+    reviewedStaleCount,
   ]);
 
   const drilldownSearchPlaceholder = drilldownShowsOrders
@@ -2570,67 +2703,38 @@ export default function AdminAnalyticsPage() {
     if (!Number.isFinite(currentPrice)) return;
 
     const normalizedNextPrice = Math.max(0, Number(nextPrice.toFixed(2)));
-    if (normalizedNextPrice === currentPrice) {
-      setStalePriceDrafts((current) => ({
-        ...current,
-        [item.variant_id]: formatEditablePriceValue(normalizedNextPrice),
-      }));
-      return;
-    }
+    const reviewedAt = new Date().toISOString();
+    const priceChanged = normalizedNextPrice !== currentPrice;
 
     setStalePriceSavingVariantId(item.variant_id);
     try {
+      const updatePayload: Record<string, unknown> = {
+        stale_reviewed_at: reviewedAt,
+      };
+      if (priceChanged) {
+        updatePayload.price = normalizedNextPrice;
+      }
+
       const { error: updateError } = await supabase
         .from("product_variants")
-        .update({ price: normalizedNextPrice })
+        .update(updatePayload)
         .eq("id", item.variant_id);
 
       if (updateError) throw updateError;
 
-      setStockHealth((current) => {
-        const previousItem = current.items.find((entry) => entry.variant_id === item.variant_id);
-        if (!previousItem) return current;
+      const subtractFromSummary = !Boolean(staleReviewedVariantIds[item.variant_id]);
+      const reviewUpdate = {
+        item,
+        reviewedAt,
+        nextPrice: normalizedNextPrice,
+        subtractFromSummary,
+      };
 
-        const nextRetailValue = Number((previousItem.qty * normalizedNextPrice).toFixed(2));
-        const retailDelta = nextRetailValue - previousItem.retail_value;
+      setStockHealth((current) => applyStaleReviewUpdatesToHealth(current, [reviewUpdate]));
 
-        return {
-          ...current,
-          stale_retail_value: Math.max(0, current.stale_retail_value + retailDelta),
-          items: current.items.map((entry) =>
-            entry.variant_id === item.variant_id
-              ? {
-                  ...entry,
-                  price: normalizedNextPrice,
-                  retail_value: nextRetailValue,
-                }
-              : entry
-          ),
-        };
-      });
-
-      setDrilldownModalStockHealth((current) => {
-        if (!current) return current;
-        const previousItem = current.items.find((entry) => entry.variant_id === item.variant_id);
-        if (!previousItem) return current;
-
-        const nextRetailValue = Number((previousItem.qty * normalizedNextPrice).toFixed(2));
-        const retailDelta = nextRetailValue - previousItem.retail_value;
-
-        return {
-          ...current,
-          stale_retail_value: Math.max(0, current.stale_retail_value + retailDelta),
-          items: current.items.map((entry) =>
-            entry.variant_id === item.variant_id
-              ? {
-                  ...entry,
-                  price: normalizedNextPrice,
-                  retail_value: nextRetailValue,
-                }
-              : entry
-          ),
-        };
-      });
+      setDrilldownModalStockHealth((current) =>
+        current ? applyStaleReviewUpdatesToHealth(current, [reviewUpdate]) : current
+      );
 
       setStaleEditorProduct((current) => {
         if (!current || current.id !== item.product_id) return current;
@@ -2648,16 +2752,20 @@ export default function AdminAnalyticsPage() {
         ...current,
         [item.variant_id]: formatEditablePriceValue(normalizedNextPrice),
       }));
-      setStalePriceUpdatedVariantIds((current) => ({
+      setStaleReviewedVariantIds((current) => ({
         ...current,
-        [item.variant_id]: true,
+        [item.variant_id]: reviewedAt,
       }));
 
       toast({
         intent: "success",
-        message: `${formatConditionLabel(item.condition || "sealed")} price updated to ${peso(
-          normalizedNextPrice
-        )}.`,
+        message: priceChanged
+          ? `${formatConditionLabel(item.condition || "sealed")} price updated to ${peso(
+              normalizedNextPrice
+            )}. Last updated: ${formatDateTimeLabel(reviewedAt)}.`
+          : `${formatConditionLabel(
+              item.condition || "sealed"
+            )} marked updated. Last updated: ${formatDateTimeLabel(reviewedAt)}.`,
       });
     } catch (err: any) {
       console.error(err);
@@ -2668,7 +2776,7 @@ export default function AdminAnalyticsPage() {
     } finally {
       setStalePriceSavingVariantId(null);
     }
-  }, []);
+  }, [staleReviewedVariantIds]);
 
   const adjustStaleVariantPrice = React.useCallback(
     async (
@@ -2717,12 +2825,71 @@ export default function AdminAnalyticsPage() {
     }
   }, []);
 
+  const markVisibleProductStaleItemsReviewed = React.useCallback(
+    async (productId: string) => {
+      const trimmedProductId = String(productId ?? "").trim();
+      if (!trimmedProductId) return;
+
+      const itemsByVariantId = new Map<string, StockHealthItem>();
+      [...stockHealth.items, ...(drilldownModalStockHealth?.items ?? [])].forEach((item) => {
+        if (item.product_id !== trimmedProductId) return;
+        itemsByVariantId.set(item.variant_id, item);
+      });
+
+      const items = Array.from(itemsByVariantId.values());
+      if (!items.length) return;
+
+      const reviewedAt = new Date().toISOString();
+      const variantIds = items.map((item) => item.variant_id);
+
+      try {
+        const { error: updateError } = await supabase
+          .from("product_variants")
+          .update({ stale_reviewed_at: reviewedAt })
+          .in("id", variantIds);
+
+        if (updateError) throw updateError;
+
+        const reviewUpdates = items.map((item) => ({
+          item,
+          reviewedAt,
+          subtractFromSummary: !Boolean(staleReviewedVariantIds[item.variant_id]),
+        }));
+
+        setStockHealth((current) => applyStaleReviewUpdatesToHealth(current, reviewUpdates));
+        setDrilldownModalStockHealth((current) =>
+          current ? applyStaleReviewUpdatesToHealth(current, reviewUpdates) : current
+        );
+        setStaleReviewedVariantIds((current) => {
+          const next = { ...current };
+          variantIds.forEach((variantId) => {
+            next[variantId] = reviewedAt;
+          });
+          return next;
+        });
+      } catch (err: any) {
+        console.error(err);
+        toast({
+          intent: "error",
+          message:
+            err?.message ??
+            "Inventory was saved, but the stale last-updated marker failed to save.",
+        });
+      }
+    },
+    [drilldownModalStockHealth?.items, staleReviewedVariantIds, stockHealth.items]
+  );
+
   function renderStaleItemCard(item: StockHealthItem) {
     const priceBusy = stalePriceSavingVariantId === item.variant_id;
     const editorBusy = staleEditorLoadingProductId === item.product_id;
-    const priceUpdated = Boolean(stalePriceUpdatedVariantIds[item.variant_id]);
+    const reviewedAt = staleReviewedVariantIds[item.variant_id] ?? item.stale_reviewed_at;
+    const reviewedThisSession = Boolean(staleReviewedVariantIds[item.variant_id]);
     const customPriceValue =
       stalePriceDrafts[item.variant_id] ?? formatEditablePriceValue(item.price);
+    const ageLabel = reviewedAt
+      ? `${daysLabel(item.days_in_stock)} since update`
+      : `${daysLabel(item.days_in_stock)} in stock`;
 
     const onCustomPriceSave = async () => {
       const parsedPrice = parseEditablePriceValue(customPriceValue);
@@ -2737,55 +2904,87 @@ export default function AdminAnalyticsPage() {
       await saveStaleVariantPrice(item, parsedPrice);
     };
 
-    const markPriceUpdated = () => {
-      setStalePriceDrafts((current) => ({
-        ...current,
-        [item.variant_id]: formatEditablePriceValue(item.price),
-      }));
-      setStalePriceUpdatedVariantIds((current) => ({
-        ...current,
-        [item.variant_id]: true,
-      }));
+    const markStaleItemUpdated = () => {
+      void saveStaleVariantPrice(item, Number(item.price ?? 0));
     };
+    const compactMeta = [
+      formatConditionLabel(item.condition || "-"),
+      reviewedAt ? `Updated ${formatDateLabel(reviewedAt)}` : ageLabel,
+      `${formatCount(item.sold_recent)} sold ${formatCount(stockHealth.recent_sales_days)}d`,
+      `${formatCount(item.sold_lifetime)} lifetime`,
+      item.demand_score > 0 ? `Demand ${formatCount(item.demand_score)}` : null,
+    ]
+      .filter(Boolean)
+      .join(" | ");
+    const demandDetail = [
+      `${formatCount(item.views)} views`,
+      `${formatCount(item.cart_adds)} adds`,
+      item.live_cart_qty > 0 ? `${formatCount(item.live_cart_qty)} in carts` : null,
+    ]
+      .filter(Boolean)
+      .join(" / ");
 
     return (
       <div
         key={item.variant_id}
         className={`rounded-2xl border p-4 ${
-          priceUpdated
+          reviewedThisSession
             ? "border-emerald-500/20 bg-emerald-500/[0.04] opacity-75"
             : "border-white/10 bg-white/5"
         }`}
       >
-        <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
           <div className="flex min-w-0 items-center gap-3">
-            <Thumbnail src={item.image_url} alt={item.title} />
+            <div className="shrink-0">
+              <Thumbnail src={item.image_url} alt={item.title} />
+            </div>
             <div className="min-w-0">
               <Link
                 href={`/product/${item.product_id}`}
-                className="line-clamp-2 text-sm font-medium text-white transition hover:text-accent-200"
+                className="block truncate text-sm font-medium text-white transition hover:text-accent-200"
+                title={item.title}
               >
                 {item.title}
               </Link>
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-white/50">
+              <div className="mt-1 block truncate text-xs text-white/50" title={compactMeta}>
+                {compactMeta}
+                <span className="hidden">
                 <span>{formatConditionLabel(item.condition || "-")}</span>
-                {priceUpdated ? (
+                {reviewedAt ? (
                   <>
                     <span>•</span>
-                    <span className="text-emerald-300">Updated price</span>
+                    <span className={reviewedThisSession ? "text-emerald-300" : undefined}>
+                      Last updated: {formatDateTimeLabel(reviewedAt)}
+                    </span>
                   </>
                 ) : null}
                 <span>•</span>
-                <span>{daysLabel(item.days_in_stock)} in stock</span>
+                <span>{ageLabel}</span>
                 <span>•</span>
-                <span>{formatCount(item.sold_recent)} sold recently</span>
+                <span>
+                  {formatCount(item.sold_recent)} sold last{" "}
+                  {formatCount(stockHealth.recent_sales_days)}d
+                </span>
                 <span>•</span>
                 <span>{formatCount(item.sold_lifetime)} sold lifetime</span>
+                <span>â€¢</span>
+                <span>{formatCount(item.views)} views</span>
+                <span>â€¢</span>
+                <span>{formatCount(item.cart_adds)} cart adds</span>
+                {item.live_cart_qty > 0 ? (
+                  <>
+                    <span>â€¢</span>
+                    <span className="text-amber-200">
+                      {formatCount(item.live_cart_qty)} currently in carts
+                    </span>
+                  </>
+                ) : null}
+                </span>
               </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 lg:justify-end">
             {[
               { label: "-50", delta: -50 },
               { label: "+50", delta: 50 },
@@ -2840,10 +3039,10 @@ export default function AdminAnalyticsPage() {
               type="button"
               size="sm"
               variant="ghost"
-              onClick={markPriceUpdated}
-              disabled={priceBusy || editorBusy || priceUpdated}
+              onClick={markStaleItemUpdated}
+              disabled={priceBusy || editorBusy || reviewedThisSession}
             >
-              {priceUpdated ? "Updated" : "Update"}
+              {reviewedThisSession ? "Updated" : "Update"}
             </Button>
             <Button
               type="button"
@@ -2857,7 +3056,7 @@ export default function AdminAnalyticsPage() {
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
           <div>
             <div className="text-[11px] uppercase tracking-[0.2em] text-white/40">Qty</div>
             <div className="mt-1 text-lg font-semibold text-white">{formatCount(item.qty)}</div>
@@ -2878,6 +3077,20 @@ export default function AdminAnalyticsPage() {
             <div className="mt-1 text-lg font-semibold text-white">{peso(item.retail_value)}</div>
           </div>
           <div>
+            <div className="text-[11px] uppercase tracking-[0.2em] text-white/40">
+              Demand
+            </div>
+            <div className="mt-1 text-lg font-semibold text-white">
+              {formatCount(item.demand_score)}
+            </div>
+            <div className="text-xs text-white/45">{demandDetail || "No demand"}</div>
+            {item.last_activity_at ? (
+              <div className="text-xs text-white/35">
+                Last {formatDateLabel(item.last_activity_at)}
+              </div>
+            ) : null}
+          </div>
+          <div>
             <div className="text-[11px] uppercase tracking-[0.2em] text-white/40">Last Sold</div>
             <div className="mt-1 text-sm font-medium text-white">
               {formatDateLabel(item.last_sold_at)}
@@ -2888,10 +3101,10 @@ export default function AdminAnalyticsPage() {
           </div>
           <div>
             <div className="text-[11px] uppercase tracking-[0.2em] text-white/40">
-              In Stock Since
+              {reviewedAt ? "Last Updated" : "In Stock Since"}
             </div>
             <div className="mt-1 text-sm font-medium text-white">
-              {formatDateLabel(item.in_stock_since)}
+              {formatDateLabel(reviewedAt ?? item.stale_basis_at ?? item.in_stock_since)}
             </div>
           </div>
         </div>
@@ -3669,7 +3882,7 @@ export default function AdminAnalyticsPage() {
             </div>
           </CardHeader>
           <CardBody className="space-y-5">
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-4">
               {[
                 {
                   key: "variants" as const,
@@ -3688,6 +3901,14 @@ export default function AdminAnalyticsPage() {
                   label: "Retail Value",
                   value: peso(stockHealth.stale_retail_value),
                   hint: `Oldest ${daysLabel(stockHealth.max_days_in_stock)}`,
+                },
+                {
+                  key: "demand" as const,
+                  label: "Demand Signals",
+                  value: formatCount(stockHealth.stale_demand_score),
+                  hint: `${formatCount(stockHealth.stale_views)} views / ${formatCount(
+                    stockHealth.stale_cart_adds
+                  )} adds / ${formatCount(stockHealth.stale_live_cart_qty)} in carts`,
                 },
               ].map((tab) => {
                 const isActive = staleTab === tab.key;
@@ -3718,11 +3939,12 @@ export default function AdminAnalyticsPage() {
 
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/65">
               <span>
-                Showing {formatCount(staleItems.length)} stale rows, sorted by {staleSortLabel}.
+                Showing {formatCount(staleItems.length)} stale inventory rows, sorted by{" "}
+                {staleSortLabel}.
               </span>
               <span>
-                {updatedStaleCount
-                  ? `${formatCount(updatedStaleCount)} repriced items moved to the bottom.`
+                {reviewedStaleCount
+                  ? `${formatCount(reviewedStaleCount)} last-updated items moved to the bottom and removed from stale totals.`
                   : "Use the tiles above as tabs to bring the worst stale items to the top."}
               </span>
             </div>
@@ -3964,11 +4186,17 @@ export default function AdminAnalyticsPage() {
       <InventoryEditorDrawer
         product={staleEditorProduct}
         onClose={() => setStaleEditorProduct(null)}
-        onSaved={() => {
-          void load();
-          if (drilldownModalOpen) {
-            void loadDrilldownModalData();
-          }
+        onSaved={(event) => {
+          const productId = event?.productId ?? staleEditorProduct?.id;
+          void (async () => {
+            if (productId && !event?.backgroundUpload) {
+              await markVisibleProductStaleItemsReviewed(productId);
+            }
+            await load();
+            if (drilldownModalOpen) {
+              await loadDrilldownModalData();
+            }
+          })();
         }}
       />
       <DrilldownModal
@@ -3983,7 +4211,7 @@ export default function AdminAnalyticsPage() {
         onClose={() => setDrilldownModalOpen(false)}
         toolbar={
           activeDrilldown === "stale" ? (
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-4">
               {[
                 {
                   key: "variants" as const,
@@ -4002,6 +4230,13 @@ export default function AdminAnalyticsPage() {
                   label: "Retail Value",
                   value: peso(
                     (drilldownModalStockHealth ?? stockHealth).stale_retail_value
+                  ),
+                },
+                {
+                  key: "demand" as const,
+                  label: "Demand Signals",
+                  value: formatCount(
+                    (drilldownModalStockHealth ?? stockHealth).stale_demand_score
                   ),
                 },
               ].map((tab) => {
