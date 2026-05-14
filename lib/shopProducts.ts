@@ -1,4 +1,5 @@
 import { conditionSortOrder } from "@/lib/conditions";
+import { isReleased } from "@/lib/inventoryRelease";
 import { normalizeProductSpecialTags } from "@/lib/productTags";
 import { resolveEffectivePrice } from "@/lib/pricing";
 import type { ShopProduct } from "@/components/ProductCard";
@@ -16,6 +17,7 @@ export type VariantRow = {
   sale_price?: number | null;
   discount_percent?: number | null;
   qty: number | null;
+  release_at?: string | null;
   product: {
     id: string;
     title: string;
@@ -52,6 +54,7 @@ export type ProductRow = {
     sale_price?: number | null;
     discount_percent?: number | null;
     qty: number | null;
+    release_at?: string | null;
   }>;
 };
 
@@ -106,6 +109,7 @@ export function collapseVariants(rows: VariantRow[]): ShopProduct[] {
       discount_percent,
     });
     const qty = pickNumber(v.qty, 0);
+    if (!isReleased(v.release_at)) continue;
 
     if (qty <= 0) continue;
 
@@ -205,6 +209,7 @@ export function mapProductsToShopProducts(rows: ProductRow[]): ShopProduct[] {
     const options = variants
       .map((v) => {
         const qty = pickNumber(v.qty, 0);
+        if (!isReleased(v.release_at)) return null;
         if (qty <= 0) return null;
         const conditionRaw = String(v.condition ?? "sealed").toLowerCase();
         const price = pickNumber(v.price, 0);

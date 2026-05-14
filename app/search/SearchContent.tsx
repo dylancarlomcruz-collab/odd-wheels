@@ -466,9 +466,9 @@ export default function SearchContent() {
         if (orClause) {
           const { data } = await supabase
             .from("products")
-            .select(
-              "*, product_variants(id, created_at, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty)"
-            )
+              .select(
+                "*, product_variants(id, created_at, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty, release_at)"
+              )
             .eq("is_active", true)
             .or(orClause)
             .order("created_at", { ascending: false })
@@ -489,9 +489,9 @@ export default function SearchContent() {
         if (sellerIds.length) {
           const { data: sellerProducts } = await supabase
             .from("products")
-            .select(
-              "*, product_variants(id, created_at, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty)"
-            )
+              .select(
+                "*, product_variants(id, created_at, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty, release_at)"
+              )
             .in("id", sellerIds);
 
           sellers = mapProductsToShopProducts((sellerProducts as any[]) ?? []);
@@ -509,9 +509,9 @@ export default function SearchContent() {
         if (recentIds.length) {
           const { data: recentProducts } = await supabase
             .from("products")
-            .select(
-              "*, product_variants(id, created_at, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty)"
-            )
+              .select(
+                "*, product_variants(id, created_at, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty, release_at)"
+              )
             .in("id", recentIds);
 
           recents = mapProductsToShopProducts((recentProducts as any[]) ?? []);

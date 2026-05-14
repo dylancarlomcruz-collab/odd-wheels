@@ -480,7 +480,7 @@ const EMPTY_STOCK_HEALTH: StockHealth = {
 };
 
 const INVENTORY_EDITOR_SELECT =
-  "*, product_variants(id,condition,barcode,cost,price,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)";
+  "*, product_variants(id,condition,barcode,cost,price,qty,release_at,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)";
 
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];

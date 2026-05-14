@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { createPortal } from "react-dom";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import JsBarcode from "jsbarcode";
@@ -25,6 +24,9 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import { ModalShell as OrderDetailsModal } from "@/components/ui/ModalShell";
+import { SectionBlock } from "@/components/ui/SectionBlock";
+import { DetailGrid } from "@/components/ui/DetailGrid";
 import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 import {
   formatConditionLabel,
@@ -789,48 +791,6 @@ function openShippingLabelPrintPreview(canvas: HTMLCanvasElement, title: string)
   printWindow.document.close();
 }
 
-type OrderDetailsModalProps = {
-  open: boolean;
-  onClose: () => void;
-  title: React.ReactNode;
-  children: React.ReactNode;
-};
-
-function OrderDetailsModal({ open, onClose, title, children }: OrderDetailsModalProps) {
-  React.useEffect(() => {
-    if (!open) return undefined;
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = originalOverflow;
-    };
-  }, [open]);
-
-  if (!open) return null;
-
-  const content = (
-    <div
-      className="fixed inset-0 z-[9999] overflow-y-auto bg-black/70 p-4"
-      onClick={onClose}
-    >
-      <div className="mx-auto w-full max-w-5xl" onClick={(e) => e.stopPropagation()}>
-        <Card>
-          <CardHeader className="flex items-center justify-between">
-            <div className="text-lg font-semibold">{title}</div>
-            <Button variant="ghost" onClick={onClose}>
-              Close
-            </Button>
-          </CardHeader>
-          <CardBody className="max-h-[75vh] overflow-y-auto">{children}</CardBody>
-        </Card>
-      </div>
-    </div>
-  );
-
-  if (typeof document === "undefined") return null;
-  return createPortal(content, document.body);
-}
-
 export default function CashierShipmentsPage() {
   const pathname = usePathname();
   const { profile } = useProfile();
@@ -1124,8 +1084,8 @@ export default function CashierShipmentsPage() {
 
   const selectedOrder = React.useMemo(() => {
     if (!detailOrderId) return null;
-    return paidOrders.find((o) => String(o.id) === detailOrderId) ?? null;
-  }, [detailOrderId, paidOrders]);
+    return orders.find((o) => String(o.id) === detailOrderId) ?? null;
+  }, [detailOrderId, orders]);
 
   const preparingOrders = React.useMemo(
     () =>
@@ -2407,6 +2367,369 @@ export default function CashierShipmentsPage() {
       );
   };
 
+  const renderShippingDetailsRefined = (o: any) => {
+    const details = parseJsonMaybe(o.shipping_details) ?? {};
+    const method = String(details.method ?? o.shipping_method ?? "");
+    const isCop = String(method).toUpperCase() === "LBC" && Boolean(details.cop);
+    const items = itemsByOrderId[o.id] ?? [];
+    const shippingStage = resolveShippingStage(o, details);
+    const rawStatus = String(o.shipping_status ?? "").trim().toUpperCase();
+    const needsPreparing = !rawStatus || rawStatus === "NONE";
+    const rushFee = Number(o.rush_fee ?? 0);
+    const priorityFee = Number(o.priority_fee ?? 0);
+    const draft = getDraft(o.id);
+    const bookingReference = String(
+      draft.bookingReference || getLbcBookingReference(o, details) || ""
+    ).trim();
+    const canSaveBookingReference = bookingReference.length > 0;
+    const busy = Boolean(busyById[o.id]);
+    const error = errorById[o.id];
+    const shippingSummary = buildShippingSummary(o, details);
+    const createdAt = new Date(o.created_at).toLocaleString("en-PH");
+    const customerName = getCustomerName(o, details);
+    const customerPhone =
+      details.receiver_phone || details.phone || o.customer_phone || o.contact || "";
+    const customerAddress = cleanAddress(
+      details.full_address || details.dropoff_address || o.address || details.address
+    );
+    const orderTotal = peso(Number(o.total ?? 0));
+
+    return (
+      <div className="space-y-5">
+        <SectionBlock>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="text-[0.72rem] font-medium uppercase tracking-[0.13em] text-white/48">
+                Shipment order
+              </div>
+              <div className="mt-1 text-2xl font-semibold tracking-[-0.03em] text-white">
+                #{String(o.id).slice(0, 8)}
+              </div>
+              <div className="mt-1 text-sm text-white/56">{createdAt}</div>
+            </div>
+            <div className="text-right">
+              <div className="text-[0.72rem] font-medium uppercase tracking-[0.13em] text-white/48">
+                Total
+              </div>
+              <div className="mt-1 text-2xl font-semibold tracking-[-0.03em] text-white">
+                {orderTotal}
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Badge className={shippingStatusBadge(shippingStage)}>{shippingStage}</Badge>
+            <Badge>Channel {String(o.channel ?? "-")}</Badge>
+            <Badge>Status {String(o.status ?? "-")}</Badge>
+            <Badge>Payment {String(o.payment_status ?? "-")}</Badge>
+            <Badge>{String(o.shipping_method ?? "-")}</Badge>
+            {isCop ? <Badge className="border-yellow-500/40 text-yellow-200">COP</Badge> : null}
+          </div>
+          {shippingStage === "TO BOOK" ? (
+            <div className="mt-4 rounded-2xl border border-fuchsia-500/30 bg-fuchsia-500/10 p-3 text-sm text-white/82">
+              This LBC order still needs an LBC booking reference before it can move into the main shipping queue.
+            </div>
+          ) : null}
+          {shippingStage === "PREPARING TO SHIP" ? (
+            <div className="mt-4 rounded-2xl border border-accent-500/30 bg-accent-500/10 p-3 text-sm text-white/82">
+              Ships on or before {shippingDaysLabel}. Add a rush fee only when requested.
+            </div>
+          ) : null}
+          {shippingStage === "SHIPPED" ? (
+            <div className="mt-4 rounded-2xl border border-sky-500/30 bg-sky-500/10 p-3 text-sm text-white/82">
+              Shipment is already in transit.
+            </div>
+          ) : null}
+        </SectionBlock>
+
+        <SectionBlock
+          title="Customer & shipment"
+          description="Core delivery facts arranged for quick scanning."
+        >
+          <DetailGrid
+            items={[
+              { label: "Customer", value: customerName || "-" },
+              { label: "Phone", value: customerPhone || "-" },
+              { label: "Address / branch", value: customerAddress || "-" },
+              { label: "Shipping method", value: String(o.shipping_method ?? "-") },
+              { label: "Booking reference", value: bookingReference || "-" },
+              { label: "Tracking number", value: String(draft.tracking || o.tracking_number || "-") },
+            ]}
+          />
+          {customerPhone ? (
+            <div className="mt-3">
+              <Button variant="ghost" size="sm" onClick={() => onCopyPhone(customerPhone)}>
+                <ClipboardCopy className="h-3.5 w-3.5" />
+                Copy phone
+              </Button>
+            </div>
+          ) : null}
+        </SectionBlock>
+
+        {shippingStage === "TO BOOK" ? (
+          <SectionBlock title="Booking workflow" description="Add the LBC booking reference to move this order forward.">
+            <div className="grid gap-3 md:grid-cols-[1.2fr_auto_auto]">
+              <Input
+                label="LBC booking reference"
+                value={draft.bookingReference}
+                placeholder="Enter or scan LBC reference"
+                onChange={(e) => onDraftChange(o.id, "bookingReference", e.target.value)}
+                className="h-10 text-sm"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="self-end"
+                onClick={() => {
+                  setScanMode("booking_reference");
+                  setScanOrderId(o.id);
+                  setScanCourier("");
+                }}
+                disabled={busy}
+              >
+                Scan reference
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="self-end"
+                onClick={() => saveBookingReference(o.id, draft.bookingReference)}
+                disabled={busy || !canSaveBookingReference}
+              >
+                Save reference
+              </Button>
+            </div>
+          </SectionBlock>
+        ) : null}
+
+        {shippingStage === "PREPARING TO SHIP" ? (
+          <SectionBlock title="Shipment workflow" description="Set courier info, then mark the order shipped.">
+            <div className="grid gap-3 md:grid-cols-[1fr_1.2fr]">
+              {isAdmin ? (
+                <Select
+                  label="Courier"
+                  value={draft.courier || o.shipping_method || "LBC"}
+                  onChange={(e) => {
+                    const nextMethod = e.target.value;
+                    onDraftChange(o.id, "courier", nextMethod);
+                    void saveShippingMethod(o.id, nextMethod);
+                  }}
+                  className="h-10 text-sm"
+                >
+                  {buildCourierOptions(o.shipping_method).map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <Input
+                  label="Courier"
+                  value={draft.courier || o.shipping_method || ""}
+                  disabled
+                  className="h-10 text-sm"
+                />
+              )}
+              <Input
+                label="Tracking number"
+                value={draft.tracking}
+                placeholder="Optional tracking / waybill"
+                onChange={(e) => onDraftChange(o.id, "tracking", e.target.value)}
+                className="h-10 text-sm"
+              />
+            </div>
+          </SectionBlock>
+        ) : null}
+
+        <SectionBlock title={`Items (${items.length})`} description="Select an item row to inspect condition and notes.">
+          {items.length === 0 ? (
+            <div className="text-sm text-white/60">No items found for this order.</div>
+          ) : (
+            <div className="space-y-2.5">
+              {items.map((it: any, idx: number) => {
+                const thumb = getItemThumb(it);
+                const title = getItemTitle(it);
+                const condition = formatConditionLabel(
+                  it?.condition ?? it?.product_variant?.condition,
+                  { upper: true }
+                );
+                const itemCondition = String(
+                  it?.condition ?? it?.product_variant?.condition ?? ""
+                ).toLowerCase();
+                const isNearMint = isNearMintCondition(itemCondition);
+                const isWithIssues = isIssueCondition(itemCondition);
+                const notes = String(
+                  it?.public_notes ??
+                    it?.product_variant?.public_notes ??
+                    it?.issue_notes ??
+                    it?.product_variant?.issue_notes ??
+                    ""
+                ).trim();
+                const price = getItemPrice(it);
+                const qty = Number(it?.qty ?? 1);
+                const line = Number(it?.line_total ?? price * qty);
+
+                return (
+                  <button
+                    key={`${o.id}-${idx}`}
+                    type="button"
+                    className="surface-subtle flex w-full gap-3 p-3 text-left transition hover:border-white/20 hover:bg-bg-900/50 sm:p-3.5"
+                    onClick={() => setSelectedItem(it)}
+                    aria-label={`View details for ${title}`}
+                  >
+                    <div className="h-12 w-12 overflow-hidden rounded-xl border border-white/10 bg-bg-800 flex-shrink-0">
+                      {thumb ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={thumb} alt={title} className="h-full w-full object-cover" />
+                      ) : null}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-white truncate">{title}</div>
+                      <div className="mt-1 text-xs text-white/60">
+                        {condition ? `${condition} | ` : ""}
+                        {qty} x {peso(price)} | Line: {peso(line)}
+                      </div>
+                      {notes ? (
+                        <div
+                          className={`mt-1 flex items-center gap-2 text-xs ${
+                            isWithIssues
+                              ? "text-red-200/80"
+                              : isNearMint
+                                ? "text-amber-200/80"
+                                : "text-white/60"
+                          }`}
+                        >
+                          {isWithIssues || isNearMint ? (
+                            <span
+                              className={`h-2 w-2 rounded-full ${isWithIssues ? "bg-red-400" : "bg-amber-400"}`}
+                              aria-hidden="true"
+                            />
+                          ) : null}
+                          <span>Notes: {notes}</span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </SectionBlock>
+
+        <SectionBlock title="Shipping details" description="Only relevant formatted fields are shown.">
+          {shippingSummary.length ? (
+            <DetailGrid
+              items={shippingSummary.map((row) => ({
+                label: row.label,
+                value: row.value,
+              }))}
+            />
+          ) : (
+            <div className="text-sm text-white/60">No shipping details available.</div>
+          )}
+        </SectionBlock>
+
+        <SectionBlock title="Actions" description="Operational actions are grouped by priority.">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Button size="sm" variant="secondary" onClick={() => onCopy(o)}>
+              {copiedId === o.id ? "Copied!" : "Copy details"}
+            </Button>
+            {shippingStage === "PREPARING TO SHIP" ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => printShippingLabel(o)}
+                disabled={printingOrderId === o.id}
+                className="gap-1.5"
+              >
+                {printingOrderId === o.id ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Printer className="h-3.5 w-3.5" />
+                )}
+                {printingOrderId === o.id ? "Printing..." : "Print label"}
+              </Button>
+            ) : null}
+            {shippingStage === "PREPARING TO SHIP" ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() =>
+                    runRpc(o.id, "fn_add_rush_fee", {
+                      p_order_id: o.id,
+                      p_amount: 50,
+                    })
+                  }
+                  disabled={busy || rushFee > 0}
+                >
+                  {rushFee > 0 ? "Rush fee added" : "Add rush fee (+P50)"}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    markShippedAndComplete(
+                      o.id,
+                      draft.courier || o.shipping_method || "",
+                      draft.tracking
+                    )
+                  }
+                  disabled={busy}
+                >
+                  Mark as shipped
+                </Button>
+                {needsPreparing ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      runRpc(o.id, "fn_set_shipping_preparing", {
+                        p_order_id: o.id,
+                      })
+                    }
+                    disabled={busy}
+                  >
+                    Set to preparing
+                  </Button>
+                ) : null}
+              </>
+            ) : null}
+            {shippingStage === "SHIPPED" ? (
+              <>
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    runRpc(o.id, "fn_mark_completed_staff", {
+                      p_order_id: o.id,
+                    })
+                  }
+                  disabled={busy}
+                >
+                  Mark as completed
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => undoShipped(o.id)} disabled={busy}>
+                  Undo shipped
+                </Button>
+              </>
+            ) : null}
+          </div>
+
+          <DetailGrid
+            className="mt-4"
+            items={[
+              { label: "Subtotal", value: peso(Number(o.subtotal ?? 0)) },
+              { label: "Shipping fee", value: peso(Number(o.shipping_fee ?? 0)) },
+              { label: "Rush fee", value: peso(rushFee) },
+              { label: "Priority fee", value: priorityFee > 0 ? peso(priorityFee) : "-" },
+            ]}
+          />
+
+          {error ? <div className="mt-4 text-sm text-red-200">{error}</div> : null}
+        </SectionBlock>
+      </div>
+    );
+  };
+
   const renderItemDetails = (it: any) => {
     const title = getItemTitle(it);
     const thumb = getItemThumb(it);
@@ -3285,6 +3608,17 @@ export default function CashierShipmentsPage() {
                                 type="button"
                                 size="sm"
                                 variant="ghost"
+                                onClick={() => setDetailOrderId(String(o.id))}
+                                className="gap-1.5"
+                                disabled={busy}
+                              >
+                                <ScrollText className="h-3.5 w-3.5" />
+                                Details
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
                                 onClick={() => {
                                   setScanMode("booking_reference");
                                   setScanOrderId(o.id);
@@ -3613,18 +3947,20 @@ export default function CashierShipmentsPage() {
           <OrderDetailsModal
             open={Boolean(detailOrderId)}
             onClose={() => setDetailOrderId(null)}
+            width="xl"
             title={
               selectedOrder
                 ? `Order #${String(selectedOrder.id).slice(0, 8)}`
                 : "Order details"
             }
           >
-            {selectedOrder ? renderShippingDetails(selectedOrder) : null}
+            {selectedOrder ? renderShippingDetailsRefined(selectedOrder) : null}
           </OrderDetailsModal>
 
       <OrderDetailsModal
         open={Boolean(selectedItem)}
         onClose={() => setSelectedItem(null)}
+        width="lg"
         title={
               selectedItem ? (
                 <div>

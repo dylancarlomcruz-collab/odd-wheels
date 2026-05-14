@@ -25,7 +25,7 @@ export default function AdminInventoryBrowsePage() {
       const { data, error } = await supabase
         .from("products")
         .select(
-          "*, product_variants(id,condition,barcode,cost,price,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)"
+          "*, product_variants(id,condition,barcode,cost,price,qty,release_at,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)"
         )
         .eq("id", editProductId)
         .maybeSingle();

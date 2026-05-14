@@ -2808,7 +2808,7 @@ export default function InventorySheetPage() {
       const { data, error: fetchError } = await supabase
         .from("products")
         .select(
-          "id,title,brand,model,variation,special_tags,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)"
+          "id,title,brand,model,variation,special_tags,image_urls,is_active,created_at,product_variants(id,condition,barcode,cost,price,qty,release_at,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)"
         )
         .eq("id", id)
         .maybeSingle();

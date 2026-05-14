@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { createPortal } from "react-dom";
 import {
   CheckCircle2,
   ClipboardCheck,
@@ -19,6 +18,10 @@ import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
+import { ModalShell as OrderDetailsModal } from "@/components/ui/ModalShell";
+import { SectionBlock } from "@/components/ui/SectionBlock";
+import { DetailGrid } from "@/components/ui/DetailGrid";
+import { StatCard } from "@/components/ui/StatCard";
 import { toast } from "@/components/ui/toast";
 
 function parseJsonMaybe(v: any) {
@@ -264,48 +267,6 @@ function getStatusMeta(status: string) {
       icon: Clock,
     }
   );
-}
-
-type OrderDetailsModalProps = {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-};
-
-function OrderDetailsModal({ open, onClose, title, children }: OrderDetailsModalProps) {
-  React.useEffect(() => {
-    if (!open) return undefined;
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = originalOverflow;
-    };
-  }, [open]);
-
-  if (!open) return null;
-
-  const content = (
-    <div
-      className="fixed inset-0 z-[9999] overflow-y-auto bg-black/70 p-4"
-      onClick={onClose}
-    >
-      <div className="mx-auto w-full max-w-5xl" onClick={(e) => e.stopPropagation()}>
-        <Card>
-          <CardHeader className="flex items-center justify-between">
-            <div className="text-lg font-semibold">{title}</div>
-            <Button variant="ghost" onClick={onClose}>
-              Close
-            </Button>
-          </CardHeader>
-          <CardBody className="max-h-[75vh] overflow-y-auto">{children}</CardBody>
-        </Card>
-      </div>
-    </div>
-  );
-
-  if (typeof document === "undefined") return null;
-  return createPortal(content, document.body);
 }
 
 export default function AdminOrdersPage() {
@@ -615,6 +576,225 @@ export default function AdminOrdersPage() {
     );
   }
 
+  function renderOrderDetailsRefined(o: any) {
+    const details = parseJsonMaybe(o.shipping_details) ?? {};
+    const createdAt = new Date(o.created_at).toLocaleString("en-PH");
+    const statusMeta = getStatusMeta(o.status ?? "");
+    const shippingMethod = String(o.shipping_method ?? details.method ?? "-").toUpperCase();
+    const shippingContainer = formatShippingContainer(shippingMethod, details);
+    const customerName =
+      details.receiver_name ||
+      [details.first_name, details.last_name].filter(Boolean).join(" ") ||
+      o.customer_name ||
+      "Guest";
+    const customerPhone =
+      details.receiver_phone ||
+      details.phone ||
+      o.contact ||
+      o.customer_phone ||
+      "";
+    const customerAddress = getAddressOrBranch(shippingMethod, details, o);
+    const deadline = o.payment_deadline ?? o.reserved_expires_at ?? null;
+    const left = msLeft(deadline, now);
+    const showTimer = o.status === "AWAITING_PAYMENT" && !o.payment_hold && left !== null;
+    const items = itemsByOrderId[o.id] ?? [];
+
+    return (
+      <div className="space-y-5">
+        <SectionBlock>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="text-[0.72rem] font-medium uppercase tracking-[0.13em] text-white/48">
+                Order
+              </div>
+              <div className="mt-1 text-2xl font-semibold tracking-[-0.03em] text-white">
+                #{String(o.id).slice(0, 8)}
+              </div>
+              <div className="mt-1 text-sm text-white/56">{createdAt}</div>
+            </div>
+            <div className="text-right">
+              <div className="text-[0.72rem] font-medium uppercase tracking-[0.13em] text-white/48">
+                Total
+              </div>
+              <div className="mt-1 text-2xl font-semibold tracking-[-0.03em] text-white">
+                {peso(Number(o.total ?? 0))}
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Badge className={statusMeta.badgeClass}>{statusMeta.label}</Badge>
+            <Badge>Payment {String(o.payment_status ?? "-")}</Badge>
+            <Badge>{shippingMethod || "No shipping method"}</Badge>
+            <Badge>Channel {String(o.channel ?? "-")}</Badge>
+          </div>
+          {showTimer ? (
+            <div className="mt-4 flex items-center gap-2 text-sm text-yellow-200">
+              <Clock className="h-4 w-4" />
+              Payment window remaining: {fmtCountdown(left!)}
+            </div>
+          ) : null}
+          {o.payment_hold ? (
+            <div className="mt-4 text-sm text-yellow-200">Payment window is currently on hold.</div>
+          ) : null}
+        </SectionBlock>
+
+        <SectionBlock
+          title="Customer & delivery"
+          description="Customer and shipping information formatted for quick review."
+        >
+          <DetailGrid
+            items={[
+              { label: "Customer", value: customerName || "-" },
+              {
+                label: "Phone",
+                value: customerPhone || "-",
+                hint: customerPhone ? "Copy the phone number below when needed." : undefined,
+              },
+              { label: "Address / branch", value: customerAddress || "-" },
+              { label: "Shipping method", value: shippingMethod || "-" },
+              { label: "Packaging", value: shippingContainer || "-" },
+              { label: "Payment method", value: String(o.payment_method ?? "-") },
+            ]}
+          />
+          {customerPhone ? (
+            <div className="mt-3">
+              <Button variant="ghost" size="sm" onClick={() => onCopyPhone(customerPhone)}>
+                <ClipboardCopy className="h-3.5 w-3.5" />
+                Copy phone
+              </Button>
+            </div>
+          ) : null}
+        </SectionBlock>
+
+        <SectionBlock title="Operational snapshot">
+          <DetailGrid
+            items={[
+              { label: "Order status", value: statusMeta.label },
+              { label: "Payment status", value: String(o.payment_status ?? "-") },
+              {
+                label: "Payment deadline",
+                value: deadline ? new Date(deadline).toLocaleString("en-PH") : "-",
+                hint: showTimer ? `Live countdown: ${fmtCountdown(left!)}` : undefined,
+              },
+              {
+                label: "Receipt status",
+                value: o.receipt_url ? "Receipt uploaded" : "No receipt uploaded",
+              },
+            ]}
+          />
+        </SectionBlock>
+
+        {o.receipt_url ? (
+          <SectionBlock title="Receipt" description="Open the uploaded receipt in full size.">
+            <a href={o.receipt_url} target="_blank" rel="noreferrer" className="block">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={o.receipt_url}
+                alt="Receipt"
+                className="max-h-80 w-full rounded-2xl border border-white/10 bg-neutral-50 object-contain"
+              />
+            </a>
+          </SectionBlock>
+        ) : null}
+
+        <SectionBlock
+          title={`Items (${items.length})`}
+          description="Purchased lines with quantity and value snapshot."
+        >
+          {items.length === 0 ? (
+            <div className="text-sm text-white/60">No items found for this order.</div>
+          ) : (
+            <div className="space-y-2.5">
+              {items.map((it: any, idx: number) => {
+                const thumb = getItemThumb(it);
+                const title = getItemTitle(it);
+                const price = getItemPrice(it);
+                const qty = Math.max(1, Number(it?.qty ?? 1));
+                const rawLine = Number(it?.line_total);
+                const line = Number.isFinite(rawLine) && rawLine > 0 ? rawLine : price * qty;
+
+                return (
+                  <div
+                    key={`${o.id}-${idx}`}
+                    className="surface-subtle flex items-center gap-3 p-3 sm:p-3.5"
+                  >
+                    <div className="h-14 w-14 overflow-hidden rounded-xl border border-white/10 bg-bg-800 flex-shrink-0">
+                      {thumb ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={thumb} alt={title} className="h-full w-full object-cover" />
+                      ) : null}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate font-medium text-white">{title}</div>
+                          <div className="mt-1 text-sm text-white/58">
+                            {qty} x {peso(price)}
+                          </div>
+                        </div>
+                        <div className="text-sm font-medium text-white/88">{peso(line)}</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </SectionBlock>
+
+        <SectionBlock title="Actions" description="Primary operational actions for this order.">
+          <div className="flex flex-wrap gap-2.5">
+            {o.payment_status === "PAID" ? (
+              <Button variant="secondary" onClick={() => onCopy(o)}>
+                <ClipboardCopy className="h-4 w-4" />
+                {copiedId === o.id ? "Copied!" : "Copy details"}
+              </Button>
+            ) : null}
+
+            {o.status === "PENDING_APPROVAL" ? (
+              <Button variant="secondary" onClick={() => approveOrder(o.id)}>
+                <ClipboardCheck className="h-4 w-4" />
+                Approve order
+              </Button>
+            ) : null}
+
+            {o.status === "PAYMENT_SUBMITTED" ? (
+              <>
+                <Button variant="secondary" onClick={() => approvePayment(o.id, true)}>
+                  <CheckCircle2 className="h-4 w-4" />
+                  Approve payment
+                </Button>
+                <Button variant="ghost" onClick={() => approvePayment(o.id, false)}>
+                  <XCircle className="h-4 w-4" />
+                  Reject payment
+                </Button>
+              </>
+            ) : null}
+          </div>
+
+          {o.status !== "VOIDED" && o.status !== "CANCELLED" ? (
+            <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+              <Input
+                label="Void reason"
+                placeholder="Optional note for the audit trail"
+                value={voidReason[o.id] ?? ""}
+                onChange={(e) =>
+                  setVoidReason((m) => ({
+                    ...m,
+                    [o.id]: e.target.value,
+                  }))
+                }
+              />
+              <Button variant="ghost" onClick={() => voidOrder(o.id)}>
+                Void order
+              </Button>
+            </div>
+          ) : null}
+        </SectionBlock>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <Card>
@@ -636,33 +816,25 @@ export default function AdminOrdersPage() {
         </CardHeader>
 
         <CardBody className="space-y-6">
-          <div className="grid grid-cols-3 gap-2 sm:gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             {summaryCards.map((card) => {
               const meta = getStatusMeta(card.status);
               const Icon = meta.icon;
               const active = statusFilter === card.status;
               return (
-                <button
+                <StatCard
                   key={card.status}
-                  type="button"
                   onClick={() =>
                     setStatusFilter((prev) => (prev === card.status ? null : card.status))
                   }
-                  className={`rounded-2xl border p-3 text-left text-xs transition sm:p-4 sm:text-sm ${
-                    active
-                      ? "border-white/30 bg-bg-900/50 shadow-soft"
-                      : "border-white/10 bg-bg-900/30 hover:border-white/20 hover:bg-bg-900/40"
-                  }`}
+                  label={meta.label}
+                  value={card.count}
+                  icon={Icon}
+                  active={active}
                   aria-pressed={active}
-                >
-                  <div className="flex items-center justify-between text-white/60">
-                    <span>{meta.label}</span>
-                    <Icon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                  </div>
-                  <div className={`text-lg font-semibold sm:text-2xl ${card.countClass}`}>
-                    {card.count}
-                  </div>
-                </button>
+                  valueClassName={card.countClass}
+                  hint={active ? "Showing this queue" : "Tap to filter"}
+                />
               );
             })}
           </div>
@@ -779,13 +951,14 @@ export default function AdminOrdersPage() {
         <OrderDetailsModal
           open={Boolean(selectedOrder)}
           onClose={() => setDetailOrderId(null)}
+          width="xl"
           title={
             selectedOrder
               ? `Order #${String(selectedOrder.id).slice(0, 8)} details`
               : "Order details"
           }
         >
-          {selectedOrder ? renderOrderDetails(selectedOrder) : null}
+          {selectedOrder ? renderOrderDetailsRefined(selectedOrder) : null}
         </OrderDetailsModal>
         </CardBody>
       </Card>

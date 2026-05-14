@@ -1443,7 +1443,7 @@ export default function ShopPageClient() {
     const { data, error } = await supabase
       .from("products")
       .select(
-        "*, product_variants(id,condition,barcode,cost,price,qty,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)"
+        "*, product_variants(id,condition,barcode,cost,price,qty,release_at,ship_class,issue_notes,issue_photo_urls,public_notes,created_at)"
       )
       .eq("id", product.key)
       .maybeSingle();

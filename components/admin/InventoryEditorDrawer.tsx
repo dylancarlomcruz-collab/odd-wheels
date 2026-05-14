@@ -28,6 +28,15 @@ import {
   type ImageCrop,
 } from "@/lib/imageCrop";
 import {
+  datetimeLocalToIso,
+  formatReleaseDateTime,
+  getProductReleaseSummary,
+  getReleaseBadgeClass,
+  getVariantReleaseLabel,
+  isScheduledRelease,
+  toDatetimeLocalValue,
+} from "@/lib/inventoryRelease";
+import {
   normalizeProductSpecialTags,
   type ProductSpecialTag,
 } from "@/lib/productTags";
@@ -121,6 +130,23 @@ function normalizeShipClass(value?: string | null) {
   return cleaned ? cleaned : null;
 }
 
+function resolveScheduledReleaseAt(
+  scheduleReleaseEnabled: boolean,
+  scheduledReleaseAtInput: string
+) {
+  if (!scheduleReleaseEnabled) return null;
+  const releaseAt = datetimeLocalToIso(scheduledReleaseAtInput);
+  if (!releaseAt) {
+    throw new Error("Choose a release date and time before saving scheduled items.");
+  }
+  if (Date.parse(releaseAt) <= Date.now()) {
+    throw new Error(
+      "Release time must be in the future. Turn scheduling off to publish immediately."
+    );
+  }
+  return releaseAt;
+}
+
 export function InventoryEditorDrawer({
   product,
   onClose,
@@ -139,6 +165,10 @@ export function InventoryEditorDrawer({
   const [issueUploadId, setIssueUploadId] = React.useState<string | null>(null);
   const [isActive, setIsActive] = React.useState(true);
   const [variants, setVariants] = React.useState<VariantDraft[]>([]);
+  const [scheduleReleaseEnabled, setScheduleReleaseEnabled] = React.useState(false);
+  const [scheduledReleaseAtInput, setScheduledReleaseAtInput] = React.useState("");
+  const [rescheduleLiveVariants, setRescheduleLiveVariants] = React.useState(false);
+  const [publishScheduledNow, setPublishScheduledNow] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [selling, setSelling] = React.useState(false);
   const [revertingSale, setRevertingSale] = React.useState(false);
@@ -202,6 +232,11 @@ export function InventoryEditorDrawer({
         _delete: false,
       }))
     );
+    const releaseSummary = getProductReleaseSummary(product);
+    setScheduleReleaseEnabled(releaseSummary.state === "scheduled");
+    setScheduledReleaseAtInput(toDatetimeLocalValue(releaseSummary.releaseAt));
+    setRescheduleLiveVariants(false);
+    setPublishScheduledNow(false);
     setNewImage("");
     setCropEditor(null);
     setLastSoldEntry(null);
@@ -214,6 +249,26 @@ export function InventoryEditorDrawer({
   const editableVariants = variants.filter((v) => !v._delete);
   const issuePhotoVariants = editableVariants.filter((v) =>
     supportsIssueDetailCondition(v.condition)
+  );
+  const releaseSummary = React.useMemo(
+    () => getProductReleaseSummary({ is_active: isActive, product_variants: editableVariants }),
+    [editableVariants, isActive]
+  );
+  const hasLiveVariants = React.useMemo(
+    () =>
+      editableVariants.some(
+        (variant) =>
+          Number(variant.qty ?? 0) > 0 && !isScheduledRelease(variant.release_at)
+      ),
+    [editableVariants]
+  );
+  const hasScheduledVariants = React.useMemo(
+    () =>
+      editableVariants.some(
+        (variant) =>
+          Number(variant.qty ?? 0) > 0 && isScheduledRelease(variant.release_at)
+      ),
+    [editableVariants]
   );
 
   function setQuickThumbUploading(productIdForUpload: string, active: boolean) {
@@ -891,6 +946,7 @@ export function InventoryEditorDrawer({
           ? [...(base?.allowed_jnt_pouches ?? [])]
           : [],
         created_at: null,
+        release_at: base?.release_at ?? null,
         _isNew: true,
         _delete: false,
       },
@@ -947,6 +1003,10 @@ export function InventoryEditorDrawer({
     setSaving(true);
 
     try {
+      const scheduledReleaseAt = resolveScheduledReleaseAt(
+        scheduleReleaseEnabled,
+        scheduledReleaseAtInput
+      );
       const imagesToSave = options?.imagesOverride ?? images;
         const { error: productError } = await supabase
           .from("products")
@@ -971,6 +1031,16 @@ export function InventoryEditorDrawer({
         if (existing.length) {
           await Promise.all(
             existing.map(async (v) => {
+              const isLiveVariant =
+                Number(v.qty ?? 0) > 0 && !isScheduledRelease(v.release_at);
+              let nextReleaseAt = v.release_at ?? null;
+              if (publishScheduledNow && isScheduledRelease(v.release_at)) {
+                nextReleaseAt = null;
+              } else if (scheduledReleaseAt) {
+                if (isScheduledRelease(v.release_at) || rescheduleLiveVariants || !isLiveVariant) {
+                  nextReleaseAt = scheduledReleaseAt;
+                }
+              }
               const { data, error } = await supabase
                 .from("product_variants")
                 .update({
@@ -987,6 +1057,7 @@ export function InventoryEditorDrawer({
                     isNearMintCondition(v.condition)
                       ? v.public_notes || "Near Mint Condition"
                       : v.public_notes || null,
+                  release_at: nextReleaseAt,
                   issue_notes: null,
                   issue_photo_urls:
                     supportsIssueDetailCondition(v.condition)
@@ -1036,6 +1107,7 @@ export function InventoryEditorDrawer({
               cost: safeNumber(v.cost),
               price: safeNumber(v.price) ?? 0,
               qty: Math.max(0, Math.trunc(safeNumber(v.qty) ?? 0)),
+              release_at: scheduledReleaseAt,
               ship_class: normalizeShipClass(v.ship_class),
               allowed_couriers: normalizeRestrictionList(v.allowed_couriers),
               allowed_lbc_packages: normalizeRestrictionList(v.allowed_lbc_packages),
@@ -1308,7 +1380,12 @@ export function InventoryEditorDrawer({
           <div className="rounded-2xl border border-white/10 bg-bg-900/50 p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div className="font-semibold">Product identity</div>
-              <Badge>{productId.slice(0, 8)}</Badge>
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge className={getReleaseBadgeClass(releaseSummary.state)}>
+                  {releaseSummary.label}
+                </Badge>
+                <Badge>{productId.slice(0, 8)}</Badge>
+              </div>
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
@@ -1327,6 +1404,62 @@ export function InventoryEditorDrawer({
                 These tags control the standout badges on the shop product card.
               </div>
             </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-bg-900/50 p-4 space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold">Release scheduling</div>
+                <div className="text-sm text-white/60">
+                  New variants can be scheduled directly. Already-live variants only move to a
+                  future release if you explicitly reschedule them.
+                </div>
+              </div>
+              <Badge className={getReleaseBadgeClass(releaseSummary.state)}>
+                {releaseSummary.label}
+              </Badge>
+            </div>
+            <Checkbox
+              checked={scheduleReleaseEnabled}
+              onChange={(next) => {
+                setScheduleReleaseEnabled(next);
+                if (next) {
+                  setPublishScheduledNow(false);
+                  if (!scheduledReleaseAtInput) {
+                    const nextDate = new Date(Date.now() + 1000 * 60 * 60 * 24);
+                    setScheduledReleaseAtInput(toDatetimeLocalValue(nextDate.toISOString()));
+                  }
+                }
+              }}
+              label="Schedule release"
+            />
+            {scheduleReleaseEnabled ? (
+              <div className="grid gap-3 md:grid-cols-2">
+                <Input
+                  label="Go live at"
+                  type="datetime-local"
+                  value={scheduledReleaseAtInput}
+                  onChange={(e) => setScheduledReleaseAtInput(e.target.value)}
+                />
+                <div className="rounded-xl border border-white/10 bg-black/15 px-3 py-2 text-sm text-white/72">
+                  Items saved while this is enabled will go live on the selected date.
+                </div>
+              </div>
+            ) : null}
+            {scheduleReleaseEnabled && hasLiveVariants ? (
+              <Checkbox
+                checked={rescheduleLiveVariants}
+                onChange={setRescheduleLiveVariants}
+                label="Reschedule already-live variants"
+              />
+            ) : null}
+            {!scheduleReleaseEnabled && hasScheduledVariants ? (
+              <Checkbox
+                checked={publishScheduledNow}
+                onChange={setPublishScheduledNow}
+                label="Publish existing scheduled variants immediately on save"
+              />
+            ) : null}
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-bg-900/50 p-4 space-y-3">
@@ -1350,6 +1483,9 @@ export function InventoryEditorDrawer({
                       </div>
                       <div className="text-xs text-white/50 truncate">
                         Barcode: {v.barcode || "(empty)"}
+                      </div>
+                      <div className="mt-1 text-[11px] text-white/45">
+                        {getVariantReleaseLabel(v)}
                       </div>
                     </div>
                     <Input

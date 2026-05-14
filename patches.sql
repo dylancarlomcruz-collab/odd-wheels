@@ -15,6 +15,30 @@ for insert with check (bucket_id = 'sell-trade-uploads' and auth.role() = 'authe
 alter table public.cart_items
   add column if not exists protector_selected boolean not null default false;
 
+-- Scheduled release support
+alter table public.product_variants
+  add column if not exists release_at timestamptz;
+
+create index if not exists idx_product_variants_release_at
+  on public.product_variants (release_at);
+
+drop policy if exists "public read available products" on public.products;
+create policy "public read available products" on public.products
+for select using (
+  is_active = true
+  and exists (
+    select 1
+    from public.product_variants pv
+    where pv.product_id = products.id
+      and pv.qty > 0
+      and (pv.release_at is null or pv.release_at <= now())
+  )
+);
+
+drop policy if exists "public read in-stock variants" on public.product_variants;
+create policy "public read in-stock variants" on public.product_variants
+for select using (qty > 0 and (release_at is null or release_at <= now()));
+
 -- Price charm: round down to prices ending in 9 for display
 update public.product_variants
 set

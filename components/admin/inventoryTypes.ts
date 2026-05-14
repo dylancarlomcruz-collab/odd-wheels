@@ -10,6 +10,7 @@ export type InventoryVariant = {
   issue_photo_urls: string[] | null;
   public_notes: string | null;
   created_at: string | null;
+  release_at: string | null;
 };
 
 export type InventoryProduct = {

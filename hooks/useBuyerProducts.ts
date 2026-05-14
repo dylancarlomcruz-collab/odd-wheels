@@ -60,7 +60,7 @@ export function useBuyerProducts({ brand }: { brand: string }) {
       let q = supabase
         .from("products")
         .select(
-          "id, title, brand, model, variation, image_urls, is_active, product_variants(price, sale_price, discount_percent, qty)"
+          "id, title, brand, model, variation, image_urls, is_active, product_variants(price, sale_price, discount_percent, qty, release_at)"
         )
         .eq("is_active", true);
 

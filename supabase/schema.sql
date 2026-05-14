@@ -294,6 +294,7 @@ create table if not exists public.product_variants (
   sale_price numeric,
   discount_percent numeric,
   qty int not null default 0 check (qty >= 0),
+  release_at timestamptz,
   ship_class text default 'MINI_GT' check (ship_class in ('MINI_GT','KAIDO','POPRACE','ACRYLIC_TRUE_SCALE','TRUCKS','BLISTER','TOMICA','TOMICA_LIMITED_VINTAGE_NEO','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE','FIGURES_DIORAMA')),
   allowed_couriers text[],
   allowed_lbc_packages text[],
@@ -307,6 +308,8 @@ create table if not exists public.product_variants (
 );
 
 create index if not exists idx_variants_product on public.product_variants(product_id);
+create index if not exists idx_product_variants_release_at
+  on public.product_variants (release_at);
 
 alter table public.product_variants
   drop constraint if exists product_variants_ship_class_check;
@@ -361,6 +364,7 @@ alter table public.product_variants
   );
 
 alter table public.product_variants
+  add column if not exists release_at timestamptz,
   add column if not exists first_stocked_at timestamptz,
   add column if not exists in_stock_since timestamptz,
   add column if not exists last_stock_added_at timestamptz,
@@ -700,7 +704,16 @@ for update using (public.is_admin()) with check (public.is_admin());
 -- ===== Products Policies =====
 drop policy if exists "public read available products" on public.products;
 create policy "public read available products" on public.products
-for select using (is_active = true);
+for select using (
+  is_active = true
+  and exists (
+    select 1
+    from public.product_variants pv
+    where pv.product_id = products.id
+      and pv.qty > 0
+      and (pv.release_at is null or pv.release_at <= now())
+  )
+);
 
 drop policy if exists "staff read all products" on public.products;
 create policy "staff read all products" on public.products
@@ -721,7 +734,7 @@ for delete using (public.is_admin());
 -- ===== Variants Policies =====
 drop policy if exists "public read in-stock variants" on public.product_variants;
 create policy "public read in-stock variants" on public.product_variants
-for select using (qty > 0);
+for select using (qty > 0 and (release_at is null or release_at <= now()));
 
 drop policy if exists "staff read all variants" on public.product_variants;
 create policy "staff read all variants" on public.product_variants

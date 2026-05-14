@@ -12,6 +12,12 @@ import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 import { normalizeBarcode } from "@/lib/barcode";
 import { conditionSortOrder, formatConditionLabel, isBlisterCondition } from "@/lib/conditions";
 import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
+import {
+  formatReleaseDateTime,
+  getProductReleaseSummary,
+  getReleaseBadgeClass,
+  getVariantReleaseLabel,
+} from "@/lib/inventoryRelease";
 
 export type AdminVariant = {
   id: string;
@@ -46,6 +52,7 @@ export type AdminVariant = {
   issue_photo_urls: string[] | null;
   public_notes: string | null;
   created_at: string | null;
+  release_at: string | null;
 };
 
 export type AdminProduct = {
@@ -181,6 +188,7 @@ function AdminProductCard({
 }) {
   const { totalQty, minPrice, maxPrice, variantCount } = derivedTotals(product);
   const isSoldOut = totalQty <= 0 || !product.is_active;
+  const releaseSummary = getProductReleaseSummary(product);
   const priceLabel =
     minPrice === maxPrice
       ? formatPHP(minPrice)
@@ -202,6 +210,7 @@ function AdminProductCard({
   }, [product.id, variants]);
 
   const selected = variants.find((v) => v.id === selectedId) ?? variants[0];
+  const selectedReleaseLabel = selected ? getVariantReleaseLabel(selected) : "";
 
   React.useEffect(() => {
     setPriceDraft(
@@ -307,6 +316,11 @@ function AdminProductCard({
           >
             {isSoldOut ? "SOLD OUT" : "ACTIVE"}
           </Badge>
+          <Badge className={getReleaseBadgeClass(releaseSummary.state)}>
+            {releaseSummary.state === "scheduled" && releaseSummary.releaseAt
+              ? `Scheduled: ${formatReleaseDateTime(releaseSummary.releaseAt)}`
+              : releaseSummary.label}
+          </Badge>
           <Badge className="ml-auto bg-white/5 border-white/10 text-white/70">
             {variantCount} variants
           </Badge>
@@ -356,8 +370,13 @@ function AdminProductCard({
             </div>
 
             <div className="flex items-center justify-between rounded-xl border border-white/10 bg-black/20 px-3 py-2">
-              <div className="text-xs text-white/60">
-                Variant qty: {Number(selected?.qty ?? 0)}
+              <div className="space-y-1">
+                <div className="text-xs text-white/60">
+                  Variant qty: {Number(selected?.qty ?? 0)}
+                </div>
+                {selected ? (
+                  <div className="text-[11px] text-white/45">{selectedReleaseLabel}</div>
+                ) : null}
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -458,6 +477,9 @@ export function InventoryBrowseGrid({
   const [noPhotoOnly, setNoPhotoOnly] = React.useState(false);
   const [scannerOpen, setScannerOpen] = React.useState(false);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
+  const [releaseFilter, setReleaseFilter] = React.useState<
+    "all" | "live" | "scheduled" | "today_upcoming"
+  >("all");
   const [selectedBrands, setSelectedBrands] = React.useState<string[]>([]);
   const [selectedConditions, setSelectedConditions] = React.useState<
     AdminVariant["condition"][]
@@ -487,6 +509,7 @@ export function InventoryBrowseGrid({
     return rows.filter((p) => {
       const { totalQty } = derivedTotals(p);
       const isSoldOut = totalQty <= 0 || !p.is_active;
+      const releaseSummary = getProductReleaseSummary(p);
       const hasPhoto = Array.isArray(p.image_urls) && p.image_urls.length > 0;
       const resolvedBrand = p.brand ?? "Unknown";
       if (selectedBrands.length && !selectedBrands.includes(resolvedBrand)) {
@@ -520,10 +543,35 @@ export function InventoryBrowseGrid({
       if (inStockOnly && !showSoldOut && isSoldOut) {
         return false;
       }
+      if (releaseFilter === "live" && releaseSummary.state !== "live") {
+        return false;
+      }
+      if (releaseFilter === "scheduled" && releaseSummary.state !== "scheduled") {
+        return false;
+      }
+      if (releaseFilter === "today_upcoming") {
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const releaseAt = releaseSummary.releaseAt
+          ? Date.parse(releaseSummary.releaseAt)
+          : Number.NaN;
+        if (!Number.isFinite(releaseAt) || releaseAt < todayStart.getTime()) {
+          return false;
+        }
+      }
       if (noPhotoOnly && hasPhoto) return false;
       return true;
     });
-  }, [rows, selectedBrands, selectedConditions, selectedShipClasses, inStockOnly, showSoldOut, noPhotoOnly]);
+  }, [
+    rows,
+    selectedBrands,
+    selectedConditions,
+    selectedShipClasses,
+    inStockOnly,
+    showSoldOut,
+    releaseFilter,
+    noPhotoOnly,
+  ]);
 
   const loadPage = React.useCallback(
     async (pageIndex: number, replace = false) => {
@@ -545,8 +593,8 @@ export function InventoryBrowseGrid({
       const hasVariantFilters =
         selectedConditions.length > 0 || selectedShipClasses.length > 0 || applyStockFilter;
       const variantSelect = hasVariantFilters
-        ? "product_variants!inner(id,condition,barcode,cost,price,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)"
-        : "product_variants(id,condition,barcode,cost,price,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)";
+        ? "product_variants!inner(id,condition,barcode,cost,price,qty,release_at,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)"
+        : "product_variants(id,condition,barcode,cost,price,qty,release_at,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,issue_notes,issue_photo_urls,public_notes,created_at)";
       let batch: AdminProduct[] = [];
 
       if (rawTerm && safeTerm && isBarcodeLike) {
@@ -960,7 +1008,10 @@ export function InventoryBrowseGrid({
   }, [filtersKey, loadPage]);
 
   const activeFilterCount =
-    selectedBrands.length + selectedConditions.length + selectedShipClasses.length;
+    selectedBrands.length +
+    selectedConditions.length +
+    selectedShipClasses.length +
+    (releaseFilter === "all" ? 0 : 1);
 
   return (
     <div className="space-y-4">
@@ -1056,6 +1107,36 @@ export function InventoryBrowseGrid({
           />
         </div>
 
+        <div className="flex flex-wrap items-center gap-2">
+          {[
+            { value: "all", label: "All" },
+            { value: "live", label: "Live" },
+            { value: "scheduled", label: "Scheduled" },
+            { value: "today_upcoming", label: "Today / upcoming" },
+          ].map((option) => {
+            const active = releaseFilter === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() =>
+                  setReleaseFilter(
+                    option.value as "all" | "live" | "scheduled" | "today_upcoming"
+                  )
+                }
+                className={[
+                  "rounded-full border px-3 py-1.5 text-xs font-medium transition",
+                  active
+                    ? "border-accent-500/50 bg-accent-500/15 text-white"
+                    : "border-white/10 bg-white/[0.03] text-white/68 hover:bg-white/[0.06]",
+                ].join(" ")}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+
         {filtersOpen ? (
           <div className="rounded-xl border border-white/10 bg-black/20 p-3 space-y-3">
             <div className="flex items-center justify-between">
@@ -1067,6 +1148,7 @@ export function InventoryBrowseGrid({
                   setSelectedBrands([]);
                   setSelectedConditions([]);
                   setSelectedShipClasses([]);
+                  setReleaseFilter("all");
                 }}
               >
                 Reset filters

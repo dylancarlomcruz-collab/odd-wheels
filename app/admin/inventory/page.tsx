@@ -46,6 +46,14 @@ import {
   normalizeProductSpecialTags,
   type ProductSpecialTag,
 } from "@/lib/productTags";
+import {
+  datetimeLocalToIso,
+  formatReleaseDateTime,
+  getProductReleaseSummary,
+  getReleaseBadgeClass,
+  getVariantReleaseLabel,
+  isScheduledRelease,
+} from "@/lib/inventoryRelease";
 
 type Product = {
   id: string;
@@ -57,7 +65,12 @@ type Product = {
   image_urls: string[] | null;
   is_active: boolean;
   created_at: string;
-  product_variants?: Array<{ ship_class: string | null }> | null;
+  product_variants?: Array<{
+    ship_class: string | null;
+    condition?: string | null;
+    qty?: number | null;
+    release_at?: string | null;
+  }> | null;
 };
 type ProductSummary = Pick<
   Product,
@@ -70,7 +83,12 @@ type ProductSummary = Pick<
   | "image_urls"
   | "is_active"
 > & {
-  product_variants?: Array<{ ship_class: string | null; condition?: string | null }> | null;
+  product_variants?: Array<{
+    ship_class: string | null;
+    condition?: string | null;
+    qty?: number | null;
+    release_at?: string | null;
+  }> | null;
 };
 
 type Variant = {
@@ -104,6 +122,7 @@ type Variant = {
   ship_class: string | null;
   barcode: string | null;
   created_at: string;
+  release_at: string | null;
 };
 
 type VariantCondition = Variant["condition"];
@@ -149,6 +168,7 @@ type ExistingBarcodeMatch = {
   condition: VariantCondition;
   ship_class: ShipClass | null;
   barcode: string | null;
+  release_at: string | null;
   product: Product | null;
 };
 
@@ -236,6 +256,18 @@ type UploadCandidate = {
   confidence: number;
   algo_distances?: Record<string, number>;
 };
+type InventoryView = "editor" | "scheduled";
+type ScheduledPostingItem = {
+  id: string;
+  product_id: string;
+  condition: VariantCondition;
+  qty: number;
+  price: number | null;
+  ship_class: string | null;
+  barcode: string | null;
+  release_at: string | null;
+  product: Product | null;
+};
 
 const BULK_CONDITIONS: VariantCondition[] = [...ALL_VARIANT_CONDITIONS];
 const CONDITION_SELECT_OPTIONS: VariantCondition[] = [...ALL_VARIANT_CONDITIONS];
@@ -274,6 +306,7 @@ const WARM_FEATURE_DEFAULT_PRODUCTS = 20;
 const WARM_FEATURE_MAX_IMAGES = 30;
 const WARM_FEATURE_MAX_PRODUCTS = 500;
 const WARM_BATCH_RETRY_LIMIT = 3;
+const INVENTORY_SCHEDULE_SETTINGS_KEY = "oddwheels:admin_inventory_schedule";
 
 function autoMatchBadgeClass(status: string) {
   switch (status) {
@@ -911,14 +944,31 @@ export default function AdminInventoryPage() {
   const [showAllSearchResults, setShowAllSearchResults] = React.useState(false);
   const [showExistingVariants, setShowExistingVariants] = React.useState(false);
   const [showAdvancedTools, setShowAdvancedTools] = React.useState(false);
+  const [inventoryView, setInventoryView] =
+    React.useState<InventoryView>("editor");
   const [selectedProduct, setSelectedProduct] = React.useState<Product | null>(
     null
   );
   const [variants, setVariants] = React.useState<Variant[]>([]);
+  const [scheduleReleaseEnabled, setScheduleReleaseEnabled] = React.useState(false);
+  const [scheduledReleaseAtInput, setScheduledReleaseAtInput] =
+    React.useState("");
+  const [rescheduleLiveVariants, setRescheduleLiveVariants] =
+    React.useState(false);
+  const [publishScheduledNow, setPublishScheduledNow] = React.useState(false);
   const [loadingVariants, setLoadingVariants] = React.useState(false);
   const [savingVariantIds, setSavingVariantIds] = React.useState<
     Record<string, boolean>
   >({});
+  const [scheduledPostingItems, setScheduledPostingItems] = React.useState<
+    ScheduledPostingItem[]
+  >([]);
+  const [scheduledPostingLoading, setScheduledPostingLoading] =
+    React.useState(false);
+  const [scheduledPostingError, setScheduledPostingError] = React.useState<
+    string | null
+  >(null);
+  const [scheduledPostingSearch, setScheduledPostingSearch] = React.useState("");
 
   // Barcode lookup
   const [barcodeLookup, setBarcodeLookup] = React.useState("");
@@ -949,6 +999,7 @@ export default function AdminInventoryPage() {
   const [newCardVariation, setNewCardVariation] = React.useState("");
   const barcodeLookupTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastAutoLookupRef = React.useRef("");
+  const scheduleSettingsLoadedRef = React.useRef(false);
   const barcodeInputRef = React.useRef<HTMLInputElement | null>(null);
   const modelInputRef = React.useRef<HTMLInputElement | null>(null);
   const focusAfterSaveRef = React.useRef(false);
@@ -1056,6 +1107,42 @@ export default function AdminInventoryPage() {
       });
     };
   }, []);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(INVENTORY_SCHEDULE_SETTINGS_KEY);
+      if (!raw) {
+        scheduleSettingsLoadedRef.current = true;
+        return;
+      }
+      const parsed = JSON.parse(raw) as {
+        enabled?: boolean;
+        releaseAtInput?: string;
+      } | null;
+      setScheduleReleaseEnabled(Boolean(parsed?.enabled));
+      setScheduledReleaseAtInput(String(parsed?.releaseAtInput ?? ""));
+    } catch {
+      // Ignore bad local settings and keep defaults.
+    } finally {
+      scheduleSettingsLoadedRef.current = true;
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined" || !scheduleSettingsLoadedRef.current) return;
+    try {
+      window.localStorage.setItem(
+        INVENTORY_SCHEDULE_SETTINGS_KEY,
+        JSON.stringify({
+          enabled: scheduleReleaseEnabled,
+          releaseAtInput: scheduledReleaseAtInput,
+        })
+      );
+    } catch {
+      // Ignore localStorage failures.
+    }
+  }, [scheduleReleaseEnabled, scheduledReleaseAtInput]);
 
   // Product fields (edit)
   const [title, setTitle] = React.useState("");
@@ -1443,8 +1530,12 @@ export default function AdminInventoryPage() {
     void loadBarcodeLogs();
     void loadProtectorStock();
     void loadBrandSuggestions();
-    void loadReviewQueue();
   }, []);
+
+  React.useEffect(() => {
+    if (inventoryView !== "scheduled") return;
+    void loadScheduledPostingItems();
+  }, [inventoryView]);
 
   React.useEffect(() => {
     if (!focusAfterSaveRef.current) return;
@@ -1672,6 +1763,55 @@ export default function AdminInventoryPage() {
     setProtectorStockSaving(false);
   }
 
+  async function loadScheduledPostingItems() {
+    setScheduledPostingLoading(true);
+    setScheduledPostingError(null);
+    try {
+      const nowIso = new Date().toISOString();
+      const { data, error } = await supabase
+        .from("product_variants")
+        .select(
+          "id,product_id,condition,qty,price,ship_class,barcode,release_at,product:products(id,title,brand,model,variation,special_tags,image_urls,is_active,created_at)"
+        )
+        .gt("qty", 0)
+        .gt("release_at", nowIso)
+        .order("release_at", { ascending: true })
+        .limit(500);
+
+      if (error) throw error;
+
+      const nextItems = ((data as any[] | null) ?? [])
+        .map((row) => {
+          const productRaw = Array.isArray(row?.product)
+            ? row.product[0] ?? null
+            : row?.product ?? null;
+          return {
+            id: String(row?.id ?? ""),
+            product_id: String(row?.product_id ?? ""),
+            condition: row?.condition as VariantCondition,
+            qty: Number(row?.qty ?? 0),
+            price:
+              row?.price === null || typeof row?.price === "undefined"
+                ? null
+                : Number(row.price),
+            ship_class: row?.ship_class ? String(row.ship_class) : null,
+            barcode: row?.barcode ? String(row.barcode) : null,
+            release_at: row?.release_at ? String(row.release_at) : null,
+            product: productRaw ? (productRaw as Product) : null,
+          } satisfies ScheduledPostingItem;
+        })
+        .filter((item) => item.product?.is_active !== false);
+      setScheduledPostingItems(nextItems);
+    } catch (error: any) {
+      setScheduledPostingError(
+        error?.message ?? "Failed to load scheduled posting items."
+      );
+      setScheduledPostingItems([]);
+    } finally {
+      setScheduledPostingLoading(false);
+    }
+  }
+
   async function runSearch() {
     const q = search.trim();
     if (!q) return;
@@ -1741,6 +1881,10 @@ export default function AdminInventoryPage() {
     setSelectedImages({});
     setLookupMsg(null);
     setQueuedVariants([]);
+    setSavingVariantIds({});
+    setAddQtyByVariant({});
+    setRescheduleLiveVariants(false);
+    setPublishScheduledNow(false);
     const nextDefaultPrice = getDefaultPriceForBrand(p.brand ?? "");
     lastAutoPriceRef.current = nextDefaultPrice;
     setPrice(nextDefaultPrice);
@@ -1749,7 +1893,7 @@ export default function AdminInventoryPage() {
     const { data, error } = await supabase
       .from("product_variants")
       .select(
-        "id,product_id,condition,issue_notes,issue_photo_urls,public_notes,cost,price,qty,ship_class,barcode,created_at"
+        "id,product_id,condition,issue_notes,issue_photo_urls,public_notes,cost,price,qty,ship_class,barcode,created_at,release_at"
       )
       .eq("product_id", p.id)
       .order("created_at", { ascending: false });
@@ -1811,6 +1955,18 @@ export default function AdminInventoryPage() {
     });
   }
 
+  async function openScheduledPostingItem(item: ScheduledPostingItem) {
+    if (!item.product) return;
+    setInventoryView("editor");
+    await loadProduct(item.product, { focusBarcode: false });
+    requestAnimationFrame(() => {
+      productEditorRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }
+
   function syncVariantQtyIfSelected(
     productId: string,
     variantId: string,
@@ -1856,13 +2012,22 @@ export default function AdminInventoryPage() {
     setExistingBarcodeActionLoading(true);
     try {
       const nextQty = Math.max(0, Math.trunc(n(target.qty, 0)) + delta);
+      const nextReleaseAt = getNextVariantReleaseAt(
+        target,
+        resolveScheduledReleaseAt()
+      );
       const { error } = await supabase
         .from("product_variants")
-        .update({ qty: nextQty })
+        .update({ qty: nextQty, release_at: nextReleaseAt })
         .eq("id", target.id);
       if (error) throw error;
 
-      syncVariantQtyIfSelected(target.product_id, target.id, nextQty);
+      if (selectedProduct?.id === target.product_id) {
+        updateVariantDraft(target.id, {
+          qty: nextQty,
+          release_at: nextReleaseAt,
+        });
+      }
       setVariantBarcode(existingBarcodePrompt.barcode);
       setLookupMsg(
         `Added ${delta} unit${delta === 1 ? "" : "s"} to existing variant.`
@@ -1929,6 +2094,7 @@ export default function AdminInventoryPage() {
         qty: qtyN,
         ship_class: shipClass,
         barcode: barcodeValue,
+        release_at: resolveScheduledReleaseAt(),
       },
       barcodeValue,
       generatedBarcode,
@@ -1954,7 +2120,7 @@ export default function AdminInventoryPage() {
           ...payload,
         })
         .select(
-          "id,product_id,condition,issue_notes,issue_photo_urls,public_notes,cost,price,qty,ship_class,barcode,created_at"
+          "id,product_id,condition,issue_notes,issue_photo_urls,public_notes,cost,price,qty,ship_class,barcode,created_at,release_at"
         )
         .single();
       if (error) throw error;
@@ -2089,6 +2255,8 @@ export default function AdminInventoryPage() {
     resetBarcodeLookup();
     setManualImageUrl("");
     setQueuedVariants([]);
+    setRescheduleLiveVariants(false);
+    setPublishScheduledNow(false);
 
     // also clear variant draft
     const nextShipClass = shipClassFromBrand("");
@@ -2140,6 +2308,8 @@ export default function AdminInventoryPage() {
     setExistingBarcodePrompt(null);
     setExistingBarcodeVariantId("");
     setExistingBarcodeAddQty("1");
+    setRescheduleLiveVariants(false);
+    setPublishScheduledNow(false);
     setNewCardTitle("");
     setNewCardBrand("");
     setNewCardModel("");
@@ -2209,6 +2379,66 @@ export default function AdminInventoryPage() {
     setQty("1");
     setShipClass(nextShipClass);
     setVariantBarcode("");
+  }
+
+  function resolveScheduledReleaseAt() {
+    if (!scheduleReleaseEnabled) return null;
+    const scheduledReleaseAt = datetimeLocalToIso(scheduledReleaseAtInput);
+    if (!scheduledReleaseAt) {
+      throw new Error("Choose a release date and time, or turn scheduling off.");
+    }
+    if (new Date(scheduledReleaseAt).getTime() <= Date.now()) {
+      throw new Error(
+        "Release time must be in the future. Turn scheduling off to publish immediately."
+      );
+    }
+    return scheduledReleaseAt;
+  }
+
+  function getNextVariantReleaseAt(
+    variant: Pick<Variant, "qty" | "release_at">,
+    scheduledReleaseAt: string | null
+  ) {
+    let nextReleaseAt = variant.release_at ?? null;
+
+    if (scheduledReleaseAt) {
+      return scheduledReleaseAt;
+    }
+
+    if (publishScheduledNow && isScheduledRelease(variant.release_at)) {
+      nextReleaseAt = null;
+    }
+
+    return nextReleaseAt;
+  }
+
+  async function applyScheduledReleaseToExistingVariants(
+    currentVariants: Variant[],
+    scheduledReleaseAt: string | null
+  ) {
+    const updates = currentVariants
+      .map((variant) => ({
+        id: variant.id,
+        currentReleaseAt: variant.release_at ?? null,
+        nextReleaseAt: getNextVariantReleaseAt(variant, scheduledReleaseAt),
+      }))
+      .filter((variant) => variant.currentReleaseAt !== variant.nextReleaseAt);
+
+    if (!updates.length) return;
+
+    const results = await Promise.all(
+      updates.map((variant) =>
+        supabase
+          .from("product_variants")
+          .update({ release_at: variant.nextReleaseAt })
+          .eq("id", variant.id)
+      )
+    );
+
+    const failed = results.find((result) => result.error);
+    if (failed?.error) {
+      throw failed.error;
+    }
   }
 
   function resetBarcodeLookup() {
@@ -2378,13 +2608,22 @@ export default function AdminInventoryPage() {
     setQuickAddBusy(true);
     try {
       const nextQty = Math.max(0, Math.trunc(n(preferred.qty, 0)) + delta);
+      const nextReleaseAt = getNextVariantReleaseAt(
+        preferred,
+        resolveScheduledReleaseAt()
+      );
       const { error } = await supabase
         .from("product_variants")
-        .update({ qty: nextQty })
+        .update({ qty: nextQty, release_at: nextReleaseAt })
         .eq("id", preferred.id);
       if (error) throw error;
 
-      syncVariantQtyIfSelected(preferred.product_id, preferred.id, nextQty);
+      if (selectedProduct?.id === preferred.product_id) {
+        updateVariantDraft(preferred.id, {
+          qty: nextQty,
+          release_at: nextReleaseAt,
+        });
+      }
       setVariantBarcode(code);
       const conditionLabel = formatConditionLabel(preferred.condition, {
         upper: true,
@@ -2422,7 +2661,7 @@ export default function AdminInventoryPage() {
       const { data: existingRows, error: existingError } = await supabase
         .from("product_variants")
         .select(
-          "id,product_id,qty,condition,ship_class,barcode,product:products(*)"
+          "id,product_id,qty,condition,ship_class,barcode,release_at,product:products(*)"
         )
         .eq("barcode", code)
         .limit(20);
@@ -2436,6 +2675,7 @@ export default function AdminInventoryPage() {
           condition: (row?.condition ?? "unsealed") as VariantCondition,
           ship_class: (row?.ship_class ?? null) as ShipClass | null,
           barcode: row?.barcode ? String(row.barcode) : null,
+          release_at: row?.release_at ? String(row.release_at) : null,
           product: row?.product ? (row.product as Product) : null,
         }))
         .filter((row) => row.id && row.product_id) as ExistingBarcodeMatch[];
@@ -3443,7 +3683,7 @@ export default function AdminInventoryPage() {
       const { data, error } = await supabase
         .from("products")
         .select(
-          "*, product_variants(ship_class,condition)"
+          "*, product_variants(ship_class,condition,qty,release_at)"
         )
         .or(orParts.join(","))
         .limit(60);
@@ -3972,6 +4212,7 @@ export default function AdminInventoryPage() {
 
     setSaving(true);
     try {
+        const scheduledReleaseAt = resolveScheduledReleaseAt();
         const normalizedTitle = normalizeTitleBrandAliases(title).trim();
         const { error: uErr } = await supabase
           .from("products")
@@ -3986,6 +4227,7 @@ export default function AdminInventoryPage() {
           .eq("id", selectedProduct.id);
 
       if (uErr) throw uErr;
+      await applyScheduledReleaseToExistingVariants(variants, scheduledReleaseAt);
 
       const hasSelected = Object.values(selectedImages).some(Boolean);
       if (hasSelected) {
@@ -4051,6 +4293,7 @@ export default function AdminInventoryPage() {
 
     try {
       const normalizedTitle = normalizeTitleBrandAliases(title).trim();
+      const scheduledReleaseAt = resolveScheduledReleaseAt();
       if (!normalizedTitle) throw new Error("Title is required.");
 
       const draftList = (options?.drafts?.length
@@ -4166,9 +4409,10 @@ export default function AdminInventoryPage() {
             qty: qtyN,
             ship_class: draft.shipClass,
             barcode: barcodeValue,
+            release_at: scheduledReleaseAt,
           })
           .select(
-            "id,product_id,condition,issue_notes,issue_photo_urls,public_notes,cost,price,qty,ship_class,barcode,created_at"
+            "id,product_id,condition,issue_notes,issue_photo_urls,public_notes,cost,price,qty,ship_class,barcode,created_at,release_at"
           )
           .single();
 
@@ -4299,6 +4543,14 @@ export default function AdminInventoryPage() {
       toast({ intent: "error", message: "Brand is required for bulk add." });
       return;
     }
+    let scheduledReleaseAt: string | null = null;
+    try {
+      scheduledReleaseAt = resolveScheduledReleaseAt();
+    } catch (error: any) {
+      setBulkHotWheelsSaving(false);
+      toast({ intent: "error", message: error?.message ?? "Invalid release time." });
+      return;
+    }
     const shipClassValue: ShipClass = bulkShipClass;
     let created = 0;
     const errors: string[] = [];
@@ -4358,6 +4610,7 @@ export default function AdminInventoryPage() {
             qty: item.qty,
             ship_class: shipClassValue,
             barcode: barcodeValue,
+            release_at: scheduledReleaseAt,
           })
           .select("id")
           .single();
@@ -4409,7 +4662,7 @@ export default function AdminInventoryPage() {
       .update(patch)
       .eq("id", v.id)
       .select(
-        "id,product_id,condition,issue_notes,issue_photo_urls,public_notes,cost,price,qty,ship_class,barcode,created_at"
+        "id,product_id,condition,issue_notes,issue_photo_urls,public_notes,cost,price,qty,ship_class,barcode,created_at,release_at"
       )
       .single();
 
@@ -4457,12 +4710,14 @@ export default function AdminInventoryPage() {
 
     setSavingVariantIds((prev) => ({ ...prev, [v.id]: true }));
     try {
+      const scheduledReleaseAt = resolveScheduledReleaseAt();
       const updated = await updateVariant(v, {
         barcode: normalizeBarcode(v.barcode ?? "") || null,
         cost: costValue,
         price: priceValue,
         qty: qtyValue,
         ship_class: v.ship_class || null,
+        release_at: getNextVariantReleaseAt(v, scheduledReleaseAt),
         public_notes: resolvedNotes,
         issue_notes: null,
         issue_photo_urls:
@@ -4665,6 +4920,62 @@ export default function AdminInventoryPage() {
     () => parseHotWheelsBulkLines(bulkHotWheelsLines, bulkHotWheelsCondition),
     [bulkHotWheelsCondition, bulkHotWheelsLines]
   );
+  const selectedProductWithVariants = React.useMemo(() => {
+    if (!selectedProduct) return null;
+    return {
+      ...selectedProduct,
+      product_variants: variants,
+    };
+  }, [selectedProduct, variants]);
+  const releaseSummary = React.useMemo(() => {
+    if (!selectedProductWithVariants) return null;
+    return getProductReleaseSummary(selectedProductWithVariants);
+  }, [selectedProductWithVariants]);
+  const hasLiveVariants = React.useMemo(
+    () =>
+      variants.some(
+        (variant) =>
+          Number(variant.qty ?? 0) > 0 && !isScheduledRelease(variant.release_at)
+      ),
+    [variants]
+  );
+  const hasScheduledVariants = React.useMemo(
+    () => variants.some((variant) => isScheduledRelease(variant.release_at)),
+    [variants]
+  );
+  const scheduledPostingFilteredItems = React.useMemo(() => {
+    const term = scheduledPostingSearch.trim().toLowerCase();
+    if (!term) return scheduledPostingItems;
+    return scheduledPostingItems.filter((item) => {
+      const product = item.product;
+      return [
+        product?.title,
+        product?.brand,
+        product?.model,
+        product?.variation,
+        item.barcode,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(term));
+    });
+  }, [scheduledPostingItems, scheduledPostingSearch]);
+  const scheduledPostingProductCount = React.useMemo(
+    () => new Set(scheduledPostingFilteredItems.map((item) => item.product_id)).size,
+    [scheduledPostingFilteredItems]
+  );
+  const scheduledPostingUnitCount = React.useMemo(
+    () =>
+      scheduledPostingFilteredItems.reduce(
+        (sum, item) => sum + Math.max(0, Number(item.qty ?? 0)),
+        0
+      ),
+    [scheduledPostingFilteredItems]
+  );
+  const nextScheduledPostingAt = scheduledPostingFilteredItems[0]?.release_at ?? null;
+  const scheduledReleasePreview = React.useMemo(() => {
+    const scheduledReleaseAt = datetimeLocalToIso(scheduledReleaseAtInput);
+    return scheduledReleaseAt ? formatReleaseDateTime(scheduledReleaseAt) : null;
+  }, [scheduledReleaseAtInput]);
   const selectedExistingBarcodeMatch = React.useMemo(() => {
     if (!existingBarcodePrompt?.matches.length) return null;
     return (
@@ -4699,6 +5010,242 @@ export default function AdminInventoryPage() {
         </CardHeader>
 
         <CardBody className="space-y-6">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setInventoryView("editor")}
+              className={`rounded-full border px-4 py-2 text-sm transition ${
+                inventoryView === "editor"
+                  ? "border-accent-500 bg-accent-500/20 text-white"
+                  : "border-white/10 bg-bg-900/40 text-white/70 hover:bg-bg-900/70"
+              }`}
+            >
+              Inventory Editor
+            </button>
+            <button
+              type="button"
+              onClick={() => setInventoryView("scheduled")}
+              className={`rounded-full border px-4 py-2 text-sm transition ${
+                inventoryView === "scheduled"
+                  ? "border-accent-500 bg-accent-500/20 text-white"
+                  : "border-white/10 bg-bg-900/40 text-white/70 hover:bg-bg-900/70"
+              }`}
+            >
+              Scheduled Posting
+            </button>
+          </div>
+
+          {inventoryView === "scheduled" ? (
+            <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="font-semibold">Scheduled Posting Queue</div>
+                  <div className="text-sm text-white/60">
+                    Future-release variants that will go live automatically based on
+                    their scheduled release time.
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  onClick={loadScheduledPostingItems}
+                  disabled={scheduledPostingLoading}
+                >
+                  {scheduledPostingLoading ? "Refreshing..." : "Refresh"}
+                </Button>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-4">
+                <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                  <div className="text-xs text-white/60">Scheduled variants</div>
+                  <div className="text-lg font-semibold">
+                    {scheduledPostingFilteredItems.length}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                  <div className="text-xs text-white/60">Products affected</div>
+                  <div className="text-lg font-semibold">
+                    {scheduledPostingProductCount}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                  <div className="text-xs text-white/60">Units scheduled</div>
+                  <div className="text-lg font-semibold">
+                    {scheduledPostingUnitCount}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
+                  <div className="text-xs text-white/60">Next release</div>
+                  <div className="text-sm font-semibold">
+                    {nextScheduledPostingAt
+                      ? formatReleaseDateTime(nextScheduledPostingAt)
+                      : "None"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="max-w-xl">
+                <Input
+                  placeholder="Search scheduled items by title, brand, model, variation, or barcode..."
+                  value={scheduledPostingSearch}
+                  onChange={(e) => setScheduledPostingSearch(e.target.value)}
+                />
+              </div>
+
+              {scheduledPostingError ? (
+                <div className="text-sm text-red-200">{scheduledPostingError}</div>
+              ) : null}
+
+              {scheduledPostingLoading && !scheduledPostingItems.length ? (
+                <div className="text-sm text-white/60">Loading scheduled items...</div>
+              ) : null}
+
+              {!scheduledPostingLoading && !scheduledPostingFilteredItems.length ? (
+                <div className="rounded-xl border border-white/10 bg-paper/5 p-4 text-sm text-white/60">
+                  No scheduled items found.
+                </div>
+              ) : null}
+
+              {scheduledPostingFilteredItems.length ? (
+                <div className="grid gap-3">
+                  {scheduledPostingFilteredItems.map((item) => {
+                    const product = item.product;
+                    const imageUrl =
+                      Array.isArray(product?.image_urls) && product.image_urls.length
+                        ? product.image_urls[0]
+                        : null;
+                    const metaLine = [product?.brand, product?.model, product?.variation]
+                      .filter(Boolean)
+                      .join(" | ");
+
+                    return (
+                      <div
+                        key={item.id}
+                        className="rounded-xl border border-white/10 bg-paper/5 p-3"
+                      >
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
+                          <div className="h-20 w-20 overflow-hidden rounded-xl border border-white/10 bg-black/20">
+                            {imageUrl ? (
+                              <img
+                                src={imageUrl}
+                                alt={product?.title ?? "Scheduled item"}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-[10px] uppercase tracking-[0.2em] text-white/35">
+                                No Image
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="font-medium leading-tight">
+                                {product?.title ?? "Unknown product"}
+                              </div>
+                              <Badge className="border-amber-400/45 bg-amber-500/18 text-amber-100">
+                                Scheduled
+                              </Badge>
+                            </div>
+                            {metaLine ? (
+                              <div className="text-xs text-white/55">{metaLine}</div>
+                            ) : null}
+                            <div className="text-xs text-white/65">
+                              {formatConditionLabel(item.condition)} | Qty{" "}
+                              {Math.max(0, Number(item.qty ?? 0))} | Price{" "}
+                              {formatPHP(Number(item.price ?? 0))}
+                            </div>
+                            <div className="text-xs text-white/50">
+                              Ship class: {item.ship_class ?? "-"}
+                              {" | "}Barcode: {item.barcode ?? "-"}
+                            </div>
+                            <div className="text-xs text-white/50">
+                              Releases at {formatReleaseDateTime(item.release_at)}
+                            </div>
+                          </div>
+
+                          <div className="shrink-0">
+                            <Button
+                              variant="secondary"
+                              onClick={() => void openScheduledPostingItem(item)}
+                              disabled={!product}
+                            >
+                              Open in editor
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {inventoryView === "editor" ? (
+          <>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="font-medium">Release scheduling</div>
+                <div className="text-xs text-white/60">
+                  When enabled, every inventory change on this page is saved with
+                  the same future go-live time.
+                </div>
+              </div>
+              {scheduledReleasePreview ? (
+                <Badge className="border-amber-400/45 bg-amber-500/18 text-amber-100">
+                  Goes live {scheduledReleasePreview}
+                </Badge>
+              ) : null}
+            </div>
+
+            <Checkbox
+              checked={scheduleReleaseEnabled}
+              onChange={setScheduleReleaseEnabled}
+              label="Schedule release"
+            />
+
+            {scheduleReleaseEnabled ? (
+              <div className="grid gap-3 md:grid-cols-2">
+                <Input
+                  label="Go live at"
+                  type="datetime-local"
+                  value={scheduledReleaseAtInput}
+                  onChange={(e) => setScheduledReleaseAtInput(e.target.value)}
+                />
+                <div className="rounded-xl border border-amber-400/20 bg-amber-500/10 p-3 text-xs text-amber-50/90">
+                  New variants, added stock, edited variants, and product saves on
+                  this page will all use this release time.
+                </div>
+              </div>
+            ) : null}
+
+            {releaseSummary ? (
+              <div className="text-xs text-white/55">
+                Current product status: {releaseSummary.label}
+              </div>
+            ) : (
+              <div className="text-xs text-white/55">
+                New items publish immediately when scheduling is off.
+              </div>
+            )}
+
+            {scheduleReleaseEnabled && selectedProduct ? (
+              <div className="text-xs text-amber-100/85">
+                Saving this product will reschedule all of its variants to the
+                selected go-live time.
+              </div>
+            ) : null}
+
+            {!scheduleReleaseEnabled && selectedProduct && hasScheduledVariants ? (
+              <Checkbox
+                checked={publishScheduledNow}
+                onChange={setPublishScheduledNow}
+                label="Publish existing scheduled variants immediately on save"
+              />
+            ) : null}
+          </div>
+
           {/* Inventory worth */}
           {!compactAddMode ? (
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
@@ -5177,11 +5724,18 @@ export default function AdminInventoryPage() {
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-4">
             <div className="flex items-center justify-between">
               <div className="font-semibold">Product Identity</div>
-              {selectedProduct ? (
-                <Badge>{selectedProduct.id.slice(0, 8)}</Badge>
-              ) : (
-                <Badge>NEW</Badge>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {releaseSummary ? (
+                  <Badge className={getReleaseBadgeClass(releaseSummary.state)}>
+                    {releaseSummary.label}
+                  </Badge>
+                ) : null}
+                {selectedProduct ? (
+                  <Badge>{selectedProduct.id.slice(0, 8)}</Badge>
+                ) : (
+                  <Badge>NEW</Badge>
+                )}
+              </div>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
@@ -5574,6 +6128,21 @@ export default function AdminInventoryPage() {
                               shipClass: v.ship_class,
                             })}
                           </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <Badge
+                              className={getReleaseBadgeClass(
+                                isScheduledRelease(v.release_at)
+                                  ? "scheduled"
+                                  : v.release_at
+                                    ? "released"
+                                    : Number(v.qty ?? 0) > 0
+                                      ? "live"
+                                      : "draft"
+                              )}
+                            >
+                              {getVariantReleaseLabel(v)}
+                            </Badge>
+                          </div>
                           {noteValue ? (
                             <div
                               className={`mt-1 flex items-center gap-2 text-xs ${noteTone}`}
@@ -5832,7 +6401,18 @@ export default function AdminInventoryPage() {
             ref={newVariantSectionRef}
             className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-4"
           >
-            <div className="font-semibold">Add New Variant (Condition)</div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="font-semibold">Add New Variant (Condition)</div>
+              {scheduleReleaseEnabled && scheduledReleasePreview ? (
+                <Badge className="border-amber-400/45 bg-amber-500/18 text-amber-100">
+                  Scheduled for {scheduledReleasePreview}
+                </Badge>
+              ) : (
+                <Badge className="border-emerald-400/45 bg-emerald-500/18 text-emerald-100">
+                  Publish immediately
+                </Badge>
+              )}
+            </div>
 
             <div className="grid gap-4 md:grid-cols-2">
               <Select
@@ -6030,7 +6610,7 @@ export default function AdminInventoryPage() {
             <div className="rounded-2xl border border-white/10 bg-bg-900/20 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="text-xs text-white/60">
-                  Advanced tools (bulk add, logs, protector stock, photo inbox)
+                  Advanced tools (bulk add, logs, protector stock)
                 </div>
                 <Button
                   variant="ghost"
@@ -6269,7 +6849,7 @@ export default function AdminInventoryPage() {
             </div>
           </div>
 
-          {/* Bulk photo inbox */}
+          {false ? (
           <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
@@ -6349,10 +6929,10 @@ export default function AdminInventoryPage() {
             </div>
             {bulkUploadProgress ? (
               <div className="text-xs text-white/60">
-                Uploading {bulkUploadProgress.current} of{" "}
-                {bulkUploadProgress.total} (
+                Uploading {bulkUploadProgress!.current} of{" "}
+                {bulkUploadProgress!.total} (
                 {Math.round(
-                  (bulkUploadProgress.current / bulkUploadProgress.total) * 100
+                  (bulkUploadProgress!.current / bulkUploadProgress!.total) * 100
                 )}
                 %)
               </div>
@@ -6584,10 +7164,11 @@ export default function AdminInventoryPage() {
               </div>
             ) : null}
           </div>
+          ) : null}
           </>
           ) : null}
 
-          {bulkPreviewUrl ? (
+          {false ? (
             <div
               className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
               onClick={() => setBulkPreviewUrl(null)}
@@ -6620,7 +7201,7 @@ export default function AdminInventoryPage() {
                 <div className="relative w-full min-h-[240px] rounded-xl border border-white/10 bg-black/40 flex items-center justify-center">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={bulkPreviewUrl}
+                    src={bulkPreviewUrl ?? undefined}
                     alt="Upload preview"
                     className="w-full max-h-[75vh] object-contain"
                     onError={() => setBulkPreviewError(true)}
@@ -6633,6 +7214,8 @@ export default function AdminInventoryPage() {
                 </div>
               </div>
             </div>
+          ) : null}
+          </>
           ) : null}
         </CardBody>
       </Card>

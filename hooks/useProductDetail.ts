@@ -41,7 +41,7 @@ export function useProductDetail(productId: string) {
       const { data, error } = await supabase
         .from("products")
         .select(
-          "id,title,brand,model,variation,image_urls,is_active, product_variants(id,product_id,condition,issue_notes,issue_photo_urls,public_notes,price,sale_price,discount_percent,cost,qty,ship_class)"
+          "id,title,brand,model,variation,image_urls,is_active, product_variants(id,product_id,condition,issue_notes,issue_photo_urls,public_notes,price,sale_price,discount_percent,cost,qty,release_at,ship_class)"
         )
         .eq("id", productId)
         .maybeSingle();

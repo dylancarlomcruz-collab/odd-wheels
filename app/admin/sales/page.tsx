@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { createPortal } from "react-dom";
 import {
   BarChart3,
   CalendarRange,
@@ -25,6 +24,9 @@ import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
+import { ModalShell as DetailsModal } from "@/components/ui/ModalShell";
+import { SectionBlock } from "@/components/ui/SectionBlock";
+import { DetailGrid } from "@/components/ui/DetailGrid";
 import { supabase } from "@/lib/supabase/browser";
 import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
 
@@ -141,6 +143,33 @@ function formatPickupDayLabel(value: string) {
   return value;
 }
 
+function isPlainObject(value: unknown): value is Record<string, any> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseObjectLikeString(value: unknown) {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!text || !["{", "["].includes(text[0] ?? "")) return null;
+  const parsed = parseJsonMaybe(text);
+  return isPlainObject(parsed) ? parsed : null;
+}
+
+function cleanReadableText(value: unknown) {
+  if (typeof value !== "string") return "";
+  const text = value.trim();
+  if (!text) return "";
+  return parseObjectLikeString(text) ? "" : text;
+}
+
+function firstReadableText(...values: unknown[]) {
+  for (const value of values) {
+    const text = cleanReadableText(value);
+    if (text) return text;
+  }
+  return "";
+}
+
 function mergeShippingDetails(order: any) {
   let details = parseJsonMaybe(order?.shipping_details) ?? {};
   const addressRaw = typeof order?.address === "string" ? order.address.trim() : "";
@@ -153,7 +182,23 @@ function mergeShippingDetails(order: any) {
       details.address ||
       details.dropoff_address ||
       details.pickup_location;
-    if (!hasAddress) details = { ...details, full_address: addressRaw };
+    if (!hasAddress && !parseObjectLikeString(addressRaw)) {
+      details = { ...details, full_address: addressRaw };
+    }
+  }
+
+  const nestedPayloads = [
+    details.address,
+    details.full_address,
+    details.dropoff_address,
+    details.pickup_location,
+    details.text,
+  ];
+  for (const payload of nestedPayloads) {
+    const parsed = parseObjectLikeString(payload);
+    if (parsed) {
+      details = { ...parsed, ...details };
+    }
   }
   return details;
 }
@@ -163,21 +208,25 @@ function buildShippingSummary(order: any) {
   const method = String(details.method ?? order?.shipping_method ?? "").trim();
   const methodLabel = method || String(order?.shipping_method ?? "-");
   const receiverName =
-    details.receiver_name ||
-    [details.first_name, details.last_name].filter(Boolean).join(" ") ||
-    order?.customer_name ||
-    "Guest";
+    firstReadableText(
+      details.receiver_name,
+      [details.first_name, details.last_name].filter(Boolean).join(" "),
+      order?.customer_name
+    ) || "Guest";
   const receiverPhone =
-    details.receiver_phone || details.phone || order?.customer_phone || order?.contact || "-";
-  const receiverEmail = details.receiver_email || details.email || order?.customer_email || "";
+    firstReadableText(details.receiver_phone, details.phone, order?.customer_phone, order?.contact) ||
+    "-";
+  const receiverEmail = firstReadableText(
+    details.receiver_email,
+    details.email,
+    order?.customer_email
+  );
 
-  const dropoff = typeof details.dropoff_address === "string" ? details.dropoff_address.trim() : "";
-  const pickupLocation =
-    typeof details.pickup_location === "string" ? details.pickup_location.trim() : "";
-  const pickupDirectory =
-    typeof details.pickup_directory === "string" ? details.pickup_directory.trim() : "";
-  const fullAddress = typeof details.full_address === "string" ? details.full_address.trim() : "";
-  const detailAddress = typeof details.address === "string" ? details.address.trim() : "";
+  const dropoff = firstReadableText(details.dropoff_address);
+  const pickupLocation = firstReadableText(details.pickup_location);
+  const pickupDirectory = firstReadableText(details.pickup_directory);
+  const fullAddress = firstReadableText(details.full_address);
+  const detailAddress = firstReadableText(details.address, order?.address);
   const address =
     method.toUpperCase() === "PICKUP"
       ? pickupLocation || detailAddress || fullAddress
@@ -185,29 +234,32 @@ function buildShippingSummary(order: any) {
       ? dropoff || fullAddress || detailAddress
       : fullAddress || dropoff || detailAddress;
 
-  const branch =
-    [details.branch_name || details.branch, details.branch_city]
-      .filter(Boolean)
-      .join(", ") || "";
-  const notes = details.notes || details.note || "";
-  const deliveryFeeNote = details.delivery_fee_note || details.shipping_fee_note || "";
+  const branch = [cleanReadableText(details.branch_name || details.branch), cleanReadableText(details.branch_city)]
+    .filter(Boolean)
+    .join(", ");
+  const notes = firstReadableText(details.notes, details.note);
+  const deliveryFeeNote = firstReadableText(details.delivery_fee_note, details.shipping_fee_note);
   const pickupDay =
-    typeof details.pickup_day === "string"
-      ? formatPickupDayLabel(details.pickup_day)
-      : "";
-  const pickupSlot =
-    typeof details.pickup_slot === "string" ? details.pickup_slot.trim() : "";
-  const text = typeof details.text === "string" ? details.text.trim() : "";
+    typeof details.pickup_day === "string" ? formatPickupDayLabel(details.pickup_day) : "";
+  const pickupSlot = cleanReadableText(details.pickup_slot);
+  const text = cleanReadableText(details.text);
+  const region = cleanReadableText(details.region);
+  const packageLabel = cleanReadableText(details.package);
+  const copLabel =
+    typeof details.cop === "boolean" ? (details.cop ? "Cash on pickup/branch" : "") : "";
 
   const lines: string[] = [];
   if (text) lines.push(text);
   if (address && !lines.some((l) => l.includes(address))) lines.push(address);
   if (pickupDirectory) lines.push(`Directory: ${pickupDirectory}`);
   if (branch) lines.push(`Branch: ${branch}`);
+  if (region) lines.push(`Region: ${region}`);
   if (pickupDay || pickupSlot) {
     const slot = [pickupDay, pickupSlot].filter(Boolean).join(" ");
     lines.push(`Pickup: ${slot}`);
   }
+  if (packageLabel) lines.push(`Package: ${packageLabel}`);
+  if (copLabel) lines.push(copLabel);
   if (deliveryFeeNote) lines.push(`Delivery fee: ${deliveryFeeNote}`);
   if (notes) lines.push(`Notes: ${notes}`);
 
@@ -217,6 +269,10 @@ function buildShippingSummary(order: any) {
     receiverPhone,
     receiverEmail,
     address: address || "-",
+    branch,
+    notes,
+    deliveryFeeNote,
+    pickupSchedule: [pickupDay, pickupSlot].filter(Boolean).join(" ").trim(),
     lines,
   };
 }
@@ -319,48 +375,6 @@ function emitCartUpdated() {
   window.dispatchEvent(
     new CustomEvent(CART_EVENT, { detail: { source: "admin-sales-revert" } })
   );
-}
-
-type DetailsModalProps = {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-};
-
-function DetailsModal({ open, onClose, title, children }: DetailsModalProps) {
-  React.useEffect(() => {
-    if (!open) return undefined;
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = originalOverflow;
-    };
-  }, [open]);
-
-  if (!open) return null;
-
-  const content = (
-    <div
-      className="fixed inset-0 z-[9999] overflow-y-auto bg-black/70 p-4"
-      onClick={onClose}
-    >
-      <div className="mx-auto w-full max-w-4xl" onClick={(e) => e.stopPropagation()}>
-        <Card>
-          <CardHeader className="flex items-center justify-between">
-            <div className="text-lg font-semibold">{title}</div>
-            <Button variant="ghost" onClick={onClose}>
-              Close
-            </Button>
-          </CardHeader>
-          <CardBody className="max-h-[75vh] overflow-y-auto">{children}</CardBody>
-        </Card>
-      </div>
-    </div>
-  );
-
-  if (typeof document === "undefined") return null;
-  return createPortal(content, document.body);
 }
 
 type OrderSaleItem = {
@@ -2499,454 +2513,479 @@ export default function AdminSalesPage() {
           ) : !selectedOrder ? (
             <div className="text-sm text-white/60">Order not found.</div>
           ) : (
-            <div className="space-y-4">
-              {(() => {
-                const channel = String(selectedOrder.channel ?? "WEB").toUpperCase();
-                const status = String(selectedOrder.status ?? "").toUpperCase();
-                const paymentStatus = String(
-                  selectedOrder.payment_status ?? ""
-                ).toUpperCase();
-                const canRevert =
-                  (paymentStatus === "PAID" || channel === "POS") &&
-                  status !== "VOIDED" &&
-                  status !== "CANCELLED";
-                const busy = revertingOrderId === String(selectedOrder.id);
-                return (
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap gap-2">
-                      {editingOrderDetails ? (
-                        <>
-                          <Button
-                            variant="secondary"
-                            disabled={savingOrderDetails}
-                            onClick={() => void saveOrderDetails()}
-                          >
-                            {savingOrderDetails ? "Saving..." : "Save details"}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            disabled={savingOrderDetails}
-                            onClick={() => {
-                              setOrderEditDraft(buildOrderEditDraft(selectedOrder));
-                              setEditingOrderDetails(false);
-                              setOrderSaveError(null);
-                            }}
-                          >
-                            Cancel
-                          </Button>
-                        </>
-                      ) : (
-                        <Button
-                          variant="secondary"
-                          onClick={() => {
-                            setOrderEditDraft(buildOrderEditDraft(selectedOrder));
-                            setEditingOrderDetails(true);
-                            setOrderSaveError(null);
-                          }}
-                        >
-                          Edit sold-to details
-                        </Button>
-                      )}
-                    </div>
+            (() => {
+              const channel = String(selectedOrder.channel ?? "WEB").toUpperCase();
+              const status = String(selectedOrder.status ?? "").toUpperCase();
+              const paymentStatus = String(selectedOrder.payment_status ?? "").toUpperCase();
+              const shippingMethod = String(
+                mergeShippingDetails(selectedOrder)?.method ??
+                  selectedOrder.shipping_method ??
+                  "-"
+              )
+                .trim()
+                .toUpperCase();
+              const canRevert =
+                (paymentStatus === "PAID" || channel === "POS") &&
+                status !== "VOIDED" &&
+                status !== "CANCELLED";
+              const busy = revertingOrderId === String(selectedOrder.id);
+              const draftOrder = editingOrderDetails
+                ? {
+                    ...selectedOrder,
+                    customer_name: orderEditDraft.customerName || null,
+                    customer_phone: orderEditDraft.customerPhone || null,
+                    contact: orderEditDraft.customerPhone || null,
+                    address: orderEditDraft.address || null,
+                    payment_method: orderEditDraft.paymentMethod || null,
+                    channel: orderEditDraft.channel || selectedOrder.channel,
+                    shipping_method:
+                      orderEditDraft.shippingMethod || selectedOrder.shipping_method,
+                    shipping_details: {
+                      ...mergeShippingDetails(selectedOrder),
+                      method: orderEditDraft.shippingMethod || selectedOrder.shipping_method,
+                      receiver_name: orderEditDraft.customerName || null,
+                      receiver_phone: orderEditDraft.customerPhone || null,
+                      phone: orderEditDraft.customerPhone || null,
+                      receiver_email: orderEditDraft.customerEmail || null,
+                      email: orderEditDraft.customerEmail || null,
+                      full_address: orderEditDraft.address || null,
+                      address: orderEditDraft.address || null,
+                      notes: orderEditDraft.notes || null,
+                      pickup_location:
+                        (orderEditDraft.shippingMethod || "").toUpperCase() === "PICKUP"
+                          ? orderEditDraft.address || null
+                          : mergeShippingDetails(selectedOrder).pickup_location,
+                      dropoff_address:
+                        ["LBC", "LALAMOVE"].includes(
+                          (orderEditDraft.shippingMethod || "").toUpperCase()
+                        )
+                          ? orderEditDraft.address || null
+                          : mergeShippingDetails(selectedOrder).dropoff_address,
+                    },
+                  }
+                : selectedOrder;
+              const ship = buildShippingSummary(draftOrder);
+              const soldAtLabel = new Date(
+                editingOrderDetails && orderEditDraft.soldAt
+                  ? orderEditDraft.soldAt
+                  : selectedOrder.created_at
+              ).toLocaleString("en-PH");
 
-                    {canRevert ? (
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <Button
-                          variant="secondary"
-                          disabled={busy || savingOrderDetails}
-                          onClick={() =>
-                            void revertSale(String(selectedOrder.id), { addToCart: true })
-                          }
-                        >
-                          {busy && revertingToCart
-                            ? "Reverting + adding..."
-                            : "Revert sale and add to cart"}
-                        </Button>
-                        <Button
-                          variant="danger"
-                          disabled={busy || savingOrderDetails}
-                          onClick={() => void revertSale(String(selectedOrder.id))}
-                        >
-                          {busy && !revertingToCart ? "Reverting..." : "Revert sale"}
-                        </Button>
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })()}
-
-              {orderSaveError ? (
-                <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-100">
-                  {orderSaveError}
-                </div>
-              ) : null}
-
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="text-xs text-white/60">
-                    {new Date(
-                      editingOrderDetails && orderEditDraft.soldAt
-                        ? orderEditDraft.soldAt
-                        : selectedOrder.created_at
-                    ).toLocaleString("en-PH")}
-                  </div>
-                  <div className="mt-1 text-sm text-white/80">
-                    Channel: {String(selectedOrder.channel ?? "WEB").toUpperCase()}
-                  </div>
-                  <div className="text-sm text-white/80">
-                    Status: {String(selectedOrder.status ?? "").toUpperCase()}
-                  </div>
-                  <div className="text-sm text-white/80">
-                    Payment: {String(selectedOrder.payment_status ?? "").toUpperCase()}
-                    {selectedOrder.payment_method
-                      ? ` (${String(selectedOrder.payment_method).toUpperCase()})`
-                      : ""}
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-xs text-white/50">Total</div>
-                  <div className="text-lg font-semibold">
-                    {peso(Number(selectedOrder.total ?? 0))}
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
-                  <div className="text-[11px] uppercase tracking-wide text-white/50">
-                    {editingOrderDetails ? "Edit Buyer" : "Customer"}
-                  </div>
-                  {editingOrderDetails ? (
-                    <div className="mt-2 space-y-3">
-                      <Input
-                        label="Customer name"
-                        value={orderEditDraft.customerName}
-                        onChange={(e) =>
-                          setOrderEditDraft((draft) => ({
-                            ...draft,
-                            customerName: e.target.value,
-                          }))
-                        }
-                      />
-                      <Input
-                        label="Customer phone"
-                        value={orderEditDraft.customerPhone}
-                        onChange={(e) =>
-                          setOrderEditDraft((draft) => ({
-                            ...draft,
-                            customerPhone: e.target.value,
-                          }))
-                        }
-                      />
-                      <Input
-                        label="Customer email"
-                        value={orderEditDraft.customerEmail}
-                        onChange={(e) =>
-                          setOrderEditDraft((draft) => ({
-                            ...draft,
-                            customerEmail: e.target.value,
-                          }))
-                        }
-                      />
-                      <Textarea
-                        label="Address"
-                        value={orderEditDraft.address}
-                        onChange={(e) =>
-                          setOrderEditDraft((draft) => ({
-                            ...draft,
-                            address: e.target.value,
-                          }))
-                        }
-                        className="min-h-[110px]"
-                      />
-                    </div>
-                  ) : (
-                    (() => {
-                      const ship = buildShippingSummary(selectedOrder);
-                      return (
-                        <>
-                          <div className="mt-1 font-medium">{ship.receiverName}</div>
-                          <div className="text-sm text-white/70">{ship.receiverPhone}</div>
-                          {ship.receiverEmail ? (
-                            <div className="text-sm text-white/70">{ship.receiverEmail}</div>
-                          ) : null}
-                          <div className="mt-1 text-sm text-white/70">{ship.address}</div>
-                        </>
-                      );
-                    })()
-                  )}
-                </div>
-
-                <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
-                  <div className="text-[11px] uppercase tracking-wide text-white/50">
-                    {editingOrderDetails ? "Edit Sale Details" : "Sale Details"}
-                  </div>
-                  {editingOrderDetails ? (
-                    <div className="mt-2 space-y-3">
-                      <Input
-                        label="Sold date and time"
-                        type="datetime-local"
-                        value={orderEditDraft.soldAt}
-                        onChange={(e) =>
-                          setOrderEditDraft((draft) => ({
-                            ...draft,
-                            soldAt: e.target.value,
-                          }))
-                        }
-                      />
-                      <Input
-                        label="Payment method"
-                        value={orderEditDraft.paymentMethod}
-                        onChange={(e) =>
-                          setOrderEditDraft((draft) => ({
-                            ...draft,
-                            paymentMethod: e.target.value,
-                          }))
-                        }
-                      />
-                      <Input
-                        label="Channel"
-                        value={orderEditDraft.channel}
-                        onChange={(e) =>
-                          setOrderEditDraft((draft) => ({
-                            ...draft,
-                            channel: e.target.value,
-                          }))
-                        }
-                      />
-                      <Input
-                        label="Shipping / fulfillment method"
-                        value={orderEditDraft.shippingMethod}
-                        onChange={(e) =>
-                          setOrderEditDraft((draft) => ({
-                            ...draft,
-                            shippingMethod: e.target.value,
-                          }))
-                        }
-                      />
-                      <Textarea
-                        label="Shipping notes"
-                        value={orderEditDraft.notes}
-                        onChange={(e) =>
-                          setOrderEditDraft((draft) => ({
-                            ...draft,
-                            notes: e.target.value,
-                          }))
-                        }
-                      />
-                      <div className="text-xs text-white/50">
-                        Status and totals stay read-only here.
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="mt-1 text-sm text-white/80">
-                        Sold at:{" "}
-                        <span className="text-white">
-                          {new Date(selectedOrder.created_at).toLocaleString("en-PH")}
-                        </span>
-                      </div>
-                      <div className="mt-1 text-sm text-white/80">
-                        Payment method:{" "}
-                        <span className="text-white">
-                          {String(selectedOrder.payment_method ?? "").toUpperCase() || "-"}
-                        </span>
-                      </div>
-                      <div className="text-sm text-white/80">
-                        Channel:{" "}
-                        <span className="text-white">
-                          {String(selectedOrder.channel ?? "WEB").toUpperCase()}
-                        </span>
-                      </div>
-                      <div className="text-sm text-white/80">
-                        Shipping method:{" "}
-                        <span className="text-white">
-                          {String(
-                            mergeShippingDetails(selectedOrder)?.method ??
-                              selectedOrder.shipping_method ??
-                              "-"
-                          ).toUpperCase()}
-                        </span>
-                      </div>
-                      {(() => {
-                        const details = mergeShippingDetails(selectedOrder);
-                        const notes = String(details.notes || details.note || "").trim();
-                        return notes ? (
-                          <div className="mt-1 text-sm text-white/70">{notes}</div>
-                        ) : (
-                          <div className="mt-1 text-sm text-white/60">
-                            No extra shipping notes.
+              return (
+                <div className="space-y-5">
+                  <section className="surface-panel p-4 sm:p-5">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <div className="text-xs font-medium uppercase tracking-[0.16em] text-white/45">
+                            Order summary
                           </div>
-                        );
-                      })()}
-                    </>
-                  )}
-                </div>
-
-                <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
-                  <div className="text-[11px] uppercase tracking-wide text-white/50">
-                    Totals
-                  </div>
-                  <div className="mt-1 text-sm text-white/80">
-                    Subtotal:{" "}
-                    <span className="text-white">
-                      {peso(Number(selectedOrder.subtotal ?? 0))}
-                    </span>
-                  </div>
-                  <div className="text-sm text-white/80">
-                    Shipping:{" "}
-                    <span className="text-white">
-                      {peso(Number(selectedOrder.shipping_fee ?? 0))}
-                    </span>
-                  </div>
-                  <div className="text-sm text-white/80">
-                    Discount:{" "}
-                    <span className="text-white">
-                      -{peso(Number(selectedOrder.discount_total ?? 0))}
-                    </span>
-                  </div>
-                  <div className="mt-1 font-semibold">
-                    Total: {peso(Number(selectedOrder.total ?? 0))}
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-white/10 bg-paper/5 p-3">
-                <div className="text-[11px] uppercase tracking-wide text-white/50">
-                  {editingOrderDetails ? "Shipping Preview" : "Shipping"}
-                </div>
-                {(() => {
-                  const draftOrder = editingOrderDetails
-                    ? {
-                        ...selectedOrder,
-                        customer_name: orderEditDraft.customerName || null,
-                        customer_phone: orderEditDraft.customerPhone || null,
-                        contact: orderEditDraft.customerPhone || null,
-                        address: orderEditDraft.address || null,
-                        payment_method: orderEditDraft.paymentMethod || null,
-                        channel: orderEditDraft.channel || selectedOrder.channel,
-                        shipping_method:
-                          orderEditDraft.shippingMethod || selectedOrder.shipping_method,
-                        shipping_details: {
-                          ...mergeShippingDetails(selectedOrder),
-                          method:
-                            orderEditDraft.shippingMethod || selectedOrder.shipping_method,
-                          receiver_name: orderEditDraft.customerName || null,
-                          receiver_phone: orderEditDraft.customerPhone || null,
-                          phone: orderEditDraft.customerPhone || null,
-                          receiver_email: orderEditDraft.customerEmail || null,
-                          email: orderEditDraft.customerEmail || null,
-                          full_address: orderEditDraft.address || null,
-                          address: orderEditDraft.address || null,
-                          notes: orderEditDraft.notes || null,
-                          pickup_location:
-                            (orderEditDraft.shippingMethod || "").toUpperCase() === "PICKUP"
-                              ? orderEditDraft.address || null
-                              : mergeShippingDetails(selectedOrder).pickup_location,
-                          dropoff_address:
-                            ["LBC", "LALAMOVE"].includes(
-                              (orderEditDraft.shippingMethod || "").toUpperCase()
-                            )
-                              ? orderEditDraft.address || null
-                              : mergeShippingDetails(selectedOrder).dropoff_address,
-                        },
-                      }
-                    : selectedOrder;
-                  const ship = buildShippingSummary(draftOrder);
-                  return (
-                    <>
-                      <div className="mt-1 text-sm text-white/80">
-                        Method: {ship.method || "-"}
-                      </div>
-                      {ship.lines.length ? (
-                        <div className="mt-1 space-y-1 text-sm text-white/70">
-                          {ship.lines.map((line, idx) => (
-                            <div key={`${line}-${idx}`}>{line}</div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="mt-1 text-sm text-white/70">
-                          No shipping details.
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
-              </div>
-
-              <div>
-                <div className="text-sm font-semibold text-white/80">
-                  Items ({selectedOrderItems.length})
-                </div>
-                {selectedOrderItems.length === 0 ? (
-                  <div className="text-sm text-white/60 mt-2">No items found.</div>
-                ) : (
-                  <div className="mt-2 space-y-2">
-                    {selectedOrderItems.map((it) => {
-                      const title = getItemTitle(it);
-                      const thumb = getItemThumb(it);
-                      const unit = getItemPrice(it);
-                      const costEach = getItemCostEach(it);
-                      const qty = Number(it?.qty ?? 1);
-                      const grossLine = getItemLineTotal(it);
-                      const line = grossLine * selectedOrderRevenueFactor;
-                      const lineDiscount = Math.max(0, grossLine - line);
-                      const cogs = costEach * qty;
-                      const profit = line - cogs;
-                      const notes = String(
-                        it?.product_variant?.public_notes ??
-                          it?.issue_notes ??
-                          it?.product_variant?.issue_notes ??
-                          ""
-                      ).trim();
-                      return (
-                        <div
-                          key={`${it.order_id}-${it.variant_id ?? it.item_id ?? title}`}
-                          className="rounded-xl border border-white/10 bg-bg-900/30 p-2 flex gap-3"
-                        >
-                          <div className="h-12 w-12 rounded-lg bg-bg-800 border border-white/10 overflow-hidden flex-shrink-0">
-                            {thumb ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={thumb}
-                                alt={title}
-                                className="h-full w-full object-cover"
-                              />
-                            ) : null}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge>{channel}</Badge>
+                            <Badge>{status || "UNKNOWN"}</Badge>
+                            <Badge>
+                              {paymentStatus || "UNKNOWN"}
+                              {selectedOrder.payment_method
+                                ? ` / ${String(selectedOrder.payment_method).toUpperCase()}`
+                                : ""}
+                            </Badge>
+                            <Badge>{shippingMethod || "-"}</Badge>
                           </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="font-medium truncate">{title}</div>
-                            <div className="text-xs text-white/60">
-                              {qty} x {peso(unit)} | Value: {peso(line)}
-                            </div>
-                            {lineDiscount > 0 ? (
-                              <div className="text-xs text-amber-300">
-                                Discount: -{peso(lineDiscount)}
-                              </div>
-                            ) : null}
-                            <div className="text-xs text-white/60">
-                              COGS: {peso(cogs)} |{" "}
-                              <span
-                                className={
-                                  profit >= 0 ? "text-emerald-300" : "text-red-300"
+                        </div>
+                        <div>
+                          <div className="text-[0.8rem] text-white/52">Sold at</div>
+                          <div className="mt-1 text-sm text-white/88">{soldAtLabel}</div>
+                        </div>
+                      </div>
+
+                      <div className="flex w-full flex-col gap-3 lg:w-auto lg:min-w-[18rem]">
+                        <div className="surface-subtle p-3.5 text-left lg:text-right">
+                          <div className="text-[0.72rem] font-medium uppercase tracking-[0.14em] text-white/45">
+                            Total
+                          </div>
+                          <div className="mt-2 text-2xl font-semibold tracking-[-0.02em] text-white">
+                            {peso(Number(selectedOrder.total ?? 0))}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2 lg:justify-end">
+                          {editingOrderDetails ? (
+                            <>
+                              <Button
+                                variant="secondary"
+                                disabled={savingOrderDetails}
+                                onClick={() => void saveOrderDetails()}
+                              >
+                                {savingOrderDetails ? "Saving..." : "Save details"}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                disabled={savingOrderDetails}
+                                onClick={() => {
+                                  setOrderEditDraft(buildOrderEditDraft(selectedOrder));
+                                  setEditingOrderDetails(false);
+                                  setOrderSaveError(null);
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                            </>
+                          ) : (
+                            <Button
+                              variant="secondary"
+                              onClick={() => {
+                                setOrderEditDraft(buildOrderEditDraft(selectedOrder));
+                                setEditingOrderDetails(true);
+                                setOrderSaveError(null);
+                              }}
+                            >
+                              Edit sold-to details
+                            </Button>
+                          )}
+                          {canRevert ? (
+                            <>
+                              <Button
+                                variant="secondary"
+                                disabled={busy || savingOrderDetails}
+                                onClick={() =>
+                                  void revertSale(String(selectedOrder.id), { addToCart: true })
                                 }
                               >
-                                Profit: {peso(profit)}
-                              </span>
-                            </div>
-                            {notes ? (
-                              <div className="mt-1 text-xs text-white/60">
-                                Notes: {notes}
-                              </div>
-                            ) : null}
+                                {busy && revertingToCart
+                                  ? "Reverting + adding..."
+                                  : "Revert sale and add to cart"}
+                              </Button>
+                              <Button
+                                variant="danger"
+                                disabled={busy || savingOrderDetails}
+                                onClick={() => void revertSale(String(selectedOrder.id))}
+                              >
+                                {busy && !revertingToCart ? "Reverting..." : "Revert sale"}
+                              </Button>
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  {orderSaveError ? (
+                    <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+                      {orderSaveError}
+                    </div>
+                  ) : null}
+
+                  <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+                    <SectionBlock
+                      title={editingOrderDetails ? "Edit buyer" : "Customer"}
+                      description="Sold-to details used for the sale record and shipping handoff."
+                    >
+                      {editingOrderDetails ? (
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <Input
+                            label="Customer name"
+                            value={orderEditDraft.customerName}
+                            onChange={(e) =>
+                              setOrderEditDraft((draft) => ({
+                                ...draft,
+                                customerName: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Customer phone"
+                            value={orderEditDraft.customerPhone}
+                            onChange={(e) =>
+                              setOrderEditDraft((draft) => ({
+                                ...draft,
+                                customerPhone: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Customer email"
+                            value={orderEditDraft.customerEmail}
+                            onChange={(e) =>
+                              setOrderEditDraft((draft) => ({
+                                ...draft,
+                                customerEmail: e.target.value,
+                              }))
+                            }
+                            className="sm:col-span-2"
+                          />
+                          <Textarea
+                            label="Address"
+                            value={orderEditDraft.address}
+                            onChange={(e) =>
+                              setOrderEditDraft((draft) => ({
+                                ...draft,
+                                address: e.target.value,
+                              }))
+                            }
+                            className="min-h-[120px] sm:col-span-2"
+                          />
+                        </div>
+                      ) : (
+                        <DetailGrid
+                          items={[
+                            { label: "Name", value: ship.receiverName },
+                            { label: "Phone", value: ship.receiverPhone },
+                            { label: "Email", value: ship.receiverEmail || "Not provided" },
+                            {
+                              label: "Address",
+                              value: ship.address === "-" ? "No address recorded" : ship.address,
+                              className: "sm:col-span-2",
+                            },
+                          ]}
+                        />
+                      )}
+                    </SectionBlock>
+
+                    <SectionBlock title="Totals" description="Recorded order amounts.">
+                      <DetailGrid
+                        className="sm:grid-cols-1"
+                        items={[
+                          {
+                            label: "Subtotal",
+                            value: peso(Number(selectedOrder.subtotal ?? 0)),
+                          },
+                          {
+                            label: "Shipping",
+                            value: peso(Number(selectedOrder.shipping_fee ?? 0)),
+                          },
+                          {
+                            label: "Discount",
+                            value: `-${peso(Number(selectedOrder.discount_total ?? 0))}`,
+                          },
+                          {
+                            label: "Net total",
+                            value: peso(Number(selectedOrder.total ?? 0)),
+                            valueClassName: "text-lg font-semibold text-white",
+                          },
+                        ]}
+                      />
+                    </SectionBlock>
+                  </div>
+
+                  <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+                    <SectionBlock
+                      title={editingOrderDetails ? "Edit sale details" : "Sale details"}
+                      description="Operational metadata for this transaction."
+                    >
+                      {editingOrderDetails ? (
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <Input
+                            label="Sold date and time"
+                            type="datetime-local"
+                            value={orderEditDraft.soldAt}
+                            onChange={(e) =>
+                              setOrderEditDraft((draft) => ({
+                                ...draft,
+                                soldAt: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Payment method"
+                            value={orderEditDraft.paymentMethod}
+                            onChange={(e) =>
+                              setOrderEditDraft((draft) => ({
+                                ...draft,
+                                paymentMethod: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Channel"
+                            value={orderEditDraft.channel}
+                            onChange={(e) =>
+                              setOrderEditDraft((draft) => ({
+                                ...draft,
+                                channel: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Shipping / fulfillment method"
+                            value={orderEditDraft.shippingMethod}
+                            onChange={(e) =>
+                              setOrderEditDraft((draft) => ({
+                                ...draft,
+                                shippingMethod: e.target.value,
+                              }))
+                            }
+                          />
+                          <Textarea
+                            label="Shipping notes"
+                            value={orderEditDraft.notes}
+                            onChange={(e) =>
+                              setOrderEditDraft((draft) => ({
+                                ...draft,
+                                notes: e.target.value,
+                              }))
+                            }
+                            className="min-h-[120px] sm:col-span-2"
+                          />
+                          <div className="text-xs text-white/50 sm:col-span-2">
+                            Status and totals remain read-only here.
                           </div>
                         </div>
-                      );
-                    })}
+                      ) : (
+                        <DetailGrid
+                          items={[
+                            { label: "Sold at", value: soldAtLabel },
+                            { label: "Channel", value: channel },
+                            { label: "Order status", value: status || "UNKNOWN" },
+                            { label: "Payment", value: paymentStatus || "UNKNOWN" },
+                            {
+                              label: "Payment method",
+                              value:
+                                String(selectedOrder.payment_method ?? "").toUpperCase() || "-",
+                            },
+                            { label: "Shipping method", value: shippingMethod || "-" },
+                          ]}
+                        />
+                      )}
+                    </SectionBlock>
+
+                    <SectionBlock
+                      title={editingOrderDetails ? "Shipping preview" : "Shipping"}
+                      description="Customer-facing shipping information after payload cleanup."
+                    >
+                      <DetailGrid
+                        items={[
+                          { label: "Method", value: ship.method || "-" },
+                          {
+                            label: "Branch",
+                            value: ship.branch || "No branch details",
+                          },
+                          {
+                            label: "Pickup schedule",
+                            value: ship.pickupSchedule || "No pickup schedule",
+                          },
+                          {
+                            label: "Delivery fee note",
+                            value: ship.deliveryFeeNote || "No delivery note",
+                          },
+                          {
+                            label: "Notes",
+                            value: ship.notes || "No extra notes",
+                            className: "sm:col-span-2",
+                          },
+                        ]}
+                      />
+                    </SectionBlock>
                   </div>
-                )}
-              </div>
-            </div>
+
+                  <SectionBlock
+                    title={`Items (${selectedOrderItems.length})`}
+                    description="Line items, discounts, cost basis, and realized profit."
+                  >
+                    {selectedOrderItems.length === 0 ? (
+                      <div className="text-sm text-white/60">No items found.</div>
+                    ) : (
+                      <div className="space-y-3">
+                        {selectedOrderItems.map((it) => {
+                          const title = getItemTitle(it);
+                          const thumb = getItemThumb(it);
+                          const unit = getItemPrice(it);
+                          const costEach = getItemCostEach(it);
+                          const qty = Number(it?.qty ?? 1);
+                          const grossLine = getItemLineTotal(it);
+                          const line = grossLine * selectedOrderRevenueFactor;
+                          const lineDiscount = Math.max(0, grossLine - line);
+                          const cogs = costEach * qty;
+                          const profit = line - cogs;
+                          const notes = String(
+                            it?.product_variant?.public_notes ??
+                              it?.issue_notes ??
+                              it?.product_variant?.issue_notes ??
+                              ""
+                          ).trim();
+                          return (
+                            <div
+                              key={`${it.order_id}-${it.variant_id ?? it.item_id ?? title}`}
+                              className="surface-subtle flex gap-3 p-3 sm:items-start"
+                            >
+                              <div className="h-14 w-14 overflow-hidden rounded-xl border border-white/10 bg-bg-800/70 flex-shrink-0">
+                                {thumb ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={thumb}
+                                    alt={title}
+                                    className="h-full w-full object-cover"
+                                  />
+                                ) : null}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                  <div className="min-w-0">
+                                    <div className="truncate text-sm font-semibold text-white">
+                                      {title}
+                                    </div>
+                                    {notes ? (
+                                      <div className="mt-1 text-xs leading-5 text-white/56">
+                                        {notes}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                  <div className="text-left sm:text-right">
+                                    <div className="text-xs uppercase tracking-[0.13em] text-white/42">
+                                      Line value
+                                    </div>
+                                    <div className="mt-1 text-sm font-semibold text-white">
+                                      {peso(line)}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                                  <div className="rounded-xl border border-white/8 bg-black/10 px-3 py-2">
+                                    <div className="text-[0.68rem] uppercase tracking-[0.13em] text-white/42">
+                                      Quantity
+                                    </div>
+                                    <div className="mt-1 text-sm text-white/90">{qty}</div>
+                                  </div>
+                                  <div className="rounded-xl border border-white/8 bg-black/10 px-3 py-2">
+                                    <div className="text-[0.68rem] uppercase tracking-[0.13em] text-white/42">
+                                      Unit price
+                                    </div>
+                                    <div className="mt-1 text-sm text-white/90">{peso(unit)}</div>
+                                  </div>
+                                  <div className="rounded-xl border border-white/8 bg-black/10 px-3 py-2">
+                                    <div className="text-[0.68rem] uppercase tracking-[0.13em] text-white/42">
+                                      COGS
+                                    </div>
+                                    <div className="mt-1 text-sm text-white/90">{peso(cogs)}</div>
+                                  </div>
+                                  <div className="rounded-xl border border-white/8 bg-black/10 px-3 py-2">
+                                    <div className="text-[0.68rem] uppercase tracking-[0.13em] text-white/42">
+                                      Profit
+                                    </div>
+                                    <div
+                                      className={
+                                        profit >= 0
+                                          ? "mt-1 text-sm font-medium text-emerald-300"
+                                          : "mt-1 text-sm font-medium text-red-300"
+                                      }
+                                    >
+                                      {peso(profit)}
+                                    </div>
+                                  </div>
+                                </div>
+                                {lineDiscount > 0 ? (
+                                  <div className="mt-2 text-xs font-medium text-amber-300">
+                                    Discount applied: -{peso(lineDiscount)}
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </SectionBlock>
+                </div>
+              );
+            })()
           )}
         </DetailsModal>
       </div>

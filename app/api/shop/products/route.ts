@@ -10,7 +10,7 @@ export async function GET() {
     const { data, error } = await sb
       .from("product_variants")
       .select(
-        "id,created_at,condition,barcode,issue_notes,issue_photo_urls,public_notes,ship_class,price,sale_price,discount_percent,qty, product:products(*)"
+        "id,created_at,release_at,condition,barcode,issue_notes,issue_photo_urls,public_notes,ship_class,price,sale_price,discount_percent,qty, product:products(*)"
       )
       .gt("qty", 0)
       .order("created_at", { ascending: false });
@@ -29,7 +29,11 @@ export async function GET() {
 
     const rows = ((data as any[]) ?? []).filter((row) => {
       const qty = Number(row?.qty ?? 0);
-      return qty > 0 && row?.product?.is_active !== false;
+      const releaseAt = String(row?.release_at ?? "").trim();
+      const releaseTs = releaseAt ? Date.parse(releaseAt) : Number.NaN;
+      const isReleased =
+        !releaseAt || (Number.isFinite(releaseTs) && releaseTs <= Date.now());
+      return qty > 0 && isReleased && row?.product?.is_active !== false;
     });
 
     return NextResponse.json(
