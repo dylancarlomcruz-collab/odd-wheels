@@ -22,7 +22,6 @@ import {
   normalizeLookupField,
   normalizeTitleBrandAliases,
 } from "@/lib/titleInference";
-import { getDefaultVariantPriceForBrand } from "@/lib/brandDefaults";
 import { formatPHP } from "@/lib/money";
 import { toast } from "@/components/ui/toast";
 import {
@@ -128,6 +127,7 @@ type Variant = {
 type VariantCondition = Variant["condition"];
 type ShipClass =
   | "MINI_GT"
+  | "SMALL_BOX_FIGURE"
   | "KAIDO"
   | "POPRACE"
   | "ACRYLIC_TRUE_SCALE"
@@ -168,6 +168,10 @@ type ExistingBarcodeMatch = {
   condition: VariantCondition;
   ship_class: ShipClass | null;
   barcode: string | null;
+  cost: number | null;
+  price: number;
+  sale_price: number | null;
+  discount_percent: number | null;
   release_at: string | null;
   product: Product | null;
 };
@@ -274,6 +278,7 @@ const CONDITION_SELECT_OPTIONS: VariantCondition[] = [...ALL_VARIANT_CONDITIONS]
 
 const BULK_SHIP_CLASS_FILTER_OPTIONS: Array<{ value: ShipClass; label: string }> = [
   { value: "MINI_GT", label: "Mini GT" },
+  { value: "SMALL_BOX_FIGURE", label: "Small Box Figure" },
   { value: "KAIDO", label: "Kaido" },
   { value: "POPRACE", label: "Pop Race" },
   { value: "ACRYLIC_TRUE_SCALE", label: "Acrylic True Scale" },
@@ -291,6 +296,7 @@ const BULK_SHIP_CLASS_FILTER_OPTIONS: Array<{ value: ShipClass; label: string }>
 const DEFAULT_COST_BY_SHIP_CLASS: Partial<Record<ShipClass, string>> = {
   ACRYLIC_TRUE_SCALE: "700",
   MINI_GT: "450",
+  SMALL_BOX_FIGURE: "450",
   POPRACE: "500",
   KAIDO: "500",
   TOMICA_LIMITED_VINTAGE_NEO: "700",
@@ -745,8 +751,48 @@ function getDefaultCostForShipClass(value: ShipClass | null | undefined) {
   return DEFAULT_COST_BY_SHIP_CLASS[value] ?? "";
 }
 
-function getDefaultPriceForBrand(value: string | null | undefined) {
-  return getDefaultVariantPriceForBrand(value);
+function roundUpToNext49Or99(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const rounded = Math.ceil(value);
+  const base = Math.floor(rounded / 100) * 100;
+  const remainder = rounded - base;
+  return remainder <= 49 ? base + 49 : base + 99;
+}
+
+function getSuggestedPriceFromCost(value: string | number | null | undefined) {
+  const costValue =
+    typeof value === "number" ? value : n(String(value ?? "").trim(), NaN);
+  if (!Number.isFinite(costValue) || costValue <= 0) return "";
+  return String(roundUpToNext49Or99(costValue * 1.5));
+}
+
+function getMarginInfo(
+  costValue: string | number | null | undefined,
+  priceValue: string | number | null | undefined
+) {
+  const costNum =
+    typeof costValue === "number" ? costValue : n(String(costValue ?? "").trim(), NaN);
+  const priceNum =
+    typeof priceValue === "number" ? priceValue : n(String(priceValue ?? "").trim(), NaN);
+  if (!Number.isFinite(costNum) || costNum <= 0 || !Number.isFinite(priceNum) || priceNum <= 0) {
+    return null;
+  }
+
+  const margin = ((priceNum - costNum) / costNum) * 100;
+  const roundedMargin =
+    Math.abs(margin - Math.round(margin)) < 0.05
+      ? Math.round(margin).toString()
+      : margin.toFixed(1);
+
+  return {
+    text: `${roundedMargin}% margin`,
+    className:
+      margin < 0
+        ? "text-rose-300"
+        : margin < 35
+          ? "text-amber-200"
+          : "text-emerald-200",
+  };
 }
 
 function mergeBrandSuggestions(
@@ -785,6 +831,7 @@ function VariantDraftPanel({
   draft: VariantDraft;
   index: number;
 }) {
+  const marginInfo = getMarginInfo(draft.cost, draft.price);
   return (
     <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-4">
       <div className="font-semibold">Variant draft {index + 1}</div>
@@ -809,6 +856,7 @@ function VariantDraftPanel({
           disabled
         >
           <option value="MINI_GT">Mini GT</option>
+          <option value="SMALL_BOX_FIGURE">Small Box Figure</option>
           <option value="KAIDO">Kaido</option>
           <option value="POPRACE">Pop Race</option>
           <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
@@ -836,6 +884,11 @@ function VariantDraftPanel({
         <Input label="Cost (₱)" value={draft.cost} placeholder="(empty)" readOnly disabled />
         <Input
           label="Selling Price (₱)"
+          labelSuffix={
+            marginInfo ? (
+              <span className={marginInfo.className}>{marginInfo.text}</span>
+            ) : null
+          }
           value={draft.price}
           placeholder="(empty)"
           readOnly
@@ -1407,6 +1460,10 @@ export default function AdminInventoryPage() {
     costTouchedRef.current = false;
     lastAutoCostRef.current = nextDefaultCost;
     setCost(nextDefaultCost);
+    applySuggestedPriceFromCost(nextDefaultCost, {
+      force: options?.force,
+      currentPrice: price,
+    });
   }
 
   function adoptDraftCost(nextCost: string | null | undefined, nextShipClass: ShipClass) {
@@ -1416,6 +1473,10 @@ export default function AdminInventoryPage() {
     if (cleaned) {
       costTouchedRef.current = true;
       setCost(cleaned);
+      applySuggestedPriceFromCost(cleaned, {
+        force: true,
+        currentPrice: "",
+      });
       return;
     }
 
@@ -1426,8 +1487,12 @@ export default function AdminInventoryPage() {
   }
 
   function handleCostChange(nextValue: string) {
+    const cleaned = nextValue.replace(/[^0-9.]/g, "");
     costTouchedRef.current = true;
-    setCost(nextValue.replace(/[^0-9.]/g, ""));
+    setCost(cleaned);
+    applySuggestedPriceFromCost(cleaned, {
+      currentPrice: price,
+    });
   }
 
   function handleCostInputClick() {
@@ -1446,11 +1511,11 @@ export default function AdminInventoryPage() {
     setCost("");
   }
 
-  function applyDefaultPriceForBrand(
-    nextBrand: string | null | undefined,
+  function applySuggestedPriceFromCost(
+    nextCost: string | number | null | undefined,
     options?: { force?: boolean; currentPrice?: string }
   ) {
-    const nextDefaultPrice = getDefaultPriceForBrand(nextBrand);
+    const nextDefaultPrice = getSuggestedPriceFromCost(nextCost);
     const currentPrice = String(options?.currentPrice ?? price).trim();
     const previousAutoPrice = lastAutoPriceRef.current;
     const shouldApplyDefault =
@@ -1474,15 +1539,6 @@ export default function AdminInventoryPage() {
   function handlePriceInputClick() {
     const currentPrice = price.trim();
     if (!currentPrice) return;
-
-    const defaultPrice = getDefaultPriceForBrand(brand);
-    if (
-      currentPrice !== lastAutoPriceRef.current &&
-      currentPrice !== defaultPrice
-    ) {
-      return;
-    }
-
     priceTouchedRef.current = true;
     setPrice("");
   }
@@ -1510,10 +1566,6 @@ export default function AdminInventoryPage() {
   React.useEffect(() => {
     applyDefaultCostForShipClass(shipClass);
   }, [shipClass]);
-
-  React.useEffect(() => {
-    applyDefaultPriceForBrand(brand);
-  }, [brand]);
 
   React.useEffect(() => {
     if (!filteredBrandSuggestions.length) {
@@ -1885,10 +1937,6 @@ export default function AdminInventoryPage() {
     setAddQtyByVariant({});
     setRescheduleLiveVariants(false);
     setPublishScheduledNow(false);
-    const nextDefaultPrice = getDefaultPriceForBrand(p.brand ?? "");
-    lastAutoPriceRef.current = nextDefaultPrice;
-    setPrice(nextDefaultPrice);
-
     setLoadingVariants(true);
     const { data, error } = await supabase
       .from("product_variants")
@@ -2269,10 +2317,6 @@ export default function AdminInventoryPage() {
       force: true,
       currentCost: "",
     });
-    applyDefaultPriceForBrand("", {
-      force: true,
-      currentPrice: "",
-    });
     setQty("1");
     setShipClass(nextShipClass);
     setVariantBarcode("");
@@ -2325,10 +2369,6 @@ export default function AdminInventoryPage() {
       force: true,
       currentCost: "",
     });
-    applyDefaultPriceForBrand("", {
-      force: true,
-      currentPrice: "",
-    });
     setQty("1");
     setShipClass(nextShipClass);
     setVariantBarcode("");
@@ -2371,10 +2411,6 @@ export default function AdminInventoryPage() {
     applyDefaultCostForShipClass(nextShipClass, {
       force: true,
       currentCost: "",
-    });
-    applyDefaultPriceForBrand(brand, {
-      force: true,
-      currentPrice: "",
     });
     setQty("1");
     setShipClass(nextShipClass);
@@ -2528,7 +2564,7 @@ export default function AdminInventoryPage() {
     }
     setQueuedVariants((prev) => [...prev, buildVariantDraft()]);
     setCondition(nextCondition(condition));
-    applyDefaultPriceForBrand(brand, {
+    applySuggestedPriceFromCost(cost, {
       force: true,
       currentPrice: "",
     });
@@ -2661,7 +2697,7 @@ export default function AdminInventoryPage() {
       const { data: existingRows, error: existingError } = await supabase
         .from("product_variants")
         .select(
-          "id,product_id,qty,condition,ship_class,barcode,release_at,product:products(*)"
+          "id,product_id,qty,condition,ship_class,barcode,cost,price,sale_price,discount_percent,release_at,product:products(*)"
         )
         .eq("barcode", code)
         .limit(20);
@@ -2675,6 +2711,19 @@ export default function AdminInventoryPage() {
           condition: (row?.condition ?? "unsealed") as VariantCondition,
           ship_class: (row?.ship_class ?? null) as ShipClass | null,
           barcode: row?.barcode ? String(row.barcode) : null,
+          cost:
+            row?.cost == null || row?.cost === ""
+              ? null
+              : n(row.cost, 0),
+          price: n(row?.price, 0),
+          sale_price:
+            row?.sale_price == null || row?.sale_price === ""
+              ? null
+              : n(row.sale_price, 0),
+          discount_percent:
+            row?.discount_percent == null || row?.discount_percent === ""
+              ? null
+              : n(row.discount_percent, 0),
           release_at: row?.release_at ? String(row.release_at) : null,
           product: row?.product ? (row.product as Product) : null,
         }))
@@ -3887,10 +3936,6 @@ export default function AdminInventoryPage() {
     setCondition(nextCondition);
     setVariantBarcode(base.barcode ?? "");
     adoptDraftCost(base.cost != null ? String(base.cost) : "", nextShipClass);
-    applyDefaultPriceForBrand(sourceBrand, {
-      force: true,
-      currentPrice: "",
-    });
     setQty(base.qty != null ? String(base.qty) : "1");
     setShipClass(nextShipClass);
     setPublicNotes(String(base.public_notes ?? base.issue_notes ?? ""));
@@ -4984,6 +5029,30 @@ export default function AdminInventoryPage() {
       ) ?? existingBarcodePrompt.matches[0]
     );
   }, [existingBarcodePrompt, existingBarcodeVariantId]);
+  const selectedExistingBarcodeEffectivePrice = React.useMemo(() => {
+    if (!selectedExistingBarcodeMatch) return 0;
+    if (selectedExistingBarcodeMatch.sale_price != null) {
+      return selectedExistingBarcodeMatch.sale_price;
+    }
+    if ((selectedExistingBarcodeMatch.discount_percent ?? 0) > 0) {
+      return Number(
+        (
+          selectedExistingBarcodeMatch.price *
+          ((100 -
+            Math.min(
+              Math.max(selectedExistingBarcodeMatch.discount_percent ?? 0, 0),
+              100
+            )) /
+            100)
+        ).toFixed(2)
+      );
+    }
+    return selectedExistingBarcodeMatch.price;
+  }, [selectedExistingBarcodeMatch]);
+  const newVariantMarginInfo = React.useMemo(
+    () => getMarginInfo(cost, price),
+    [cost, price]
+  );
   const visibleSearchResults =
     compactAddMode && !showAllSearchResults ? results.slice(0, 4) : results;
   const hiddenSearchResultCount = Math.max(0, results.length - visibleSearchResults.length);
@@ -6263,6 +6332,7 @@ export default function AdminInventoryPage() {
                       >
                         <option value="">—</option>
                         <option value="MINI_GT">MINI_GT</option>
+                        <option value="SMALL_BOX_FIGURE">SMALL_BOX_FIGURE</option>
                         <option value="KAIDO">KAIDO</option>
                         <option value="POPRACE">POPRACE</option>
                         <option value="ACRYLIC_TRUE_SCALE">
@@ -6435,6 +6505,7 @@ export default function AdminInventoryPage() {
                 onChange={(e) => setShipClass(e.target.value as ShipClass)}
               >
                 <option value="MINI_GT">Mini GT</option>
+                <option value="SMALL_BOX_FIGURE">Small Box Figure</option>
                 <option value="KAIDO">Kaido</option>
                 <option value="POPRACE">Pop Race</option>
                 <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
@@ -6467,6 +6538,13 @@ export default function AdminInventoryPage() {
               />
               <Input
                 label="Selling Price (₱)"
+                labelSuffix={
+                  newVariantMarginInfo ? (
+                    <span className={newVariantMarginInfo.className}>
+                      {newVariantMarginInfo.text}
+                    </span>
+                  ) : null
+                }
                 value={price}
                 onChange={(e) => handlePriceChange(e.target.value)}
                 onClick={handlePriceInputClick}
@@ -6652,6 +6730,7 @@ export default function AdminInventoryPage() {
                 onChange={(e) => setBulkShipClass(e.target.value as ShipClass)}
               >
                 <option value="MINI_GT">Mini GT</option>
+                <option value="SMALL_BOX_FIGURE">Small Box Figure</option>
                 <option value="KAIDO">Kaido</option>
                 <option value="POPRACE">Pop Race</option>
                 <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
@@ -7357,12 +7436,48 @@ export default function AdminInventoryPage() {
                   Condition {formatConditionLabel(selectedExistingBarcodeMatch.condition)} -
                   {" "}Current qty {selectedExistingBarcodeMatch.qty}
                 </div>
+                <div className="mt-1 text-xs text-white/60">
+                  Cost{" "}
+                  {selectedExistingBarcodeMatch.cost == null
+                    ? "-"
+                    : formatPHP(selectedExistingBarcodeMatch.cost)}
+                  {" | "}Selling{" "}
+                  {selectedExistingBarcodeMatch.sale_price != null ||
+                  (selectedExistingBarcodeMatch.discount_percent ?? 0) > 0 ? (
+                    <>
+                      <span className="line-through opacity-60">
+                        {formatPHP(selectedExistingBarcodeMatch.price)}
+                      </span>
+                      {" -> "}
+                      {formatPHP(selectedExistingBarcodeEffectivePrice)}
+                    </>
+                  ) : (
+                    formatPHP(selectedExistingBarcodeMatch.price)
+                  )}
+                </div>
               </div>
             ) : null}
 
             <div className="mt-5 grid gap-4 lg:grid-cols-2">
               <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4 space-y-3">
                 <div className="font-semibold">Add To Existing Variant</div>
+                {selectedExistingBarcodeMatch ? (
+                  <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/70">
+                    Existing price:{" "}
+                    {selectedExistingBarcodeMatch.sale_price != null ||
+                    (selectedExistingBarcodeMatch.discount_percent ?? 0) > 0 ? (
+                      <>
+                        <span className="line-through opacity-60">
+                          {formatPHP(selectedExistingBarcodeMatch.price)}
+                        </span>
+                        {" -> "}
+                        {formatPHP(selectedExistingBarcodeEffectivePrice)}
+                      </>
+                    ) : (
+                      formatPHP(selectedExistingBarcodeMatch.price)
+                    )}
+                  </div>
+                ) : null}
                 <Input
                   type="number"
                   min={1}
@@ -7406,6 +7521,7 @@ export default function AdminInventoryPage() {
                     disabled={existingBarcodeActionLoading}
                   >
                     <option value="MINI_GT">Mini GT</option>
+                    <option value="SMALL_BOX_FIGURE">Small Box Figure</option>
                     <option value="KAIDO">Kaido</option>
                     <option value="POPRACE">Pop Race</option>
                     <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
@@ -7431,7 +7547,7 @@ export default function AdminInventoryPage() {
                   <div />
 
                   <Input
-                    label="Cost (P)"
+                    label="Cost (₱)"
                     value={cost}
                     onChange={(e) => handleCostChange(e.target.value)}
                     onClick={handleCostInputClick}
@@ -7439,7 +7555,14 @@ export default function AdminInventoryPage() {
                     disabled={existingBarcodeActionLoading}
                   />
                   <Input
-                    label="Selling Price (P)"
+                    label="Selling Price (₱)"
+                    labelSuffix={
+                      newVariantMarginInfo ? (
+                        <span className={newVariantMarginInfo.className}>
+                          {newVariantMarginInfo.text}
+                        </span>
+                      ) : null
+                    }
                     value={price}
                     onChange={(e) => handlePriceChange(e.target.value)}
                     onClick={handlePriceInputClick}

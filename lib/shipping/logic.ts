@@ -5,6 +5,7 @@ export type ShipCounts = Record<ShipClass, number>;
 export function emptyShipCounts(): ShipCounts {
   return {
     MINI_GT: 0,
+    SMALL_BOX_FIGURE: 0,
     KAIDO: 0,
     POPRACE: 0,
     ACRYLIC_TRUE_SCALE: 0,

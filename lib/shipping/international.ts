@@ -225,6 +225,7 @@ Zimbabwe|2034|534.5|30
 
 const INTERNATIONAL_SMALL_BOX_CAPACITY: Partial<Record<ShipClass, number>> = {
   MINI_GT: 30,
+  SMALL_BOX_FIGURE: 30,
   KAIDO: 20,
   POPRACE: 20,
   ACRYLIC_TRUE_SCALE: 20,

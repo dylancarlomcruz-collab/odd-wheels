@@ -56,6 +56,7 @@ const EMPTY_FORM: VoucherForm = {
 
 const SHIP_CLASS_OPTIONS: ShipClass[] = [
   "MINI_GT",
+  "SMALL_BOX_FIGURE",
   "KAIDO",
   "POPRACE",
   "ACRYLIC_TRUE_SCALE",
@@ -81,6 +82,8 @@ function formatShipClassLabel(value: string) {
   switch (value) {
     case "ACRYLIC_TRUE_SCALE":
       return "Acrylic True-Scale";
+    case "SMALL_BOX_FIGURE":
+      return "Small Box Figure";
     case "FIGURES_DIORAMA":
       return "Figures & Diorama";
     case "HOT_WHEELS_MAINLINE":

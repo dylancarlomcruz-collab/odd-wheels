@@ -82,6 +82,7 @@ const CONDITION_OPTIONS: Array<VariantDraft["condition"]> = [
 
 const SHIP_OPTIONS = [
   "MINI_GT",
+  "SMALL_BOX_FIGURE",
   "KAIDO",
   "POPRACE",
   "ACRYLIC_TRUE_SCALE",

@@ -4,18 +4,20 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
-  label?: string;
+  label?: React.ReactNode;
+  labelSuffix?: React.ReactNode;
   hint?: string;
   error?: string;
 }
 
 export const Input = React.forwardRef<HTMLInputElement, InputProps>(
-  ({ className, label, hint, error, ...props }, ref) => {
+  ({ className, label, labelSuffix, hint, error, ...props }, ref) => {
     return (
       <label className="block space-y-1.5">
         {label ? (
-          <div className="text-[0.72rem] font-medium uppercase tracking-[0.12em] text-white/58">
-            {label}
+          <div className="flex items-center justify-between gap-2 text-[0.72rem] font-medium uppercase tracking-[0.12em] text-white/58">
+            <span>{label}</span>
+            {labelSuffix ? <span>{labelSuffix}</span> : null}
           </div>
         ) : null}
         <input
