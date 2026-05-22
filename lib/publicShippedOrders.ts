@@ -2,6 +2,8 @@ export type PublicShipmentSourceRow = {
   id: string;
   created_at?: string | null;
   customer_name?: string | null;
+  status?: string | null;
+  order_status?: string | null;
   shipping_method?: string | null;
   shipping_details?: unknown;
   shipping_status?: string | null;
@@ -37,7 +39,9 @@ export type PublicShipmentView = {
   packageCode: string;
   packageLabel: string;
   shippingStatus: PublicShipmentStatus;
+  trackingNumber: string | null;
   trackingPreview: string | null;
+  estimatedDeliveryLabel: string | null;
   cop: boolean;
   referenceDate: string;
   shippedAt: string | null;
@@ -119,9 +123,19 @@ export function formatPublicShipmentStatusLabel(
 
 export function isPublicShipmentEligible(row: PublicShipmentSourceRow) {
   const details = parseShipmentJson(row.shipping_details);
+  const orderLifecycleStatus = String(row.status ?? "")
+    .trim()
+    .toUpperCase();
+  const orderStatus = String(row.order_status ?? "")
+    .trim()
+    .toUpperCase();
   if (
     details.public_board_hidden === true ||
-    String(details.public_board_deleted_at ?? "").trim()
+    String(details.public_board_deleted_at ?? "").trim() ||
+    orderLifecycleStatus === "CANCELLED" ||
+    orderLifecycleStatus === "VOIDED" ||
+    orderStatus === "CANCELLED" ||
+    orderStatus === "VOIDED"
   ) {
     return false;
   }
@@ -129,8 +143,8 @@ export function isPublicShipmentEligible(row: PublicShipmentSourceRow) {
     normalizePublicShipmentMethod(
       String(details.method ?? row.shipping_method ?? row.courier ?? ""),
     ) ?? normalizePublicShipmentMethod(row.courier);
-  const status = normalizePublicShipmentStatus(row.shipping_status);
-  return Boolean(method && status);
+  const shipmentStatus = normalizePublicShipmentStatus(row.shipping_status);
+  return Boolean(method && shipmentStatus);
 }
 
 export function resolvePublicShipmentDate(row: PublicShipmentSourceRow) {
@@ -239,36 +253,18 @@ export function normalizePublicCustomerName(value: string | null | undefined) {
 }
 
 function maskToken(token: string) {
-  const chars = token.split("");
-  const letterIndices = chars
-    .map((char, index) => (/[\p{L}\p{N}]/u.test(char) ? index : -1))
-    .filter((index) => index >= 0);
-
-  if (letterIndices.length <= 1) return token;
-
-  const visible = new Set<number>();
-  visible.add(letterIndices[0]);
-  visible.add(letterIndices[letterIndices.length - 1]);
-  if (letterIndices.length >= 5) {
-    visible.add(letterIndices[Math.floor(letterIndices.length / 2)]);
-  }
-
-  return chars
-    .map((char, index) => {
-      if (!/[\p{L}\p{N}]/u.test(char)) return char;
-      return visible.has(index) ? char : "*";
-    })
+  return token
+    .split("")
+    .map((char) => (/[\p{L}\p{N}]/u.test(char) ? "*" : char))
     .join("");
 }
 
 export function maskCustomerName(value: string | null | undefined) {
   const cleaned = String(value ?? "").replace(/\s+/g, " ").trim();
   if (!cleaned) return "Unknown customer";
-  return cleaned
-    .split(" ")
-    .filter(Boolean)
-    .map(maskToken)
-    .join(" ");
+  const parts = cleaned.split(" ").filter(Boolean);
+  if (parts.length <= 1) return parts[0] ?? cleaned;
+  return [parts[0], ...parts.slice(1).map(maskToken)].join(" ");
 }
 
 export function formatPublicPackageCode(
@@ -309,6 +305,193 @@ export function getPublicTrackingPreview(value: string | null | undefined) {
   const cleaned = String(value ?? "").trim();
   if (cleaned.length < 4) return cleaned || null;
   return `****${cleaned.slice(-4)}`;
+}
+
+type PublicShipmentZone =
+  | "NCR"
+  | "LUZON"
+  | "VISAYAS"
+  | "MINDANAO"
+  | "PUERTO_PRINCESA"
+  | "BATANES"
+  | "CORON"
+  | "BICOL"
+  | "ISLAND";
+
+function normalizePublicLocationSearchValue(value: string | null | undefined) {
+  return String(value ?? "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function publicLocationIncludes(
+  normalizedValue: string,
+  terms: readonly string[],
+) {
+  return terms.some((term) => normalizedValue.includes(term));
+}
+
+export function resolvePublicShipmentZone(
+  locationLabel: string | null | undefined,
+): PublicShipmentZone | null {
+  const normalizedValue = normalizePublicLocationSearchValue(locationLabel);
+  if (!normalizedValue) return null;
+
+  if (
+    publicLocationIncludes(normalizedValue, [
+      "puerto princesa",
+      "palawan",
+    ])
+  ) {
+    return "PUERTO_PRINCESA";
+  }
+
+  if (publicLocationIncludes(normalizedValue, ["batanes", "basco"])) {
+    return "BATANES";
+  }
+
+  if (publicLocationIncludes(normalizedValue, ["coron"])) {
+    return "CORON";
+  }
+
+  if (
+    publicLocationIncludes(normalizedValue, [
+      "ncr",
+      "metro manila",
+      "manila",
+      "quezon city",
+      "makati",
+      "pasay",
+      "pasig",
+      "taguig",
+      "paranaque",
+      "muntinlupa",
+      "las pinas",
+      "marikina",
+      "mandaluyong",
+      "caloocan",
+      "malabon",
+      "navotas",
+      "valenzuela",
+      "san juan",
+      "pateros",
+    ])
+  ) {
+    return "NCR";
+  }
+
+  if (
+    publicLocationIncludes(normalizedValue, [
+      "albay",
+      "camarines norte",
+      "camarines sur",
+      "catanduanes",
+      "masbate",
+      "sorsogon",
+      "naga",
+      "legazpi",
+      "bicol",
+    ])
+  ) {
+    return "BICOL";
+  }
+
+  if (
+    publicLocationIncludes(normalizedValue, [
+      "cebu",
+      "iloilo",
+      "bacolod",
+      "negros",
+      "bohol",
+      "leyte",
+      "samar",
+      "ormoc",
+      "tacloban",
+      "dumaguete",
+      "siquijor",
+      "aklan",
+      "capiz",
+      "antique",
+      "guimaras",
+      "biliran",
+      "visayas",
+    ])
+  ) {
+    return "VISAYAS";
+  }
+
+  if (
+    publicLocationIncludes(normalizedValue, [
+      "davao",
+      "cagayan de oro",
+      "general santos",
+      "gensan",
+      "zamboanga",
+      "butuan",
+      "bukidnon",
+      "cotabato",
+      "surigao",
+      "agusan",
+      "dipolog",
+      "pagadian",
+      "tagum",
+      "valencia",
+      "iligan",
+      "ozamiz",
+      "malaybalay",
+      "mindanao",
+    ])
+  ) {
+    return "MINDANAO";
+  }
+
+  return "LUZON";
+}
+
+const PUBLIC_LBC_NCR_ETA: Record<Exclude<PublicShipmentZone, "ISLAND">, string> = {
+  NCR: "1-3 days",
+  LUZON: "2-4 days",
+  VISAYAS: "4-7 days",
+  MINDANAO: "6-9 days",
+  PUERTO_PRINCESA: "6-8 days",
+  BATANES: "30 days",
+  CORON: "7-11 days",
+  BICOL: "4-6 days",
+};
+
+const PUBLIC_JNT_MNL_ETA: Record<PublicShipmentZone, string> = {
+  NCR: "1-2 days",
+  LUZON: "1-2 days",
+  VISAYAS: "3-4 days",
+  MINDANAO: "3-4 days",
+  PUERTO_PRINCESA: "5-6 days",
+  BATANES: "5-6 days",
+  CORON: "5-6 days",
+  BICOL: "1-2 days",
+  ISLAND: "5-6 days",
+};
+
+export function getPublicEstimatedDeliveryLabel(
+  shippingMethod: "LBC" | "JNT",
+  locationLabel: string | null | undefined,
+) {
+  const zone = resolvePublicShipmentZone(locationLabel);
+  if (!zone) return null;
+  const eta =
+    shippingMethod === "LBC"
+      ? PUBLIC_LBC_NCR_ETA[zone === "ISLAND" ? "LUZON" : zone]
+      : PUBLIC_JNT_MNL_ETA[
+          zone === "PUERTO_PRINCESA" ||
+          zone === "BATANES" ||
+          zone === "CORON"
+            ? "ISLAND"
+            : zone
+        ];
+  return eta ? `Est. delivery ${eta}` : null;
 }
 
 function formatDateTimeLocalValue(value: string | null | undefined) {
@@ -358,7 +541,12 @@ export function buildPublicShipmentView(
     packageCode,
     packageLabel,
     shippingStatus,
+    trackingNumber: String(row.tracking_number ?? "").trim() || null,
     trackingPreview: getPublicTrackingPreview(row.tracking_number),
+    estimatedDeliveryLabel: getPublicEstimatedDeliveryLabel(
+      shippingMethod,
+      locationLabel,
+    ),
     cop,
     referenceDate,
     shippedAt: row.shipped_at ?? null,

@@ -532,7 +532,29 @@ export default function AdminSalesPage() {
     return label || "Item";
   }
 
-  async function run() {
+  const run = React.useCallback(async () => {
+    const fromDate = parseLocalDate(from);
+    const toDate = parseLocalDate(to);
+    if (!fromDate || !toDate || toDate.getTime() < fromDate.getTime()) {
+      setOrders([]);
+      setTopItems([]);
+      setSoldItems([]);
+      setDaily([]);
+      setChannelBreakdown({});
+      setOrderSummaries([]);
+      setItemSummaries([]);
+      setTotals({
+        sales: 0,
+        count: 0,
+        itemsSold: 0,
+        aov: 0,
+        cogs: 0,
+        grossProfit: 0,
+        grossMargin: 0,
+      });
+      return;
+    }
+
     setLoading(true);
     try {
       const num = (value: any) => {
@@ -990,12 +1012,11 @@ export default function AdminSalesPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [from, to]);
 
   React.useEffect(() => {
     run();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [run]);
 
 
   const channels = Object.entries(channelBreakdown).sort((a, b) => b[1].sales - a[1].sales);

@@ -28,6 +28,7 @@ import { createOrderFromCart } from "@/lib/orders";
 import {
   FEES,
   REGION_LABEL,
+  REGION_BRANCH_CITY_OPTIONS,
   LBC_CAPACITY,
   JNT_CAPACITY,
   type LbcPackage,
@@ -79,6 +80,7 @@ const SHIPPING_METHODS: ShippingMethod[] = [
   "LALAMOVE",
   "PICKUP",
 ];
+const LBC_BRANCH_CITY_DATALIST_ID = "lbc-branch-city-options";
 const SHIPPING_METHOD_LABELS: Record<ShippingMethod, string> = {
   LBC: "LBC Pickup",
   INTERNATIONAL: "International",
@@ -905,6 +907,20 @@ function CheckoutContent() {
   const [lbcBranchCity, setLbcBranchCity] = React.useState("");
   const [lbcPackageChoice, setLbcPackageChoice] =
     React.useState<LbcPackage>("N_SAKTO");
+  const normalizedLbcBranchCity = React.useMemo(
+    () => lbcBranchCity.trim().toLowerCase(),
+    [lbcBranchCity],
+  );
+  const lbcBranchCitySuggestions = React.useMemo(
+    () => REGION_BRANCH_CITY_OPTIONS[region] ?? [],
+    [region],
+  );
+  const lbcBranchCityMatchesRegion = React.useMemo(() => {
+    if (!normalizedLbcBranchCity) return true;
+    return lbcBranchCitySuggestions.some(
+      (city) => city.trim().toLowerCase() === normalizedLbcBranchCity,
+    );
+  }, [normalizedLbcBranchCity, lbcBranchCitySuggestions]);
 
   // International
   const [internationalCountry, setInternationalCountry] = React.useState("");
@@ -2663,8 +2679,24 @@ function CheckoutContent() {
                     label="Branch City"
                     value={lbcBranchCity}
                     onChange={(e) => setLbcBranchCity(e.target.value)}
+                    list={LBC_BRANCH_CITY_DATALIST_ID}
+                    error={
+                      lbcBranchCity.trim() && !lbcBranchCityMatchesRegion
+                        ? `Selected city does not match ${REGION_LABEL[region]}.`
+                        : undefined
+                    }
+                    hint={
+                      lbcBranchCitySuggestions.length
+                        ? `Suggested cities for ${REGION_LABEL[region]} branch rates.`
+                        : undefined
+                    }
                   />
                 </div>
+                <datalist id={LBC_BRANCH_CITY_DATALIST_ID}>
+                  {lbcBranchCitySuggestions.map((city) => (
+                    <option key={`${region}-${city}`} value={city} />
+                  ))}
+                </datalist>
 
                 {lbcAllowedPacks.length ? (
                   <Select

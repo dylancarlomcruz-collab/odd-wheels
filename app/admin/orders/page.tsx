@@ -147,6 +147,30 @@ function getAddressOrBranch(method: string, details: any, order: any) {
   return addr;
 }
 
+function getRecordedAddressValue(method: string, order: any) {
+  const rawAddress = order?.address;
+  const parsedAddress = parseJsonMaybe(rawAddress);
+
+  if (parsedAddress) {
+    const normalizedMethod = String(
+      method ?? parsedAddress.method ?? parsedAddress.shipping_method ?? ""
+    ).toUpperCase();
+    const resolved = getAddressOrBranch(normalizedMethod, parsedAddress, {
+      ...order,
+      address:
+        parsedAddress.full_address ??
+        parsedAddress.address ??
+        parsedAddress.dropoff_address ??
+        parsedAddress.branch_name ??
+        rawAddress,
+    });
+
+    if (resolved) return resolved;
+  }
+
+  return String(rawAddress ?? "-");
+}
+
 function getItemThumb(it: any): string | null {
   const urls = it?.product_variant?.product?.image_urls;
   if (Array.isArray(urls) && urls.length) return String(urls[0]);
@@ -204,6 +228,8 @@ function formatShippingContainer(method: string, details: any) {
 
   return normalized.replace(/_/g, " ");
 }
+
+const APPROVED_RECEIPTS_FILTER = "APPROVED_RECEIPTS";
 
 const STATUS_META: Record<
   string,
@@ -342,9 +368,19 @@ export default function AdminOrdersPage() {
   const pendingApproval = orders.filter((o) => o.status === "PENDING_APPROVAL");
   const paymentSubmitted = orders.filter((o) => o.status === "PAYMENT_SUBMITTED");
   const awaitingPayment = orders.filter((o) => o.status === "AWAITING_PAYMENT");
+  const approvedReceipts = orders.filter((o) => {
+    const paymentStatus = String(o.payment_status ?? "").toUpperCase();
+    return paymentStatus === "PAID" && Boolean(String(o.receipt_url ?? "").trim());
+  });
   const voidedOrders = orders.filter((o) => o.status === "VOIDED");
   const visibleOrders = React.useMemo(() => {
     if (!statusFilter) return orders;
+    if (statusFilter === APPROVED_RECEIPTS_FILTER) {
+      return orders.filter((o) => {
+        const paymentStatus = String(o.payment_status ?? "").toUpperCase();
+        return paymentStatus === "PAID" && Boolean(String(o.receipt_url ?? "").trim());
+      });
+    }
     return orders.filter((o) => o.status === statusFilter);
   }, [orders, statusFilter]);
 
@@ -363,6 +399,11 @@ export default function AdminOrdersPage() {
       status: "AWAITING_PAYMENT",
       count: awaitingPayment.length,
       countClass: "text-indigo-200",
+    },
+    {
+      status: APPROVED_RECEIPTS_FILTER,
+      count: approvedReceipts.length,
+      countClass: "text-emerald-200",
     },
   ];
 
@@ -594,10 +635,16 @@ export default function AdminOrdersPage() {
       o.customer_phone ||
       "";
     const customerAddress = getAddressOrBranch(shippingMethod, details, o);
+    const recordedAddress = getRecordedAddressValue(shippingMethod, o);
     const deadline = o.payment_deadline ?? o.reserved_expires_at ?? null;
     const left = msLeft(deadline, now);
     const showTimer = o.status === "AWAITING_PAYMENT" && !o.payment_hold && left !== null;
     const items = itemsByOrderId[o.id] ?? [];
+    const receiptUrl = String(o.receipt_url ?? "").trim();
+    const lineDiscount = Math.max(
+      0,
+      Number(o.discount_total ?? 0) - Number(o.shipping_discount ?? 0)
+    );
 
     return (
       <div className="space-y-5">
@@ -645,12 +692,15 @@ export default function AdminOrdersPage() {
           <DetailGrid
             items={[
               { label: "Customer", value: customerName || "-" },
+              { label: "Recorded customer", value: String(o.customer_name ?? "-") },
               {
                 label: "Phone",
                 value: customerPhone || "-",
                 hint: customerPhone ? "Copy the phone number below when needed." : undefined,
               },
+              { label: "Recorded contact", value: String(o.contact ?? "-") },
               { label: "Address / branch", value: customerAddress || "-" },
+              { label: "Recorded address", value: recordedAddress || "-" },
               { label: "Shipping method", value: shippingMethod || "-" },
               { label: "Packaging", value: shippingContainer || "-" },
               { label: "Payment method", value: String(o.payment_method ?? "-") },
@@ -669,12 +719,33 @@ export default function AdminOrdersPage() {
         <SectionBlock title="Operational snapshot">
           <DetailGrid
             items={[
+              { label: "Full order ID", value: String(o.id ?? "-") },
               { label: "Order status", value: statusMeta.label },
               { label: "Payment status", value: String(o.payment_status ?? "-") },
+              { label: "Shipping status", value: String(o.shipping_status ?? "-") },
+              { label: "Tracking number", value: String(o.tracking_number ?? "-") },
+              { label: "Courier", value: String(o.courier ?? "-") },
+              { label: "Channel", value: String(o.channel ?? "-") },
               {
                 label: "Payment deadline",
                 value: deadline ? new Date(deadline).toLocaleString("en-PH") : "-",
                 hint: showTimer ? `Live countdown: ${fmtCountdown(left!)}` : undefined,
+              },
+              {
+                label: "Reserved until",
+                value: o.reserved_expires_at
+                  ? new Date(o.reserved_expires_at).toLocaleString("en-PH")
+                  : "-",
+              },
+              {
+                label: "Shipped at",
+                value: o.shipped_at ? new Date(o.shipped_at).toLocaleString("en-PH") : "-",
+              },
+              {
+                label: "Completed at",
+                value: o.completed_at
+                  ? new Date(o.completed_at).toLocaleString("en-PH")
+                  : "-",
               },
               {
                 label: "Receipt status",
@@ -684,12 +755,26 @@ export default function AdminOrdersPage() {
           />
         </SectionBlock>
 
-        {o.receipt_url ? (
+        <SectionBlock title="Financials">
+          <DetailGrid
+            items={[
+              { label: "Subtotal", value: peso(Number(o.subtotal ?? 0)) },
+              { label: "Shipping fee", value: peso(Number(o.shipping_fee ?? 0)) },
+              { label: "Priority fee", value: peso(Number(o.priority_fee ?? 0)) },
+              { label: "Rush fee", value: peso(Number(o.rush_fee ?? 0)) },
+              { label: "Item discount", value: peso(lineDiscount) },
+              { label: "Total", value: peso(Number(o.total ?? 0)) },
+            ]}
+          />
+        </SectionBlock>
+
+        {receiptUrl ? (
           <SectionBlock title="Receipt" description="Open the uploaded receipt in full size.">
-            <a href={o.receipt_url} target="_blank" rel="noreferrer" className="block">
+            <div className="mb-3 break-all text-xs text-white/50">{receiptUrl}</div>
+            <a href={receiptUrl} target="_blank" rel="noreferrer" className="block">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={o.receipt_url}
+                src={receiptUrl}
                 alt="Receipt"
                 className="max-h-80 w-full rounded-2xl border border-white/10 bg-neutral-50 object-contain"
               />
@@ -816,9 +901,15 @@ export default function AdminOrdersPage() {
         </CardHeader>
 
         <CardBody className="space-y-6">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {summaryCards.map((card) => {
-              const meta = getStatusMeta(card.status);
+              const meta =
+                card.status === APPROVED_RECEIPTS_FILTER
+                  ? {
+                      label: "Approved receipts",
+                      icon: ClipboardCheck,
+                    }
+                  : getStatusMeta(card.status);
               const Icon = meta.icon;
               const active = statusFilter === card.status;
               return (
@@ -833,7 +924,13 @@ export default function AdminOrdersPage() {
                   active={active}
                   aria-pressed={active}
                   valueClassName={card.countClass}
-                  hint={active ? "Showing this queue" : "Tap to filter"}
+                  hint={
+                    active
+                      ? "Showing this queue"
+                      : card.status === APPROVED_RECEIPTS_FILTER
+                        ? "Tap to review paid receipts"
+                        : "Tap to filter"
+                  }
                 />
               );
             })}
@@ -868,6 +965,9 @@ export default function AdminOrdersPage() {
                   "";
                 const customerAddress = getAddressOrBranch(shippingMethod, details, o);
                 const courierSummary = shippingContainer || shippingMethod;
+                const receiptUrl = String(o.receipt_url ?? "").trim();
+                const isApprovedReceipt =
+                  String(o.payment_status ?? "").toUpperCase() === "PAID" && Boolean(receiptUrl);
                 return (
                   <div
                     key={o.id}
@@ -894,6 +994,12 @@ export default function AdminOrdersPage() {
                         <div className="min-w-0 truncate text-white/70">
                           {customerAddress || "—"}
                         </div>
+                        {isApprovedReceipt ? (
+                          <div className="mt-1 flex items-center gap-2 text-emerald-200">
+                            <Receipt className="h-3.5 w-3.5" />
+                            <span>Approved receipt on file</span>
+                          </div>
+                        ) : null}
                       </div>
                       <div className="mt-2 flex flex-nowrap items-center gap-1">
                         <Button

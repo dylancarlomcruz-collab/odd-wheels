@@ -33,15 +33,6 @@ type ShipmentApiResponse = {
   rows: ShipmentRow[];
 };
 
-type TrackingLookupResponse = {
-  ok: true;
-  isAdmin: boolean;
-  matches: Array<{
-    id: string;
-    trackingNumber: string | null;
-  }>;
-};
-
 type EditDraft = PublicShipmentAdminDraft;
 
 function getWeekStartIso(value: string) {
@@ -147,12 +138,6 @@ export default function ShippedOrdersPage() {
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [editDraft, setEditDraft] = React.useState<EditDraft | null>(null);
   const [busyId, setBusyId] = React.useState<string | null>(null);
-  const [lookupName, setLookupName] = React.useState("");
-  const [lookupBusy, setLookupBusy] = React.useState(false);
-  const [lookupFeedback, setLookupFeedback] = React.useState<string | null>(null);
-  const [trackingMatches, setTrackingMatches] = React.useState<
-    Array<{ id: string; trackingNumber: string | null }>
-  >([]);
 
   const load = React.useCallback(async () => {
     if (!canLoad) return;
@@ -211,10 +196,6 @@ export default function ShippedOrdersPage() {
 
   const visibleGroups = React.useMemo(() => buildGroups(visibleRows), [buildGroups, visibleRows]);
   const archiveGroups = React.useMemo(() => buildGroups(archivedRows), [archivedRows, buildGroups]);
-  const trackingMatchMap = React.useMemo(
-    () => new Map(trackingMatches.map((match) => [match.id, match])),
-    [trackingMatches],
-  );
 
   function startEdit(row: ShipmentRow) {
     if (!row.admin) return;
@@ -225,11 +206,6 @@ export default function ShippedOrdersPage() {
   function cancelEdit() {
     setEditingId(null);
     setEditDraft(null);
-  }
-
-  function clearLookup() {
-    setTrackingMatches([]);
-    setLookupFeedback(null);
   }
 
   async function saveEdit(orderId: string) {
@@ -277,43 +253,6 @@ export default function ShippedOrdersPage() {
     }
   }
 
-  async function revealTracking() {
-    const fullName = lookupName.trim();
-    if (!fullName) {
-      setLookupFeedback("Enter the full customer name used on the order.");
-      setTrackingMatches([]);
-      return;
-    }
-
-    setLookupBusy(true);
-    try {
-      const init = {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fullName }),
-      };
-      const payload = isAdmin
-        ? await fetchAuthedJson<TrackingLookupResponse>("/api/public/shipped-orders", init)
-        : await fetchJson<TrackingLookupResponse>("/api/public/shipped-orders", init);
-      const matches = payload.matches ?? [];
-      setTrackingMatches(matches);
-      setLookupFeedback(
-        matches.length
-          ? `Tracking unlocked for ${matches.length} matching order(s).`
-          : "No matching order was found for that full customer name.",
-      );
-    } catch (error: any) {
-      setTrackingMatches([]);
-      setLookupFeedback(null);
-      toast({
-        intent: "error",
-        message: error?.message ?? "Unable to load tracking number.",
-      });
-    } finally {
-      setLookupBusy(false);
-    }
-  }
-
   const renderGroup = (
     title: string,
     groups: Array<{ weekStart: string; weekLabel: string; rows: ShipmentRow[] }>,
@@ -352,7 +291,6 @@ export default function ShippedOrdersPage() {
                 const packageOptions = editDraft
                   ? getPackageOptions(editDraft.shippingMethod)
                   : [];
-                const trackingMatch = trackingMatchMap.get(row.id) ?? null;
                 return (
                   <div key={row.id} className="p-4 space-y-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -363,14 +301,15 @@ export default function ShippedOrdersPage() {
                             {formatPublicShipmentStatusLabel(row.shippingStatus)}
                           </Badge>
                           <Badge>{formatShipmentDate(row.referenceDate)}</Badge>
-                          {trackingMatch ? (
+                          {row.trackingNumber ? (
                             <Badge className="border-sky-500/30 text-sky-200">
-                              {trackingMatch.trackingNumber
-                                ? `Tracking ${trackingMatch.trackingNumber}`
-                                : "Tracking not assigned yet"}
+                              Tracking {row.trackingNumber}
                             </Badge>
-                          ) : row.trackingPreview ? (
-                            <Badge>Tracking {row.trackingPreview}</Badge>
+                          ) : null}
+                          {row.estimatedDeliveryLabel ? (
+                            <Badge className="border-fuchsia-500/30 text-fuchsia-200">
+                              {row.estimatedDeliveryLabel}
+                            </Badge>
                           ) : null}
                           {row.isOlderThanMonth ? (
                             <Badge className="border-orange-500/30 text-orange-200">
@@ -579,7 +518,7 @@ export default function ShippedOrdersPage() {
           <div>
             <h1 className="text-2xl font-semibold">Shipping Orders Board</h1>
             <div className="text-sm text-white/60">
-              Publicly visible LBC and J&T orders, grouped weekly.
+              Publicly visible LBC and J&T orders with tracking and estimated delivery, grouped weekly.
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -592,38 +531,12 @@ export default function ShippedOrdersPage() {
             </Button>
           </div>
         </CardHeader>
-        <CardBody className="space-y-4">
-          <form
-            className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void revealTracking();
-            }}
-          >
-            <Input
-              label="View tracking number"
-              placeholder="Enter full customer name"
-              value={lookupName}
-              onChange={(e) => setLookupName(e.target.value)}
-              hint="Use the exact full name entered on the order."
-            />
-            <div className="flex flex-wrap items-end gap-2">
-              <Button type="submit" disabled={lookupBusy}>
-                {lookupBusy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
-                View tracking
-              </Button>
-              {(trackingMatches.length || lookupFeedback) ? (
-                <Button type="button" variant="ghost" onClick={clearLookup} disabled={lookupBusy}>
-                  Clear
-                </Button>
-              ) : null}
-            </div>
-          </form>
-          {lookupFeedback ? (
-            <div className="rounded-xl border border-white/10 bg-paper/5 px-3 py-2 text-sm text-white/70">
-              {lookupFeedback}
-            </div>
-          ) : null}
+        <CardBody className="space-y-2 text-sm text-white/65">
+          <div>Tracking numbers are visible by default on each shipment card.</div>
+          <div>
+            Estimated delivery uses your NCR-origin reference charts:
+            LBC uses the NCR lead-time table, and J&amp;T uses the Manila shipping grid.
+          </div>
         </CardBody>
       </Card>
 

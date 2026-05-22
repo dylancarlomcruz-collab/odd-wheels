@@ -18,3 +18,6 @@ pnpm-debug.log*
 
 # misc
 .DS_Store
+.codex-temp/
+.codex-next-dev.log
+tsconfig.tsbuildinfo

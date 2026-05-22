@@ -383,6 +383,54 @@ create table if not exists public.cart_items (
   unique (user_id, variant_id)
 );
 
+-- 7b) Inventory refresher seen items
+create table if not exists public.inventory_refresher_seen_items (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  variant_id uuid not null references public.product_variants(id) on delete cascade,
+  product_id uuid not null references public.products(id) on delete cascade,
+  title text not null,
+  brand text,
+  model text,
+  variation text,
+  image_urls text[] not null default '{}'::text[],
+  image_url text,
+  product_active boolean not null default true,
+  condition text not null check (
+    condition in (
+      'sealed',
+      'resealed',
+      'near_mint',
+      'sealed_near_mint_box',
+      'sealed_near_mint_blister',
+      'sealed_not_mint_box',
+      'sealed_not_mint_blister',
+      'unsealed',
+      'unsealed_no_box',
+      'unsealed_no_acrylic',
+      'unsealed_near_mint_box',
+      'unsealed_near_mint_blister',
+      'wheelswapped',
+      'customized',
+      'with_issues',
+      'blistered',
+      'sealed_blister',
+      'unsealed_blister'
+    )
+  ),
+  barcode text,
+  qty int not null default 0 check (qty >= 0),
+  seen_qty int not null default 0 check (seen_qty >= 0),
+  price numeric not null default 0,
+  ship_class text,
+  release_at timestamptz,
+  seen_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  primary key (user_id, variant_id)
+);
+
+create index if not exists idx_inventory_refresher_seen_items_user_seen_at
+  on public.inventory_refresher_seen_items (user_id, seen_at desc);
+
 -- 8) Sales customers
 create table if not exists public.sales_customers (
   id uuid primary key default gen_random_uuid(),
@@ -634,6 +682,7 @@ alter table public.settings enable row level security;
 alter table public.products enable row level security;
 alter table public.product_variants enable row level security;
 alter table public.cart_items enable row level security;
+alter table public.inventory_refresher_seen_items enable row level security;
 alter table public.sales_customers enable row level security;
 alter table public.orders enable row level security;
 alter table public.order_items enable row level security;
@@ -753,6 +802,24 @@ for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 drop policy if exists "admin read cart items" on public.cart_items;
 create policy "admin read cart items" on public.cart_items
 for select using (public.is_admin());
+
+-- ===== Inventory Refresher Seen Items Policies =====
+drop policy if exists "staff read own inventory refresher seen items" on public.inventory_refresher_seen_items;
+create policy "staff read own inventory refresher seen items" on public.inventory_refresher_seen_items
+for select using (public.is_staff() and user_id = auth.uid());
+
+drop policy if exists "staff insert own inventory refresher seen items" on public.inventory_refresher_seen_items;
+create policy "staff insert own inventory refresher seen items" on public.inventory_refresher_seen_items
+for insert with check (public.is_staff() and user_id = auth.uid());
+
+drop policy if exists "staff update own inventory refresher seen items" on public.inventory_refresher_seen_items;
+create policy "staff update own inventory refresher seen items" on public.inventory_refresher_seen_items
+for update using (public.is_staff() and user_id = auth.uid())
+with check (public.is_staff() and user_id = auth.uid());
+
+drop policy if exists "staff delete own inventory refresher seen items" on public.inventory_refresher_seen_items;
+create policy "staff delete own inventory refresher seen items" on public.inventory_refresher_seen_items
+for delete using (public.is_staff() and user_id = auth.uid());
 
 alter table public.orders
   add column if not exists sales_customer_id uuid references public.sales_customers(id) on delete set null,
@@ -1675,6 +1742,91 @@ begin
 end;
 $$;
 
+drop function if exists public.fn_staff_void_order(uuid, text);
+create or replace function public.fn_staff_void_order(
+  p_order_id uuid,
+  p_reason text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order public.orders%rowtype;
+  v_reason text := nullif(trim(coalesce(p_reason, '')), '');
+begin
+  if not public.is_staff() then
+    raise exception 'Not authorized';
+  end if;
+
+  select *
+  into v_order
+  from public.orders
+  where id = p_order_id
+  for update;
+
+  if not found then
+    raise exception 'Order not found: %', p_order_id;
+  end if;
+
+  if upper(coalesce(v_order.status, '')) in ('VOIDED', 'CANCELLED') then
+    return jsonb_build_object('ok', true, 'already_voided', true, 'order_id', p_order_id);
+  end if;
+
+  if coalesce(v_order.inventory_deducted, false) then
+    with restore as (
+      select
+        coalesce(oi.variant_id, oi.item_id) as variant_id,
+        sum(greatest(coalesce(oi.qty, 0), 0))::int as qty
+      from public.order_items oi
+      where oi.order_id = p_order_id
+        and coalesce(oi.variant_id, oi.item_id) is not null
+      group by 1
+    )
+    update public.product_variants pv
+      set qty = pv.qty + restore.qty
+    from restore
+    where pv.id = restore.variant_id;
+  end if;
+
+  update public.orders
+    set status = 'VOIDED',
+        order_status = 'VOIDED',
+        shipping_status = 'VOIDED',
+        tracking_number = null,
+        courier = null,
+        shipped_at = null,
+        completed_at = null,
+        cancelled_reason = coalesce(v_reason, 'VOIDED_BY_STAFF'),
+        inventory_deducted = false
+  where id = p_order_id;
+
+  update public.products p
+    set is_active = true,
+        archived_reason = null
+  where p.archived_reason = 'SOLD_OUT'
+    and exists (
+      select 1
+      from public.product_variants pv
+      where pv.product_id = p.id
+        and pv.qty > 0
+    );
+
+  insert into public.audit_logs (actor_user_id, action, meta)
+  values (
+    auth.uid(),
+    'ORDER_VOIDED',
+    jsonb_build_object(
+      'order_id', p_order_id,
+      'reason', coalesce(v_reason, 'VOIDED_BY_STAFF')
+    )
+  );
+
+  return jsonb_build_object('ok', true, 'order_id', p_order_id);
+end;
+$$;
+
 -- IMPORTANT: Ensure the function owner has privileges to bypass RLS (service role) when called from webhook.
 -- In practice, call this function using SUPABASE_SERVICE_ROLE_KEY from the server webhook route.
 
@@ -1685,6 +1837,8 @@ $$;
 -- Lock down the RPC so only the service role (server/webhook) can call it.
 revoke execute on function public.fn_process_paid_order(uuid) from public;
 grant execute on function public.fn_process_paid_order(uuid) to service_role;
+revoke execute on function public.fn_staff_void_order(uuid, text) from public;
+grant execute on function public.fn_staff_void_order(uuid, text) to authenticated;
 
 create table if not exists public.product_clicks (
   product_id uuid primary key references public.products(id) on delete cascade,
@@ -2529,6 +2683,656 @@ $$;
 
 revoke execute on function public.fn_submit_feedback(uuid, int, text, text, text) from public;
 grant execute on function public.fn_submit_feedback(uuid, int, text, text, text) to anon, authenticated;
+
+-- Cashflow tracking
+create table if not exists public.cashflow_entries (
+  id uuid primary key default gen_random_uuid(),
+  entry_date date not null default current_date,
+  flow_type text not null check (flow_type in ('INCOME', 'EXPENSE')),
+  category text not null check (
+    category in (
+      'SALES',
+      'LOAN',
+      'MONTHLY_PAYMENT',
+      'ALLOWANCE_INCOME',
+      'ALLOWANCE_COST',
+      'BILL',
+      'EVENT_MATERIALS',
+      'SHIPPING_MATERIALS',
+      'INVENTORY_COST',
+      'OTHER'
+    )
+  ),
+  title text not null,
+  counterparty text,
+  amount numeric not null default 0 check (amount >= 0),
+  notes text,
+  is_recurring boolean not null default false,
+  source_type text,
+  source_key text,
+  source_meta jsonb not null default '{}'::jsonb,
+  created_by_user_id uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.cashflow_entries
+  add column if not exists source_type text,
+  add column if not exists source_key text,
+  add column if not exists source_meta jsonb not null default '{}'::jsonb;
+
+alter table public.cashflow_entries
+  drop constraint if exists cashflow_entries_category_check;
+
+alter table public.cashflow_entries
+  add constraint cashflow_entries_category_check
+  check (
+    category in (
+      'SALES',
+      'LOAN',
+      'MONTHLY_PAYMENT',
+      'ALLOWANCE_INCOME',
+      'ALLOWANCE_COST',
+      'BILL',
+      'EVENT_MATERIALS',
+      'SHIPPING_MATERIALS',
+      'INVENTORY_COST',
+      'OTHER'
+    )
+  );
+
+create index if not exists idx_cashflow_entries_entry_date
+  on public.cashflow_entries (entry_date desc, created_at desc);
+
+create index if not exists idx_cashflow_entries_category
+  on public.cashflow_entries (category, flow_type);
+
+create unique index if not exists idx_cashflow_entries_source_unique
+  on public.cashflow_entries (source_type, source_key);
+
+create or replace function public.fn_touch_cashflow_entries_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_cashflow_entries_updated_at on public.cashflow_entries;
+create trigger trg_cashflow_entries_updated_at
+before update on public.cashflow_entries
+for each row execute procedure public.fn_touch_cashflow_entries_updated_at();
+
+alter table public.cashflow_entries enable row level security;
+
+drop policy if exists "staff read cashflow entries" on public.cashflow_entries;
+create policy "staff read cashflow entries" on public.cashflow_entries
+for select using (public.is_staff());
+
+drop policy if exists "staff manage cashflow entries" on public.cashflow_entries;
+create policy "staff manage cashflow entries" on public.cashflow_entries
+for all using (public.is_staff()) with check (public.is_staff());
+
+create table if not exists public.cash_loans (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  lender text,
+  principal_amount numeric not null default 0 check (principal_amount >= 0),
+  term_months int not null check (term_months > 0),
+  monthly_payment numeric not null default 0 check (monthly_payment > 0),
+  start_date date not null,
+  first_due_date date not null,
+  next_due_date date,
+  payment_day int check (payment_day between 1 and 31),
+  reminder_days_before int not null default 3 check (reminder_days_before >= 0),
+  months_paid int not null default 0 check (months_paid >= 0),
+  status text not null default 'ACTIVE' check (status in ('ACTIVE', 'PAID', 'CANCELLED')),
+  notes text,
+  created_by_user_id uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_cash_loans_status_due
+  on public.cash_loans (status, next_due_date asc);
+
+create or replace function public.fn_touch_cash_loans_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_cash_loans_updated_at on public.cash_loans;
+create trigger trg_cash_loans_updated_at
+before update on public.cash_loans
+for each row execute procedure public.fn_touch_cash_loans_updated_at();
+
+alter table public.cash_loans enable row level security;
+
+drop policy if exists "staff read cash loans" on public.cash_loans;
+create policy "staff read cash loans" on public.cash_loans
+for select using (public.is_staff());
+
+drop policy if exists "staff manage cash loans" on public.cash_loans;
+create policy "staff manage cash loans" on public.cash_loans
+for all using (public.is_staff()) with check (public.is_staff());
+
+create table if not exists public.inventory_cost_events (
+  id uuid primary key default gen_random_uuid(),
+  variant_id uuid not null references public.product_variants(id) on delete cascade,
+  product_id uuid not null references public.products(id) on delete cascade,
+  qty_added int not null check (qty_added > 0),
+  unit_cost numeric not null default 0 check (unit_cost >= 0),
+  subtotal numeric not null default 0 check (subtotal >= 0),
+  movement_type text not null check (movement_type in ('initial_stock','restock','increase')),
+  actor_user_id uuid references auth.users(id) on delete set null,
+  occurred_at timestamptz not null default now(),
+  entry_date date not null,
+  created_at timestamptz not null default now(),
+  meta jsonb not null default '{}'::jsonb
+);
+
+create index if not exists idx_inventory_cost_events_entry_date
+  on public.inventory_cost_events (entry_date desc, occurred_at desc);
+
+create index if not exists idx_inventory_cost_events_variant
+  on public.inventory_cost_events (variant_id, occurred_at desc);
+
+alter table public.inventory_cost_events enable row level security;
+
+drop policy if exists "staff read inventory cost events" on public.inventory_cost_events;
+create policy "staff read inventory cost events" on public.inventory_cost_events
+for select using (public.is_staff());
+
+drop policy if exists "staff manage inventory cost events" on public.inventory_cost_events;
+create policy "staff manage inventory cost events" on public.inventory_cost_events
+for all using (public.is_staff()) with check (public.is_staff());
+
+create or replace function public.fn_sync_inventory_daily_cashflow(
+  p_entry_date date
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_entry_date date := p_entry_date;
+  v_amount numeric := 0;
+  v_event_count int := 0;
+  v_units int := 0;
+begin
+  if v_entry_date is null then
+    return;
+  end if;
+
+  select
+    coalesce(sum(subtotal), 0),
+    count(*)::int,
+    coalesce(sum(qty_added), 0)::int
+  into
+    v_amount,
+    v_event_count,
+    v_units
+  from public.inventory_cost_events
+  where entry_date = v_entry_date;
+
+  if v_event_count <= 0 then
+    delete from public.cashflow_entries
+    where source_type = 'INVENTORY_DAILY_SUBTOTAL'
+      and source_key = v_entry_date::text;
+    return;
+  end if;
+
+  insert into public.cashflow_entries (
+    entry_date,
+    flow_type,
+    category,
+    title,
+    counterparty,
+    amount,
+    notes,
+    is_recurring,
+    source_type,
+    source_key,
+    source_meta,
+    created_by_user_id
+  )
+  values (
+    v_entry_date,
+    'EXPENSE',
+    'INVENTORY_COST',
+    'Inventory subtotal',
+    null,
+    v_amount,
+    'Auto-generated from inventory additions for this day.',
+    false,
+    'INVENTORY_DAILY_SUBTOTAL',
+    v_entry_date::text,
+    jsonb_build_object(
+      'event_count', v_event_count,
+      'units_added', v_units,
+      'timezone', 'Asia/Manila'
+    ),
+    null
+  )
+  on conflict (source_type, source_key)
+  do update set
+    entry_date = excluded.entry_date,
+    flow_type = excluded.flow_type,
+    category = excluded.category,
+    title = excluded.title,
+    counterparty = excluded.counterparty,
+    amount = excluded.amount,
+    notes = excluded.notes,
+    is_recurring = excluded.is_recurring,
+    source_meta = excluded.source_meta,
+    updated_at = now();
+end;
+$$;
+
+create or replace function public.fn_sync_inventory_cashflow_from_event(
+  p_event_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_event public.inventory_cost_events%rowtype;
+begin
+  if p_event_id is null then
+    return;
+  end if;
+
+  select *
+  into v_event
+  from public.inventory_cost_events
+  where id = p_event_id;
+
+  if not found then
+    delete from public.cashflow_entries
+    where source_type = 'INVENTORY_COST_EVENT'
+      and source_key = p_event_id::text;
+    return;
+  end if;
+
+  insert into public.cashflow_entries (
+    entry_date,
+    flow_type,
+    category,
+    title,
+    counterparty,
+    amount,
+    notes,
+    is_recurring,
+    source_type,
+    source_key,
+    source_meta,
+    created_by_user_id
+  )
+  values (
+    v_event.entry_date,
+    'EXPENSE',
+    'INVENTORY_COST',
+    'Inventory add',
+    null,
+    v_event.subtotal,
+    'Auto-generated from an inventory upload/add event.',
+    false,
+    'INVENTORY_COST_EVENT',
+    v_event.id::text,
+    jsonb_build_object(
+      'inventory_cost_event_id', v_event.id,
+      'variant_id', v_event.variant_id,
+      'product_id', v_event.product_id,
+      'qty_added', v_event.qty_added,
+      'unit_cost', v_event.unit_cost,
+      'movement_type', v_event.movement_type,
+      'timezone', 'Asia/Manila'
+    ) || coalesce(v_event.meta, '{}'::jsonb),
+    v_event.actor_user_id
+  )
+  on conflict (source_type, source_key)
+  do update set
+    entry_date = excluded.entry_date,
+    flow_type = excluded.flow_type,
+    category = excluded.category,
+    title = excluded.title,
+    counterparty = excluded.counterparty,
+    amount = excluded.amount,
+    notes = excluded.notes,
+    is_recurring = excluded.is_recurring,
+    source_meta = excluded.source_meta,
+    created_by_user_id = excluded.created_by_user_id,
+    updated_at = now();
+end;
+$$;
+
+create or replace function public.fn_sync_sales_daily_cashflow(
+  p_entry_date date
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_entry_date date := p_entry_date;
+  v_amount numeric := 0;
+  v_order_count int := 0;
+begin
+  if v_entry_date is null then
+    return;
+  end if;
+
+  select
+    coalesce(sum(o.total), 0),
+    count(*)::int
+  into
+    v_amount,
+    v_order_count
+  from public.orders o
+  where (
+      coalesce(o.payment_status, '') = 'PAID'
+      or upper(coalesce(o.channel, '')) = 'POS'
+    )
+    and upper(coalesce(o.status, '')) not in ('VOIDED', 'CANCELLED')
+    and timezone('Asia/Manila', coalesce(o.paid_at, o.created_at))::date = v_entry_date;
+
+  if v_order_count <= 0 then
+    delete from public.cashflow_entries
+    where source_type = 'SALES_DAILY_SUBTOTAL'
+      and source_key = v_entry_date::text;
+    return;
+  end if;
+
+  insert into public.cashflow_entries (
+    entry_date,
+    flow_type,
+    category,
+    title,
+    counterparty,
+    amount,
+    notes,
+    is_recurring,
+    source_type,
+    source_key,
+    source_meta,
+    created_by_user_id
+  )
+  values (
+    v_entry_date,
+    'INCOME',
+    'SALES',
+    'Sales subtotal',
+    null,
+    v_amount,
+    'Auto-generated from paid web orders and POS sales for this day.',
+    false,
+    'SALES_DAILY_SUBTOTAL',
+    v_entry_date::text,
+    jsonb_build_object(
+      'order_count', v_order_count,
+      'timezone', 'Asia/Manila'
+    ),
+    null
+  )
+  on conflict (source_type, source_key)
+  do update set
+    entry_date = excluded.entry_date,
+    flow_type = excluded.flow_type,
+    category = excluded.category,
+    title = excluded.title,
+    counterparty = excluded.counterparty,
+    amount = excluded.amount,
+    notes = excluded.notes,
+    is_recurring = excluded.is_recurring,
+    source_meta = excluded.source_meta,
+    updated_at = now();
+end;
+$$;
+
+update public.cashflow_entries
+set category = 'SALES'
+where source_type = 'SALES_DAILY_SUBTOTAL'
+  and category = 'OTHER';
+
+create or replace function public.fn_backfill_inventory_cost_events_from_stock_movements(
+  p_from timestamptz default null,
+  p_to timestamptz default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_event_id uuid;
+  v_inserted_count int := 0;
+begin
+  if auth.uid() is not null and not public.is_staff() then
+    raise exception 'Not authorized';
+  end if;
+
+  for v_event_id in
+    with inserted as (
+      insert into public.inventory_cost_events (
+        id,
+        variant_id,
+        product_id,
+        qty_added,
+        unit_cost,
+        subtotal,
+        movement_type,
+        actor_user_id,
+        occurred_at,
+        entry_date,
+        meta
+      )
+      select
+        gen_random_uuid(),
+        m.variant_id,
+        m.product_id,
+        m.qty_delta,
+        greatest(coalesce(pv.cost, 0), 0),
+        m.qty_delta * greatest(coalesce(pv.cost, 0), 0),
+        m.movement_type,
+        m.actor_user_id,
+        m.recorded_at,
+        timezone('Asia/Manila', m.recorded_at)::date,
+        coalesce(m.meta, '{}'::jsonb) || jsonb_build_object(
+          'stock_movement_id', m.id,
+          'backfilled', true,
+          'cost_basis', 'current_variant_cost',
+          'timezone', 'Asia/Manila'
+        )
+      from public.variant_stock_movements m
+      join public.product_variants pv on pv.id = m.variant_id
+      where m.qty_delta > 0
+        and m.movement_type in ('initial_stock', 'restock', 'increase')
+        and (p_from is null or m.recorded_at >= p_from)
+        and (p_to is null or m.recorded_at <= p_to)
+        and not exists (
+          select 1
+          from public.inventory_cost_events e
+          where e.meta->>'stock_movement_id' = m.id::text
+        )
+      returning id
+    )
+    select id
+    from inserted
+  loop
+    v_inserted_count := v_inserted_count + 1;
+    perform public.fn_sync_inventory_cashflow_from_event(v_event_id);
+  end loop;
+
+  return jsonb_build_object(
+    'ok', true,
+    'inserted_events', v_inserted_count,
+    'cost_basis', 'current_variant_cost'
+  );
+end;
+$$;
+
+create or replace function public.fn_log_inventory_cost_event()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_event_id uuid := gen_random_uuid();
+  v_prev_qty int := 0;
+  v_new_qty int := coalesce(new.qty, 0);
+  v_qty_added int := 0;
+  v_unit_cost numeric := greatest(coalesce(new.cost, 0), 0);
+  v_occurred_at timestamptz;
+  v_entry_date date;
+  v_movement_type text;
+begin
+  if tg_op = 'INSERT' then
+    v_qty_added := greatest(v_new_qty, 0);
+  else
+    v_prev_qty := coalesce(old.qty, 0);
+    v_qty_added := greatest(v_new_qty - v_prev_qty, 0);
+  end if;
+
+  if v_qty_added <= 0 then
+    return new;
+  end if;
+
+  v_occurred_at := coalesce(new.last_stock_added_at, new.last_qty_changed_at, now());
+  v_entry_date := timezone('Asia/Manila', v_occurred_at)::date;
+  v_movement_type := case
+    when tg_op = 'INSERT' then 'initial_stock'
+    when v_prev_qty <= 0 then 'restock'
+    else 'increase'
+  end;
+
+  insert into public.inventory_cost_events (
+    id,
+    variant_id,
+    product_id,
+    qty_added,
+    unit_cost,
+    subtotal,
+    movement_type,
+    actor_user_id,
+    occurred_at,
+    entry_date,
+    meta
+  )
+  values (
+    v_event_id,
+    new.id,
+    new.product_id,
+    v_qty_added,
+    v_unit_cost,
+    v_qty_added * v_unit_cost,
+    v_movement_type,
+    auth.uid(),
+    v_occurred_at,
+    v_entry_date,
+    jsonb_build_object(
+      'condition', new.condition,
+      'ship_class', new.ship_class
+    )
+  );
+
+  perform public.fn_sync_inventory_cashflow_from_event(v_event_id);
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_product_variants_inventory_cost_event on public.product_variants;
+create trigger trg_product_variants_inventory_cost_event
+after insert or update of qty, cost on public.product_variants
+for each row execute procedure public.fn_log_inventory_cost_event();
+
+create or replace function public.fn_sync_sales_cashflow_from_order()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_old_entry_date date;
+  v_new_entry_date date;
+begin
+  if tg_op <> 'INSERT' then
+    v_old_entry_date := timezone('Asia/Manila', coalesce(old.paid_at, old.created_at))::date;
+  end if;
+
+  v_new_entry_date := timezone('Asia/Manila', coalesce(new.paid_at, new.created_at))::date;
+
+  if v_old_entry_date is not null then
+    perform public.fn_sync_sales_daily_cashflow(v_old_entry_date);
+  end if;
+
+  if v_new_entry_date is not null and v_new_entry_date is distinct from v_old_entry_date then
+    perform public.fn_sync_sales_daily_cashflow(v_new_entry_date);
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_orders_sales_daily_cashflow on public.orders;
+create trigger trg_orders_sales_daily_cashflow
+after insert or update of total, status, payment_status, paid_at, created_at, channel on public.orders
+for each row execute procedure public.fn_sync_sales_cashflow_from_order();
+
+do $$
+declare
+  v_entry_date date;
+  v_event_id uuid;
+begin
+  delete from public.cashflow_entries
+  where source_type = 'INVENTORY_DAILY_SUBTOTAL';
+
+  delete from public.cashflow_entries
+  where source_type = 'INVENTORY_COST_EVENT';
+
+  perform public.fn_backfill_inventory_cost_events_from_stock_movements(null, null);
+
+  for v_event_id in
+    select id
+    from public.inventory_cost_events
+  loop
+    perform public.fn_sync_inventory_cashflow_from_event(v_event_id);
+  end loop;
+
+  for v_entry_date in
+    select distinct timezone('Asia/Manila', coalesce(o.paid_at, o.created_at))::date as entry_date
+    from public.orders o
+    where (
+        coalesce(o.payment_status, '') = 'PAID'
+        or upper(coalesce(o.channel, '')) = 'POS'
+      )
+      and upper(coalesce(o.status, '')) not in ('VOIDED', 'CANCELLED')
+  loop
+    perform public.fn_sync_sales_daily_cashflow(v_entry_date);
+  end loop;
+end;
+$$;
+
+revoke execute on function public.fn_backfill_inventory_cost_events_from_stock_movements(timestamptz, timestamptz) from public;
+grant execute on function public.fn_backfill_inventory_cost_events_from_stock_movements(timestamptz, timestamptz) to authenticated;
 
 create or replace function public.fn_buyer_update_payment_method(
   p_order_id uuid,

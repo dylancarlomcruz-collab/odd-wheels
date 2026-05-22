@@ -36,6 +36,7 @@ import {
   Bug,
   MessageSquare,
   LogOut,
+  Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -419,6 +420,7 @@ export function SiteHeader() {
       badge: staffCounts.sellTradePending,
     },
     { key: "admin-sales", href: "/admin/sales", label: "Sales", icon: BarChart3 },
+    { key: "admin-cashflow", href: "/admin/cashflow", label: "Cashflow", icon: Wallet },
     { key: "admin-carts", href: "/admin/carts", label: "Cart Insights", icon: ShoppingCart },
     { key: "admin-pos", href: "/cashier", label: "POS (Cashier)", icon: ScanBarcode },
     { key: "admin-brands", href: "/admin/brands", label: "Brand Tabs", icon: Tags },

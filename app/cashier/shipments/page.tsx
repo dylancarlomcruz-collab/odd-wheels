@@ -11,8 +11,10 @@ import {
   Circle,
   ClipboardCopy,
   Loader2,
+  Plus,
   Printer,
   ScrollText,
+  Trash2,
 } from "lucide-react";
 import { useAllOrders } from "@/hooks/useAllOrders";
 import { useNotices } from "@/hooks/useNotices";
@@ -24,15 +26,18 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import { Textarea } from "@/components/ui/Textarea";
 import { ModalShell as OrderDetailsModal } from "@/components/ui/ModalShell";
 import { SectionBlock } from "@/components/ui/SectionBlock";
 import { DetailGrid } from "@/components/ui/DetailGrid";
 import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 import {
+  ALL_VARIANT_CONDITIONS,
   formatConditionLabel,
   isIssueCondition,
   isNearMintCondition,
 } from "@/lib/conditions";
+import { expandSearchTerms, normalizeSearchTerm } from "@/lib/search";
 import { toast } from "@/components/ui/toast";
 
 const SHIPPING_TABS = [
@@ -53,9 +58,6 @@ const MANUAL_SHIPPING_METHOD_OPTIONS = [
   { value: "J&T", label: "J&T" },
   { value: "LALAMOVE", label: "Lalamove" },
   { value: "PICKUP", label: "Pickup" },
-  { value: "JRS", label: "JRS" },
-  { value: "NINJA VAN", label: "Ninja Van" },
-  { value: "GRAB", label: "Grab" },
 ] as const;
 
 type ShippingTabKey = (typeof SHIPPING_TABS)[number]["key"];
@@ -74,6 +76,38 @@ type ManualOrderEditDraft = {
   bookingReference: string;
   shippingFee: string;
 };
+type OrderCustomerEditDraft = {
+  customerName: string;
+  customerPhone: string;
+  contact: string;
+  address: string;
+  receiverName: string;
+  receiverPhone: string;
+  fullAddress: string;
+  region: string;
+};
+type OrderItemEditDraft = {
+  itemName: string;
+  condition: string;
+  qty: string;
+  unitPrice: string;
+  lineTotal: string;
+  issueNotes: string;
+};
+type ShipmentVariantMatch = {
+  variantId: string;
+  productId: string;
+  title: string;
+  brand: string;
+  model: string;
+  variation: string;
+  imageUrl: string | null;
+  condition: string;
+  qty: number;
+  barcode: string;
+  unitPrice: number;
+  issueNotes: string;
+};
 const EMPTY_SHIPPING_DRAFT: ShippingDraft = {
   courier: "",
   tracking: "",
@@ -85,6 +119,24 @@ const EMPTY_MANUAL_ORDER_EDIT_DRAFT: ManualOrderEditDraft = {
   lbcPackage: "MINIBOX",
   bookingReference: "",
   shippingFee: "",
+};
+const EMPTY_ORDER_CUSTOMER_EDIT_DRAFT: OrderCustomerEditDraft = {
+  customerName: "",
+  customerPhone: "",
+  contact: "",
+  address: "",
+  receiverName: "",
+  receiverPhone: "",
+  fullAddress: "",
+  region: "",
+};
+const EMPTY_ORDER_ITEM_EDIT_DRAFT: OrderItemEditDraft = {
+  itemName: "",
+  condition: "sealed",
+  qty: "1",
+  unitPrice: "0",
+  lineTotal: "0",
+  issueNotes: "",
 };
 
 function parseJsonMaybe(v: any) {
@@ -138,6 +190,46 @@ function normalizeLbcPackage(raw: string | null | undefined) {
   if (value === "SLIMBOX") return "SLIM_BOX";
   if (value === "SMALLBOX") return "SMALL_BOX";
   return value;
+}
+
+function formatMoneyInput(value: number | null | undefined) {
+  const amount = Number(value ?? 0);
+  if (!Number.isFinite(amount)) return "0";
+  return amount % 1 === 0 ? String(amount) : amount.toFixed(2);
+}
+
+function createOrderCustomerEditDraft(order: any) {
+  const details = parseJsonMaybe(order?.shipping_details) ?? {};
+  return {
+    customerName: String(order?.customer_name ?? "").trim(),
+    customerPhone: String(order?.customer_phone ?? "").trim(),
+    contact: String(order?.contact ?? "").trim(),
+    address: String(order?.address ?? "").trim(),
+    receiverName: String(details.receiver_name ?? details.name ?? "").trim(),
+    receiverPhone: String(
+      details.receiver_phone ?? details.phone ?? details.contact ?? ""
+    ).trim(),
+    fullAddress: String(
+      details.full_address ?? details.address ?? details.dropoff_address ?? ""
+    ).trim(),
+    region: String(details.region ?? order?.shipping_region ?? "").trim(),
+  };
+}
+
+function createOrderItemEditDraft(item: any) {
+  const unitPrice = getItemPrice(item);
+  const qty = Math.max(1, Number(item?.qty ?? 1));
+  const lineTotal = Number(item?.line_total ?? unitPrice * qty);
+  return {
+    itemName: String(getItemTitle(item) ?? "").trim(),
+    condition: String(
+      item?.condition ?? item?.product_variant?.condition ?? "sealed"
+    ).trim() || "sealed",
+    qty: String(qty),
+    unitPrice: formatMoneyInput(unitPrice),
+    lineTotal: formatMoneyInput(lineTotal),
+    issueNotes: String(item?.issue_notes ?? "").trim(),
+  };
 }
 
 async function copyText(text: string) {
@@ -274,6 +366,48 @@ function getItemPrice(it: any): number {
   const v = it?.price_each ?? it?.unit_price ?? it?.product_variant?.price;
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
+}
+
+function getVariantUnitPrice(variant: any): number {
+  const price = Number(variant?.price ?? 0);
+  const salePrice = Number(variant?.sale_price);
+  if (Number.isFinite(salePrice) && salePrice >= 0) return salePrice;
+
+  const discountPercent = Number(variant?.discount_percent ?? 0);
+  if (Number.isFinite(discountPercent) && discountPercent > 0) {
+    return Math.max(
+      0,
+      Number(
+        (
+          price * ((100 - Math.min(Math.max(discountPercent, 0), 100)) / 100)
+        ).toFixed(2)
+      )
+    );
+  }
+
+  return Number.isFinite(price) ? Math.max(0, price) : 0;
+}
+
+function normalizeShipmentSearchValue(value: string | null | undefined) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeShipmentSearchTokens(value: string | null | undefined) {
+  return normalizeSearchTerm(String(value ?? ""))
+    .split(" ")
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function buildShipmentSearchHaystack(parts: Array<string | null | undefined>) {
+  return normalizeSearchTerm(parts.filter(Boolean).join(" "));
+}
+
+function normalizeShipmentBarcode(value: string | null | undefined) {
+  return String(value ?? "").replace(/\D/g, "");
 }
 
 function normalizeShippingStatus(raw: string | null | undefined) {
@@ -421,10 +555,7 @@ function buildCourierOptions(method: string | null | undefined) {
     "LBC",
     "Lalamove",
     "J&T Express",
-    "JRS",
-    "Ninja Van",
-    "Grab",
-    "Other",
+    "Pickup",
   ];
   const cleaned = String(method ?? "").trim();
   const combined = cleaned ? [cleaned, ...base] : base;
@@ -799,6 +930,25 @@ export default function CashierShipmentsPage() {
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
   const [detailOrderId, setDetailOrderId] = React.useState<string | null>(null);
   const [selectedItem, setSelectedItem] = React.useState<any | null>(null);
+  const [orderCustomerDraft, setOrderCustomerDraft] = React.useState<OrderCustomerEditDraft>(
+    EMPTY_ORDER_CUSTOMER_EDIT_DRAFT
+  );
+  const [itemEditDraft, setItemEditDraft] = React.useState<OrderItemEditDraft>(
+    EMPTY_ORDER_ITEM_EDIT_DRAFT
+  );
+  const [savingOrderCustomer, setSavingOrderCustomer] = React.useState(false);
+  const [savingOrderItem, setSavingOrderItem] = React.useState(false);
+  const [removingOrderItem, setRemovingOrderItem] = React.useState(false);
+  const [orderItemSearch, setOrderItemSearch] = React.useState("");
+  const [orderItemSearchResults, setOrderItemSearchResults] = React.useState<
+    ShipmentVariantMatch[]
+  >([]);
+  const [orderItemSearchRan, setOrderItemSearchRan] = React.useState(false);
+  const [searchingOrderItems, setSearchingOrderItems] = React.useState(false);
+  const [orderItemAddQty, setOrderItemAddQty] = React.useState("1");
+  const [addingOrderItemId, setAddingOrderItemId] = React.useState<string | null>(
+    null
+  );
   const [activeTab, setActiveTab] =
     React.useState<ShippingTabKey>("PREPARING TO SHIP");
   const [drafts, setDrafts] = React.useState<Record<string, ShippingDraft>>({});
@@ -1087,6 +1237,31 @@ export default function CashierShipmentsPage() {
     return orders.find((o) => String(o.id) === detailOrderId) ?? null;
   }, [detailOrderId, orders]);
 
+  React.useEffect(() => {
+    if (!selectedOrder) {
+      setOrderCustomerDraft(EMPTY_ORDER_CUSTOMER_EDIT_DRAFT);
+      return;
+    }
+    setOrderCustomerDraft(createOrderCustomerEditDraft(selectedOrder));
+  }, [selectedOrder]);
+
+  React.useEffect(() => {
+    if (!selectedItem) {
+      setItemEditDraft(EMPTY_ORDER_ITEM_EDIT_DRAFT);
+      return;
+    }
+    setItemEditDraft(createOrderItemEditDraft(selectedItem));
+  }, [selectedItem]);
+
+  React.useEffect(() => {
+    if (!detailOrderId) {
+      setOrderItemSearch("");
+      setOrderItemSearchResults([]);
+      setOrderItemSearchRan(false);
+      setOrderItemAddQty("1");
+    }
+  }, [detailOrderId]);
+
   const preparingOrders = React.useMemo(
     () =>
       standardPaidOrders.filter(
@@ -1138,7 +1313,7 @@ export default function CashierShipmentsPage() {
     const grouped: Record<string, any[]> = {};
     for (const o of preparingOrders) {
       const draft = getDraft(o.id);
-      const key = String(draft.courier || o.shipping_method || "Other").trim() || "Other";
+      const key = String(draft.courier || o.shipping_method || "Pickup").trim() || "Pickup";
       if (!grouped[key]) grouped[key] = [];
       grouped[key].push(o);
     }
@@ -1395,6 +1570,121 @@ export default function CashierShipmentsPage() {
     }
   }
 
+  async function voidShipmentOrder(orderId: string, providedReason?: string) {
+    const shortId = String(orderId).slice(0, 8);
+    const confirmed = window.confirm(
+      `Void order #${shortId}? This will restore stock and remove it from shipment flow.`
+    );
+    if (!confirmed) return;
+
+    const reason =
+      String(providedReason ?? "").trim() || "Voided from shipment workflow";
+
+    setBusyById((cur) => ({ ...cur, [orderId]: true }));
+    setErrorById((cur) => ({ ...cur, [orderId]: "" }));
+
+    let voided = false;
+
+    try {
+      const orderItems = itemsByOrderId[orderId] ?? [];
+      const variantQtyToRestore = new Map<string, number>();
+
+      orderItems.forEach((item) => {
+        const variantId = String(item?.variant_id ?? item?.item_id ?? "").trim();
+        const qty = Math.max(0, Number(item?.qty ?? 0));
+        if (!variantId || qty <= 0) return;
+        variantQtyToRestore.set(
+          variantId,
+          (variantQtyToRestore.get(variantId) ?? 0) + qty
+        );
+      });
+
+      const variantIds = Array.from(variantQtyToRestore.keys());
+      const beforeQty = new Map<string, number>();
+
+      if (variantIds.length) {
+        const { data: beforeRows, error: beforeError } = await supabase
+          .from("product_variants")
+          .select("id,qty")
+          .in("id", variantIds);
+        if (beforeError) throw beforeError;
+
+        ((beforeRows ?? []) as Array<{ id?: string | null; qty?: number | null }>).forEach(
+          (row) => {
+            const variantId = String(row?.id ?? "").trim();
+            if (!variantId) return;
+            beforeQty.set(variantId, Math.max(0, Number(row?.qty ?? 0)));
+          }
+        );
+      }
+
+      const { error: voidError } = await supabase.rpc("fn_staff_void_order", {
+        p_order_id: orderId,
+        p_reason: reason,
+      });
+      if (voidError) throw voidError;
+      voided = true;
+
+      if (variantIds.length) {
+        const { data: afterRows, error: afterError } = await supabase
+          .from("product_variants")
+          .select("id,qty")
+          .in("id", variantIds);
+        if (afterError) throw afterError;
+
+        const afterQty = new Map<string, number>();
+        ((afterRows ?? []) as Array<{ id?: string | null; qty?: number | null }>).forEach(
+          (row) => {
+            const variantId = String(row?.id ?? "").trim();
+            if (!variantId) return;
+            afterQty.set(variantId, Math.max(0, Number(row?.qty ?? 0)));
+          }
+        );
+
+        for (const variantId of variantIds) {
+          const restoreQty = variantQtyToRestore.get(variantId) ?? 0;
+          if (restoreQty <= 0) continue;
+
+          const before = beforeQty.get(variantId) ?? 0;
+          const after = afterQty.get(variantId) ?? 0;
+          const targetMin = before + restoreQty;
+          if (after >= targetMin) continue;
+
+          const { error: updateError } = await supabase
+            .from("product_variants")
+            .update({ qty: targetMin })
+            .eq("id", variantId);
+          if (updateError) throw updateError;
+        }
+      }
+
+      if (detailOrderId === orderId) {
+        setDetailOrderId(null);
+      }
+
+      await reload();
+      toast({ intent: "success", message: "Order voided and stock restored." });
+    } catch (err: any) {
+      const message = err?.message ?? "Unable to void order.";
+      setErrorById((cur) => ({ ...cur, [orderId]: message }));
+
+      if (voided) {
+        if (detailOrderId === orderId) {
+          setDetailOrderId(null);
+        }
+        await reload().catch(() => undefined);
+        toast({
+          intent: "error",
+          message: `${message} The order may already be voided.`,
+        });
+      } else {
+        toast({ intent: "error", message });
+      }
+    } finally {
+      setBusyById((cur) => ({ ...cur, [orderId]: false }));
+    }
+  }
+
   async function undoShipped(orderId: string) {
     setBusyById((cur) => ({ ...cur, [orderId]: true }));
     setErrorById((cur) => ({ ...cur, [orderId]: "" }));
@@ -1406,6 +1696,7 @@ export default function CashierShipmentsPage() {
           tracking_number: null,
           courier: null,
           shipped_at: null,
+          completed_at: null,
         })
         .eq("id", orderId);
       if (error) throw error;
@@ -1531,6 +1822,634 @@ export default function CashierShipmentsPage() {
       toast({ intent: "error", message });
     } finally {
       setBusyById((cur) => ({ ...cur, [orderId]: false }));
+    }
+  }
+
+  async function saveOrderCustomerDetails(orderId: string) {
+    const order = orders.find((entry) => String(entry.id) === String(orderId));
+    if (!order) {
+      toast({ intent: "error", message: "Order not found." });
+      return;
+    }
+
+    setSavingOrderCustomer(true);
+    try {
+      const details = parseJsonMaybe(order.shipping_details) ?? {};
+      const nextAddress =
+        orderCustomerDraft.fullAddress.trim() || orderCustomerDraft.address.trim();
+      const nextDetails = {
+        ...details,
+        receiver_name: orderCustomerDraft.receiverName.trim() || orderCustomerDraft.customerName.trim(),
+        receiver_phone:
+          orderCustomerDraft.receiverPhone.trim() ||
+          orderCustomerDraft.customerPhone.trim() ||
+          orderCustomerDraft.contact.trim(),
+        phone:
+          orderCustomerDraft.receiverPhone.trim() ||
+          orderCustomerDraft.customerPhone.trim() ||
+          orderCustomerDraft.contact.trim(),
+        contact:
+          orderCustomerDraft.contact.trim() ||
+          orderCustomerDraft.customerPhone.trim() ||
+          orderCustomerDraft.receiverPhone.trim(),
+        full_address: nextAddress,
+        address: nextAddress,
+        region: orderCustomerDraft.region.trim(),
+      };
+
+      const payload = {
+        customer_name: orderCustomerDraft.customerName.trim() || null,
+        customer_phone: orderCustomerDraft.customerPhone.trim() || null,
+        contact: orderCustomerDraft.contact.trim() || null,
+        address: orderCustomerDraft.address.trim() || nextAddress || null,
+        shipping_region: orderCustomerDraft.region.trim() || null,
+        shipping_details: nextDetails,
+      };
+
+      const { error } = await supabase.from("orders").update(payload).eq("id", orderId);
+      if (error) throw error;
+
+      toast({ intent: "success", message: "Customer and shipment details updated." });
+      await reload();
+    } catch (err: any) {
+      toast({
+        intent: "error",
+        message: err?.message ?? "Unable to update customer details.",
+      });
+    } finally {
+      setSavingOrderCustomer(false);
+    }
+  }
+
+  async function saveSelectedItemEdits() {
+    if (!selectedItem?.id || !selectedItem?.order_id) {
+      toast({ intent: "error", message: "Order item not found." });
+      return;
+    }
+
+    const qty = Math.max(1, Number.parseInt(itemEditDraft.qty, 10) || 1);
+    const unitPrice = Math.max(0, Number(itemEditDraft.unitPrice) || 0);
+    const rawLineTotal = Number(itemEditDraft.lineTotal);
+    const nextLineTotal =
+      Number.isFinite(rawLineTotal) && rawLineTotal >= 0 ? rawLineTotal : unitPrice * qty;
+    const order = orders.find((entry) => String(entry.id) === String(selectedItem.order_id));
+    if (!order) {
+      toast({ intent: "error", message: "Parent order not found." });
+      return;
+    }
+
+    setSavingOrderItem(true);
+    try {
+      const currentLineTotal = Number(
+        selectedItem.line_total ?? getItemPrice(selectedItem) * Number(selectedItem.qty ?? 1)
+      );
+      const delta = nextLineTotal - (Number.isFinite(currentLineTotal) ? currentLineTotal : 0);
+      const nextSubtotal = Math.max(0, Number(order.subtotal ?? 0) + delta);
+      const nextTotal = Math.max(0, Number(order.total ?? 0) + delta);
+
+      const itemPayload = {
+        item_name: itemEditDraft.itemName.trim() || null,
+        condition: itemEditDraft.condition.trim() || "sealed",
+        qty,
+        unit_price: unitPrice,
+        price_each: unitPrice,
+        line_total: nextLineTotal,
+        issue_notes: itemEditDraft.issueNotes.trim() || null,
+      };
+
+      const { error: itemError } = await supabase
+        .from("order_items")
+        .update(itemPayload)
+        .eq("id", selectedItem.id);
+      if (itemError) throw itemError;
+
+      const { error: orderError } = await supabase
+        .from("orders")
+        .update({
+          subtotal: nextSubtotal,
+          total: nextTotal,
+        })
+        .eq("id", selectedItem.order_id);
+      if (orderError) throw orderError;
+
+      toast({ intent: "success", message: "Order item updated." });
+      await reload();
+      setSelectedItem(null);
+    } catch (err: any) {
+      toast({
+        intent: "error",
+        message: err?.message ?? "Unable to update order item.",
+      });
+    } finally {
+      setSavingOrderItem(false);
+    }
+  }
+
+  async function searchOrderItemVariants() {
+    const rawTerm = orderItemSearch.trim();
+    if (!rawTerm) {
+      setOrderItemSearchResults([]);
+      setOrderItemSearchRan(false);
+      return;
+    }
+
+    setSearchingOrderItems(true);
+    setOrderItemSearchRan(true);
+    try {
+      const normalizedTerm = normalizeSearchTerm(rawTerm);
+      const strictTokens = normalizeShipmentSearchTokens(rawTerm);
+      const expandedTokenGroups = expandSearchTerms(rawTerm)
+        .map((term) => normalizeShipmentSearchTokens(term))
+        .filter((tokens) => tokens.length > 0);
+      const normalizedBarcode = normalizeShipmentBarcode(rawTerm);
+
+      const ilike = `%${rawTerm.replace(/[%,()]/g, " ").trim()}%`;
+      const [
+        { data: productRows, error: productError },
+        { data: variantRows, error: variantError },
+      ] = await Promise.all([
+        supabase
+          .from("products")
+          .select(
+            "id,title,brand,model,variation,image_urls,is_active,product_variants!inner(id,product_id,condition,issue_notes,public_notes,price,sale_price,discount_percent,qty,barcode)"
+          )
+          .eq("is_active", true)
+          .gt("product_variants.qty", 0)
+          .or(
+            `title.ilike.${ilike},brand.ilike.${ilike},model.ilike.${ilike},variation.ilike.${ilike}`
+          )
+          .order("created_at", { ascending: false })
+          .limit(180),
+        supabase
+          .from("product_variants")
+          .select(
+            "id,product_id,condition,issue_notes,public_notes,price,sale_price,discount_percent,qty,barcode,product:products!inner(id,title,brand,model,variation,image_urls,is_active)"
+          )
+          .gt("qty", 0)
+          .or(
+            `barcode.ilike.${ilike},issue_notes.ilike.${ilike},public_notes.ilike.${ilike}`
+          )
+          .limit(120),
+      ]);
+      if (productError) throw productError;
+      if (variantError) throw variantError;
+
+      const flattened: Array<ShipmentVariantMatch & { searchScore: number }> = [];
+      const seenVariantIds = new Set<string>();
+
+      for (const product of (productRows as any[]) ?? []) {
+        const variants = Array.isArray(product?.product_variants)
+          ? product.product_variants
+          : [];
+        for (const variant of variants) {
+          const variantId = String(variant?.id ?? "");
+          if (!variantId || seenVariantIds.has(variantId)) continue;
+          seenVariantIds.add(variantId);
+          const qty = Number(variant?.qty ?? 0);
+          if (qty <= 0) continue;
+          const barcode = String(variant?.barcode ?? "").trim();
+          const titleText = buildShipmentSearchHaystack([
+            product?.title,
+            product?.brand,
+            product?.model,
+            product?.variation,
+          ]);
+          const searchText = buildShipmentSearchHaystack(
+            [
+              product?.title,
+              product?.brand,
+              product?.model,
+              product?.variation,
+              barcode,
+              variant?.condition,
+              variant?.issue_notes,
+              variant?.public_notes,
+            ]
+          );
+          const normalizedItemBarcode = normalizeShipmentBarcode(barcode);
+          const barcodeExactMatch =
+            Boolean(normalizedBarcode) && normalizedItemBarcode === normalizedBarcode;
+          const barcodePartialMatch =
+            Boolean(normalizedBarcode) && normalizedItemBarcode.includes(normalizedBarcode);
+          const strictTokenMatch =
+            strictTokens.length > 0 &&
+            strictTokens.every((token) => searchText.includes(token));
+          const expandedTokenMatch =
+            expandedTokenGroups.length > 0 &&
+            expandedTokenGroups.some(
+              (tokens) =>
+                tokens.length > 0 &&
+                tokens.every((token) => searchText.includes(token))
+            );
+          const textMatch =
+            Boolean(normalizedTerm) &&
+            (searchText.includes(normalizedTerm) ||
+              strictTokenMatch ||
+              expandedTokenMatch);
+          if (!barcodePartialMatch && !textMatch) continue;
+
+          let searchScore = 0;
+          if (barcodeExactMatch) searchScore += 400;
+          else if (barcodePartialMatch) searchScore += 180;
+          if (normalizedTerm && titleText.includes(normalizedTerm)) searchScore += 140;
+          if (normalizedTerm && searchText.includes(normalizedTerm)) searchScore += 90;
+
+          for (const token of strictTokens) {
+            if (!token) continue;
+            const inTitle = titleText.includes(token);
+            const inWholeTitle = ` ${titleText} `.includes(` ${token} `);
+            const inSearch = searchText.includes(token);
+            if (inWholeTitle) searchScore += 36;
+            else if (inTitle) searchScore += 22;
+            else if (inSearch) searchScore += 10;
+          }
+
+          const startsWithStrong =
+            normalizedTerm &&
+            (titleText.startsWith(normalizedTerm) || searchText.startsWith(normalizedTerm));
+          if (startsWithStrong) searchScore += 60;
+
+          flattened.push({
+            variantId,
+            productId: String(product?.id ?? variant?.product_id ?? ""),
+            title: String(product?.title ?? "Item"),
+            brand: String(product?.brand ?? "").trim(),
+            model: String(product?.model ?? "").trim(),
+            variation: String(product?.variation ?? "").trim(),
+            imageUrl: Array.isArray(product?.image_urls)
+              ? String(product.image_urls[0] ?? "") || null
+              : null,
+            condition: String(variant?.condition ?? "sealed").trim() || "sealed",
+            qty,
+            barcode,
+            unitPrice: getVariantUnitPrice(variant),
+            issueNotes: String(variant?.issue_notes ?? "").trim(),
+            searchScore,
+          });
+        }
+      }
+
+      for (const variantRow of (variantRows as any[]) ?? []) {
+        const product = variantRow?.product;
+        if (!product?.is_active) continue;
+        const variantId = String(variantRow?.id ?? "");
+        if (!variantId || seenVariantIds.has(variantId)) continue;
+        seenVariantIds.add(variantId);
+
+        const qty = Number(variantRow?.qty ?? 0);
+        if (qty <= 0) continue;
+
+        const barcode = String(variantRow?.barcode ?? "").trim();
+        const titleText = buildShipmentSearchHaystack([
+          product?.title,
+          product?.brand,
+          product?.model,
+          product?.variation,
+        ]);
+        const searchText = buildShipmentSearchHaystack([
+          product?.title,
+          product?.brand,
+          product?.model,
+          product?.variation,
+          barcode,
+          variantRow?.condition,
+          variantRow?.issue_notes,
+          variantRow?.public_notes,
+        ]);
+        const normalizedItemBarcode = normalizeShipmentBarcode(barcode);
+        const barcodeExactMatch =
+          Boolean(normalizedBarcode) && normalizedItemBarcode === normalizedBarcode;
+        const barcodePartialMatch =
+          Boolean(normalizedBarcode) && normalizedItemBarcode.includes(normalizedBarcode);
+        const strictTokenMatch =
+          strictTokens.length > 0 &&
+          strictTokens.every((token) => searchText.includes(token));
+        const expandedTokenMatch =
+          expandedTokenGroups.length > 0 &&
+          expandedTokenGroups.some(
+            (tokens) =>
+              tokens.length > 0 &&
+              tokens.every((token) => searchText.includes(token))
+          );
+        const textMatch =
+          Boolean(normalizedTerm) &&
+          (searchText.includes(normalizedTerm) ||
+            strictTokenMatch ||
+            expandedTokenMatch);
+        if (!barcodePartialMatch && !textMatch) continue;
+
+        let searchScore = 0;
+        if (barcodeExactMatch) searchScore += 400;
+        else if (barcodePartialMatch) searchScore += 180;
+        if (normalizedTerm && titleText.includes(normalizedTerm)) searchScore += 140;
+        if (normalizedTerm && searchText.includes(normalizedTerm)) searchScore += 90;
+
+        for (const token of strictTokens) {
+          if (!token) continue;
+          const inTitle = titleText.includes(token);
+          const inWholeTitle = ` ${titleText} `.includes(` ${token} `);
+          const inSearch = searchText.includes(token);
+          if (inWholeTitle) searchScore += 36;
+          else if (inTitle) searchScore += 22;
+          else if (inSearch) searchScore += 10;
+        }
+
+        const startsWithStrong =
+          normalizedTerm &&
+          (titleText.startsWith(normalizedTerm) || searchText.startsWith(normalizedTerm));
+        if (startsWithStrong) searchScore += 60;
+
+        flattened.push({
+          variantId,
+          productId: String(product?.id ?? variantRow?.product_id ?? ""),
+          title: String(product?.title ?? "Item"),
+          brand: String(product?.brand ?? "").trim(),
+          model: String(product?.model ?? "").trim(),
+          variation: String(product?.variation ?? "").trim(),
+          imageUrl: Array.isArray(product?.image_urls)
+            ? String(product.image_urls[0] ?? "") || null
+            : null,
+          condition: String(variantRow?.condition ?? "sealed").trim() || "sealed",
+          qty,
+          barcode,
+          unitPrice: getVariantUnitPrice(variantRow),
+          issueNotes: String(variantRow?.issue_notes ?? "").trim(),
+          searchScore,
+        });
+      }
+
+      flattened.sort((a, b) => {
+        const aBarcodeExact =
+          normalizedBarcode &&
+          normalizeShipmentBarcode(a.barcode) === normalizedBarcode
+            ? 1
+            : 0;
+        const bBarcodeExact =
+          normalizedBarcode &&
+          normalizeShipmentBarcode(b.barcode) === normalizedBarcode
+            ? 1
+            : 0;
+        if (bBarcodeExact !== aBarcodeExact) return bBarcodeExact - aBarcodeExact;
+
+        const aTitle = buildShipmentSearchHaystack([a.title, a.brand, a.model, a.variation]);
+        const bTitle = buildShipmentSearchHaystack([b.title, b.brand, b.model, b.variation]);
+        const aStarts = normalizedTerm && aTitle.startsWith(normalizedTerm) ? 1 : 0;
+        const bStarts = normalizedTerm && bTitle.startsWith(normalizedTerm) ? 1 : 0;
+        if (bStarts !== aStarts) return bStarts - aStarts;
+        if (b.searchScore !== a.searchScore) return b.searchScore - a.searchScore;
+
+        const qtyDiff = Number(b.qty ?? 0) - Number(a.qty ?? 0);
+        if (qtyDiff !== 0) return qtyDiff;
+
+        return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+      });
+
+      setOrderItemSearchResults(flattened.slice(0, 24).map(({ searchScore, ...match }) => match));
+    } catch (err: any) {
+      setOrderItemSearchResults([]);
+      toast({
+        intent: "error",
+        message: err?.message ?? "Unable to search inventory items.",
+      });
+    } finally {
+      setSearchingOrderItems(false);
+    }
+  }
+
+  async function addVariantToOrder(match: ShipmentVariantMatch) {
+    if (!selectedOrder?.id) {
+      toast({ intent: "error", message: "Order not found." });
+      return;
+    }
+
+    const addQty = Math.max(1, Number.parseInt(orderItemAddQty, 10) || 1);
+    const order = orders.find((entry) => String(entry.id) === String(selectedOrder.id));
+    if (!order) {
+      toast({ intent: "error", message: "Parent order not found." });
+      return;
+    }
+
+    const orderItems = itemsByOrderId[selectedOrder.id] ?? [];
+    const existingItem =
+      orderItems.find(
+        (item) => String(item?.variant_id ?? "").trim() === match.variantId
+      ) ?? null;
+
+    let stockAdjusted = false;
+    let itemInserted = false;
+    let itemUpdated = false;
+    let originalVariantQty: number | null = null;
+    let originalItemQty = 0;
+    let originalLineTotal = 0;
+
+    setAddingOrderItemId(match.variantId);
+    try {
+      const { data: variantRow, error: variantError } = await supabase
+        .from("product_variants")
+        .select("id,qty")
+        .eq("id", match.variantId)
+        .single();
+      if (variantError) throw variantError;
+
+      const currentQty = Number(variantRow?.qty ?? 0);
+      originalVariantQty = currentQty;
+      if (currentQty < addQty) {
+        throw new Error(`Only ${currentQty} item(s) left in stock.`);
+      }
+
+      const { data: adjustedVariant, error: stockError } = await supabase
+        .from("product_variants")
+        .update({ qty: currentQty - addQty })
+        .eq("id", match.variantId)
+        .eq("qty", currentQty)
+        .select("id")
+        .maybeSingle();
+      if (stockError) throw stockError;
+      if (!adjustedVariant) {
+        throw new Error("Stock changed while saving. Please try again.");
+      }
+      stockAdjusted = true;
+
+      let delta = match.unitPrice * addQty;
+      if (existingItem?.id) {
+        originalItemQty = Math.max(1, Number(existingItem.qty ?? 1));
+        originalLineTotal = Number(
+          existingItem.line_total ?? getItemPrice(existingItem) * originalItemQty
+        );
+        const existingUnitPrice = Math.max(0, getItemPrice(existingItem) || match.unitPrice);
+        const nextQty = originalItemQty + addQty;
+        const nextLineTotal = originalLineTotal + existingUnitPrice * addQty;
+        delta = nextLineTotal - originalLineTotal;
+
+        const { error: updateItemError } = await supabase
+          .from("order_items")
+          .update({
+            qty: nextQty,
+            line_total: nextLineTotal,
+          })
+          .eq("id", existingItem.id);
+        if (updateItemError) throw updateItemError;
+        itemUpdated = true;
+      } else {
+        const { error: insertItemError } = await supabase.from("order_items").insert({
+          order_id: selectedOrder.id,
+          product_id: match.productId,
+          item_id: match.variantId,
+          item_name: match.title,
+          product_title: match.title,
+          variant_id: match.variantId,
+          condition: match.condition || "sealed",
+          issue_notes: match.issueNotes || null,
+          unit_price: match.unitPrice,
+          price_each: match.unitPrice,
+          qty: addQty,
+          line_total: delta,
+        });
+        if (insertItemError) throw insertItemError;
+        itemInserted = true;
+      }
+
+      const { error: orderError } = await supabase
+        .from("orders")
+        .update({
+          subtotal: Math.max(0, Number(order.subtotal ?? 0) + delta),
+          total: Math.max(0, Number(order.total ?? 0) + delta),
+        })
+        .eq("id", selectedOrder.id);
+      if (orderError) throw orderError;
+
+      toast({ intent: "success", message: "Item added to order." });
+      setOrderItemAddQty("1");
+      setOrderItemSearch("");
+      setOrderItemSearchResults([]);
+      setOrderItemSearchRan(false);
+      await reload();
+    } catch (err: any) {
+      if (itemInserted) {
+        await supabase
+          .from("order_items")
+          .delete()
+          .eq("order_id", selectedOrder.id)
+          .eq("variant_id", match.variantId);
+      } else if (itemUpdated && existingItem?.id) {
+        await supabase
+          .from("order_items")
+          .update({
+            qty: originalItemQty,
+            line_total: originalLineTotal,
+          })
+          .eq("id", existingItem.id);
+      }
+
+      if (stockAdjusted && originalVariantQty !== null) {
+        await supabase
+          .from("product_variants")
+          .update({ qty: originalVariantQty })
+          .eq("id", match.variantId);
+      }
+
+      toast({
+        intent: "error",
+        message: err?.message ?? "Unable to add item to order.",
+      });
+    } finally {
+      setAddingOrderItemId(null);
+    }
+  }
+
+  async function removeSelectedItem() {
+    if (!selectedItem?.id || !selectedItem?.order_id) {
+      toast({ intent: "error", message: "Order item not found." });
+      return;
+    }
+
+    const order = orders.find((entry) => String(entry.id) === String(selectedItem.order_id));
+    if (!order) {
+      toast({ intent: "error", message: "Parent order not found." });
+      return;
+    }
+
+    const restoreQty = Math.max(1, Number(selectedItem.qty ?? 1));
+    const currentLineTotal = Number(
+      selectedItem.line_total ?? getItemPrice(selectedItem) * restoreQty
+    );
+    const variantId = String(selectedItem.variant_id ?? "").trim();
+    const originalVariantQty =
+      variantId && Number.isFinite(Number(selectedItem?.product_variant?.qty))
+        ? Number(selectedItem.product_variant.qty)
+        : null;
+    const selectedSnapshot = {
+      order_id: selectedItem.order_id,
+      product_id:
+        selectedItem.product_id ??
+        selectedItem.product_variant?.product?.id ??
+        null,
+      item_id: selectedItem.item_id ?? selectedItem.variant_id ?? null,
+      item_name: selectedItem.item_name ?? null,
+      product_title:
+        selectedItem.product_title ?? getItemTitle(selectedItem) ?? null,
+      image_url: selectedItem.image_url ?? null,
+      variant_id: selectedItem.variant_id,
+      condition: selectedItem.condition ?? "sealed",
+      issue_notes: selectedItem.issue_notes ?? null,
+      unit_price: selectedItem.unit_price ?? getItemPrice(selectedItem),
+      price_each: selectedItem.price_each ?? getItemPrice(selectedItem),
+      cost_each: selectedItem.cost_each ?? null,
+      qty: restoreQty,
+      line_total: currentLineTotal,
+    };
+
+    let stockAdjusted = false;
+    let itemDeleted = false;
+
+    setRemovingOrderItem(true);
+    try {
+      if (variantId) {
+        const nextQty = Math.max(0, Number(originalVariantQty ?? 0)) + restoreQty;
+        const { error: stockError } = await supabase
+          .from("product_variants")
+          .update({ qty: nextQty })
+          .eq("id", variantId);
+        if (stockError) throw stockError;
+        stockAdjusted = true;
+      }
+
+      const { error: deleteError } = await supabase
+        .from("order_items")
+        .delete()
+        .eq("id", selectedItem.id);
+      if (deleteError) throw deleteError;
+      itemDeleted = true;
+
+      const { error: orderError } = await supabase
+        .from("orders")
+        .update({
+          subtotal: Math.max(0, Number(order.subtotal ?? 0) - currentLineTotal),
+          total: Math.max(0, Number(order.total ?? 0) - currentLineTotal),
+        })
+        .eq("id", selectedItem.order_id);
+      if (orderError) throw orderError;
+
+      toast({ intent: "success", message: "Item removed from order." });
+      setSelectedItem(null);
+      await reload();
+    } catch (err: any) {
+      if (itemDeleted) {
+        await supabase.from("order_items").insert(selectedSnapshot);
+      }
+      if (stockAdjusted && variantId && originalVariantQty !== null) {
+        await supabase
+          .from("product_variants")
+          .update({ qty: originalVariantQty })
+          .eq("id", variantId);
+      }
+
+      toast({
+        intent: "error",
+        message: err?.message ?? "Unable to remove order item.",
+      });
+    } finally {
+      setRemovingOrderItem(false);
     }
   }
 
@@ -2275,7 +3194,9 @@ export default function CashierShipmentsPage() {
                 Save booking ref + move to To Ship
               </Button>
             ) : null}
-            {shippingStage === "PREPARING TO SHIP" ? (
+            {["PREPARING TO SHIP", "SHIPPED", "COMPLETED"].includes(
+              shippingStage
+            ) ? (
               <Button
                 size="sm"
                 variant="ghost"
@@ -2360,6 +3281,16 @@ export default function CashierShipmentsPage() {
                 </Button>
               </>
             ) : null}
+            {shippingStage === "COMPLETED" ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => undoShipped(o.id)}
+                disabled={busy}
+              >
+                Undo shipped
+              </Button>
+            ) : null}
           </div>
 
           {error ? <div className="mt-2 text-sm text-red-200">{error}</div> : null}
@@ -2393,6 +3324,8 @@ export default function CashierShipmentsPage() {
       details.full_address || details.dropoff_address || o.address || details.address
     );
     const orderTotal = peso(Number(o.total ?? 0));
+    const orderStatus = String(o.status ?? "").trim().toUpperCase();
+    const canVoidOrder = orderStatus !== "VOIDED" && orderStatus !== "CANCELLED";
 
     return (
       <div className="space-y-5">
@@ -2441,6 +3374,26 @@ export default function CashierShipmentsPage() {
           ) : null}
         </SectionBlock>
 
+        {canVoidOrder ? (
+          <SectionBlock
+            title="Order actions"
+            description="Administrative actions that remove the order from active shipment processing."
+          >
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                type="button"
+                variant="ghost"
+                className="gap-2 text-red-200 hover:text-red-100"
+                onClick={() => void voidShipmentOrder(o.id)}
+                disabled={busy}
+              >
+                <Trash2 className="h-4 w-4" />
+                {busy ? "Voiding..." : "Void order"}
+              </Button>
+            </div>
+          </SectionBlock>
+        ) : null}
+
         <SectionBlock
           title="Customer & shipment"
           description="Core delivery facts arranged for quick scanning."
@@ -2463,6 +3416,75 @@ export default function CashierShipmentsPage() {
               </Button>
             </div>
           ) : null}
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <Input
+              label="Customer name"
+              value={orderCustomerDraft.customerName}
+              onChange={(e) =>
+                setOrderCustomerDraft((cur) => ({ ...cur, customerName: e.target.value }))
+              }
+            />
+            <Input
+              label="Customer phone"
+              value={orderCustomerDraft.customerPhone}
+              onChange={(e) =>
+                setOrderCustomerDraft((cur) => ({ ...cur, customerPhone: e.target.value }))
+              }
+            />
+            <Input
+              label="Contact"
+              value={orderCustomerDraft.contact}
+              onChange={(e) =>
+                setOrderCustomerDraft((cur) => ({ ...cur, contact: e.target.value }))
+              }
+            />
+            <Input
+              label="Region"
+              value={orderCustomerDraft.region}
+              onChange={(e) =>
+                setOrderCustomerDraft((cur) => ({ ...cur, region: e.target.value }))
+              }
+            />
+            <Input
+              label="Receiver name"
+              value={orderCustomerDraft.receiverName}
+              onChange={(e) =>
+                setOrderCustomerDraft((cur) => ({ ...cur, receiverName: e.target.value }))
+              }
+            />
+            <Input
+              label="Receiver phone"
+              value={orderCustomerDraft.receiverPhone}
+              onChange={(e) =>
+                setOrderCustomerDraft((cur) => ({ ...cur, receiverPhone: e.target.value }))
+              }
+            />
+            <Input
+              label="Recorded address"
+              value={orderCustomerDraft.address}
+              onChange={(e) =>
+                setOrderCustomerDraft((cur) => ({ ...cur, address: e.target.value }))
+              }
+              className="md:col-span-2"
+            />
+            <Textarea
+              label="Shipping full address / branch"
+              value={orderCustomerDraft.fullAddress}
+              onChange={(e) =>
+                setOrderCustomerDraft((cur) => ({ ...cur, fullAddress: e.target.value }))
+              }
+              className="min-h-[96px] md:col-span-2"
+            />
+          </div>
+          <div className="mt-4">
+            <Button
+              variant="secondary"
+              onClick={() => saveOrderCustomerDetails(o.id)}
+              disabled={savingOrderCustomer}
+            >
+              {savingOrderCustomer ? "Saving..." : "Save customer details"}
+            </Button>
+          </div>
         </SectionBlock>
 
         {shippingStage === "TO BOOK" ? (
@@ -2541,7 +3563,103 @@ export default function CashierShipmentsPage() {
           </SectionBlock>
         ) : null}
 
-        <SectionBlock title={`Items (${items.length})`} description="Select an item row to inspect condition and notes.">
+        <SectionBlock
+          title={`Items (${items.length})`}
+          description="Select an item row to inspect condition and notes, add more items, or remove a line."
+        >
+          <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4">
+            <div className="text-xs uppercase tracking-wide text-white/50">
+              Add inventory item
+            </div>
+            <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_120px_auto]">
+              <Input
+                placeholder="Search title, brand, model, variation, barcode..."
+                value={orderItemSearch}
+                onChange={(e) => setOrderItemSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void searchOrderItemVariants();
+                  }
+                }}
+              />
+              <Input
+                type="number"
+                min={1}
+                label="Qty"
+                value={orderItemAddQty}
+                onChange={(e) => setOrderItemAddQty(e.target.value)}
+              />
+              <Button
+                type="button"
+                className="self-end"
+                onClick={() => searchOrderItemVariants()}
+                disabled={searchingOrderItems}
+              >
+                {searchingOrderItems ? "Searching..." : "Search items"}
+              </Button>
+            </div>
+
+            {orderItemSearchResults.length ? (
+              <div className="mt-3 space-y-2">
+                {orderItemSearchResults.map((match) => (
+                  <div
+                    key={match.variantId}
+                    className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-bg-900/50 p-3 lg:flex-row lg:items-center"
+                  >
+                    <div className="flex min-w-0 flex-1 gap-3">
+                      <div className="h-12 w-12 overflow-hidden rounded-xl border border-white/10 bg-bg-800 flex-shrink-0">
+                        {match.imageUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={match.imageUrl}
+                            alt={match.title}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : null}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate font-medium text-white">
+                          {match.title}
+                        </div>
+                        <div className="mt-1 text-xs text-white/60">
+                          {formatConditionLabel(match.condition, { upper: true })} |{" "}
+                          {peso(match.unitPrice)} | Stock: {match.qty}
+                        </div>
+                        <div className="mt-1 text-xs text-white/45">
+                          {[match.brand, match.model, match.variation]
+                            .filter(Boolean)
+                            .join(" - ") || "No extra product details"}
+                          {match.barcode ? ` | Barcode: ${match.barcode}` : ""}
+                        </div>
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="gap-1.5"
+                      onClick={() => addVariantToOrder(match)}
+                      disabled={addingOrderItemId === match.variantId}
+                    >
+                      {addingOrderItemId === match.variantId ? (
+                        "Adding..."
+                      ) : (
+                        <>
+                          <Plus className="h-4 w-4" />
+                          Add to order
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {orderItemSearchRan && !searchingOrderItems && !orderItemSearchResults.length ? (
+              <div className="mt-3 text-sm text-white/60">No matching in-stock items found.</div>
+            ) : null}
+          </div>
+
           {items.length === 0 ? (
             <div className="text-sm text-white/60">No items found for this order.</div>
           ) : (
@@ -2634,7 +3752,9 @@ export default function CashierShipmentsPage() {
             <Button size="sm" variant="secondary" onClick={() => onCopy(o)}>
               {copiedId === o.id ? "Copied!" : "Copy details"}
             </Button>
-            {shippingStage === "PREPARING TO SHIP" ? (
+            {["PREPARING TO SHIP", "SHIPPED", "COMPLETED"].includes(
+              shippingStage
+            ) ? (
               <Button
                 size="sm"
                 variant="ghost"
@@ -2712,6 +3832,11 @@ export default function CashierShipmentsPage() {
                 </Button>
               </>
             ) : null}
+            {shippingStage === "COMPLETED" ? (
+              <Button size="sm" variant="ghost" onClick={() => undoShipped(o.id)} disabled={busy}>
+                Undo shipped
+              </Button>
+            ) : null}
           </div>
 
           <DetailGrid
@@ -2749,6 +3874,12 @@ export default function CashierShipmentsPage() {
       it?.public_notes ?? it?.product_variant?.public_notes ?? ""
     ).trim();
     const notesCombined = [publicNotes, issueNotes].filter(Boolean).join(" | ");
+    const draftQty = Math.max(1, Number.parseInt(itemEditDraft.qty, 10) || 1);
+    const draftUnitPrice = Math.max(0, Number(itemEditDraft.unitPrice) || 0);
+    const draftLineTotal =
+      Number.isFinite(Number(itemEditDraft.lineTotal)) && Number(itemEditDraft.lineTotal) >= 0
+        ? Number(itemEditDraft.lineTotal)
+        : draftQty * draftUnitPrice;
 
     return (
       <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
@@ -2797,6 +3928,90 @@ export default function CashierShipmentsPage() {
             <div className="text-xs uppercase tracking-wide text-white/50">Notes</div>
             <div className="mt-2 text-sm text-white/80">
               {notesCombined || "No notes."}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4">
+            <div className="text-xs uppercase tracking-wide text-white/50">
+              Edit order line
+            </div>
+            <div className="mt-3 grid gap-3">
+              <Input
+                label="Item title"
+                value={itemEditDraft.itemName}
+                onChange={(e) =>
+                  setItemEditDraft((cur) => ({ ...cur, itemName: e.target.value }))
+                }
+              />
+              <Select
+                label="Condition"
+                value={itemEditDraft.condition}
+                onChange={(e) =>
+                  setItemEditDraft((cur) => ({ ...cur, condition: e.target.value }))
+                }
+              >
+                {ALL_VARIANT_CONDITIONS.map((value) => (
+                  <option key={value} value={value}>
+                    {formatConditionLabel(value)}
+                  </option>
+                ))}
+              </Select>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Input
+                  label="Qty"
+                  type="number"
+                  min={1}
+                  value={itemEditDraft.qty}
+                  onChange={(e) =>
+                    setItemEditDraft((cur) => ({ ...cur, qty: e.target.value }))
+                  }
+                />
+                <Input
+                  label="Unit price"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={itemEditDraft.unitPrice}
+                  onChange={(e) =>
+                    setItemEditDraft((cur) => ({ ...cur, unitPrice: e.target.value }))
+                  }
+                />
+                <Input
+                  label="Line total"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={itemEditDraft.lineTotal}
+                  onChange={(e) =>
+                    setItemEditDraft((cur) => ({ ...cur, lineTotal: e.target.value }))
+                  }
+                  hint={`Preview: ${peso(draftLineTotal)} (${draftQty} x ${peso(draftUnitPrice)})`}
+                />
+              </div>
+              <Textarea
+                label="Issue notes"
+                value={itemEditDraft.issueNotes}
+                onChange={(e) =>
+                  setItemEditDraft((cur) => ({ ...cur, issueNotes: e.target.value }))
+                }
+                className="min-h-[100px]"
+              />
+              <Button
+                variant="secondary"
+                onClick={() => saveSelectedItemEdits()}
+                disabled={savingOrderItem || removingOrderItem}
+              >
+                {savingOrderItem ? "Saving..." : "Save item changes"}
+              </Button>
+              <Button
+                variant="ghost"
+                className="gap-1.5 text-red-200 hover:text-red-100"
+                onClick={() => removeSelectedItem()}
+                disabled={savingOrderItem || removingOrderItem}
+              >
+                <Trash2 className="h-4 w-4" />
+                {removingOrderItem ? "Removing..." : "Remove item from order"}
+              </Button>
             </div>
           </div>
 
@@ -3904,7 +5119,9 @@ export default function CashierShipmentsPage() {
                       >
                         <ScrollText className="h-6 w-6 text-white" />
                       </Button>
-                      {shippingStage === "PREPARING TO SHIP" ? (
+                      {["PREPARING TO SHIP", "SHIPPED", "COMPLETED"].includes(
+                        shippingStage
+                      ) ? (
                         <Button
                           type="button"
                           size="sm"
@@ -3922,18 +5139,42 @@ export default function CashierShipmentsPage() {
                         </Button>
                       ) : null}
                       {shippingStage === "SHIPPED" ? (
+                        <>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() =>
+                              runRpc(o.id, "fn_mark_completed_staff", {
+                                p_order_id: o.id,
+                              })
+                            }
+                            disabled={busy}
+                            className="h-10 px-3 text-xs"
+                          >
+                            Mark completed
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            className="h-10 px-3 text-xs"
+                            onClick={() => undoShipped(o.id)}
+                            disabled={busy}
+                          >
+                            Undo ship
+                          </Button>
+                        </>
+                      ) : null}
+                      {shippingStage === "COMPLETED" ? (
                         <Button
                           type="button"
                           size="sm"
-                          onClick={() =>
-                            runRpc(o.id, "fn_mark_completed_staff", {
-                              p_order_id: o.id,
-                            })
-                          }
-                          disabled={busy}
+                          variant="secondary"
                           className="h-10 px-3 text-xs"
+                          onClick={() => undoShipped(o.id)}
+                          disabled={busy}
                         >
-                          Mark completed
+                          Undo ship
                         </Button>
                       ) : null}
                     </div>

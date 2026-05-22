@@ -3,6 +3,7 @@ import {
   getProductSpecialTagLabel,
   normalizeProductSpecialTags,
 } from "@/lib/productTags";
+import { formatConditionLabel, isBlisterCondition } from "@/lib/conditions";
 
 const BRAND_SYNONYMS: Array<{ pattern: RegExp; canonical: string }> = [
   { pattern: /\bmini\s*-?\s*gt\b/gi, canonical: "mini gt" },
@@ -290,7 +291,108 @@ export function buildSearchTermTokens(query: string) {
     .filter((tokens) => tokens.length > 0);
 }
 
+function normalizeBrandKey(value: string | null | undefined) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+const SEARCH_BOXED_TRUESCALES_BRANDS = new Set([
+  "minigt",
+  "kaidohouse",
+  "kaido",
+  "bmc",
+  "bmcreations",
+  "poprace",
+]);
+
+const SEARCH_TOMICA_BRANDS = new Set([
+  "tomica",
+  "tlvn",
+  "tlv",
+  "tomicalimitedvintage",
+  "tomicalimitedvintageneo",
+]);
+
+const SEARCH_TRUCK_KEYWORDS = [
+  "truck",
+  "trucks",
+  "pickup",
+  "hauler",
+  "semi",
+  "tractor",
+  "rig",
+  "lorry",
+];
+
+function hasWholeKeyword(text: string, keyword: string) {
+  return ` ${text} `.includes(` ${keyword} `);
+}
+
+function buildProductCategorySearchTerms(product: ShopProduct, baseText: string) {
+  const brandKey = normalizeBrandKey(product.brand);
+  const categories = new Set<string>();
+
+  if (SEARCH_BOXED_TRUESCALES_BRANDS.has(brandKey)) {
+    categories.add("boxed truescales");
+    categories.add("boxed truescale");
+  }
+
+  if (SEARCH_TOMICA_BRANDS.has(brandKey)) {
+    categories.add("tomicas");
+    categories.add("tomica");
+  }
+
+  if (brandKey.includes("hotwheels") || brandKey.includes("hotwheel")) {
+    categories.add("hot wheels");
+    categories.add("hot wheel");
+  }
+
+  if (SEARCH_TRUCK_KEYWORDS.some((keyword) => hasWholeKeyword(baseText, keyword))) {
+    categories.add("trucks");
+    categories.add("truck");
+  }
+
+  if (
+    hasWholeKeyword(baseText, "diorama") ||
+    (product.options ?? []).some((opt) => {
+      const shipClass = String(opt.ship_class ?? "").toUpperCase();
+      return shipClass === "FIGURES_DIORAMA" || shipClass === "DIORAMA";
+    })
+  ) {
+    categories.add("figures dioramas");
+    categories.add("figures diorama");
+    categories.add("dioramas");
+    categories.add("diorama");
+    categories.add("figures");
+  }
+
+  if (
+    !brandKey.includes("inno64") &&
+    (product.options ?? []).some((opt) => {
+      const shipClass = String(opt.ship_class ?? "").toUpperCase();
+      return shipClass === "ACRYLIC_TRUE_SCALE";
+    })
+  ) {
+    categories.add("truescales");
+    categories.add("truescale");
+    categories.add("acrylic true scale");
+  }
+
+  if ((product.options ?? []).some((opt) => isBlisterCondition(opt.condition_raw))) {
+    categories.add("blistered");
+    categories.add("blister");
+  }
+
+  return Array.from(categories);
+}
+
 export function buildProductSearchText(product: ShopProduct) {
+  const conditionTerms = (product.options ?? []).flatMap((option) => {
+    const rawCondition = String(option.condition_raw ?? option.condition ?? "").trim();
+    const conditionLabel = formatConditionLabel(rawCondition);
+    return [rawCondition, conditionLabel];
+  });
   const optionNotes = (product.options ?? [])
     .flatMap((option) => [
       option.public_notes,
@@ -298,20 +400,26 @@ export function buildProductSearchText(product: ShopProduct) {
       option.barcode,
     ])
     .filter(Boolean);
-  const specialTags = normalizeProductSpecialTags(product.special_tags).map(
-    getProductSpecialTagLabel
-  );
-  const raw = [
+  const normalizedSpecialTags = normalizeProductSpecialTags(product.special_tags);
+  const specialTags = normalizedSpecialTags.flatMap((tag) => [
+    tag,
+    tag.replace(/_/g, " "),
+    getProductSpecialTagLabel(tag),
+  ]);
+  const baseRaw = [
     product.title,
     product.brand,
     product.model,
     product.variation,
+    ...conditionTerms,
     ...specialTags,
     ...optionNotes,
   ]
     .filter(Boolean)
     .join(" ");
-  return normalizeSearchTerm(raw);
+  const baseText = normalizeSearchTerm(baseRaw);
+  const categoryTerms = buildProductCategorySearchTerms(product, baseText);
+  return normalizeSearchTerm([baseRaw, ...categoryTerms].join(" "));
 }
 
 export function matchesSearchText(text: string, termTokens: string[][]) {

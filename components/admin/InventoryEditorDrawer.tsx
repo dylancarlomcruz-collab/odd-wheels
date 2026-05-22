@@ -243,9 +243,7 @@ export function InventoryEditorDrawer({
     setLastSoldEntry(null);
   }, [product]);
 
-  if (!product) return null;
-
-  const productId = product.id;
+  const productId = product?.id ?? "";
   const isQuickThumbUploading = Boolean(quickThumbUploadingByProductId[productId]);
   const editableVariants = variants.filter((v) => !v._delete);
   const issuePhotoVariants = editableVariants.filter((v) =>
@@ -271,6 +269,8 @@ export function InventoryEditorDrawer({
       ),
     [editableVariants]
   );
+
+  if (!product) return null;
 
   function setQuickThumbUploading(productIdForUpload: string, active: boolean) {
     if (!mountedRef.current) return;

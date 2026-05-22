@@ -21,6 +21,7 @@ import {
   Crown,
   Bug,
   MessageSquare,
+  Wallet,
 } from "lucide-react";
 
 const links = [
@@ -34,6 +35,7 @@ const links = [
   { href: "/admin/sell-trade", label: "Sell / Trade Offers", icon: ShoppingBag },
   { href: "/admin/analytics", label: "Analytics", icon: TrendingUp },
   { href: "/admin/sales", label: "Sales", icon: BarChart3 },
+  { href: "/admin/cashflow", label: "Cashflow", icon: Wallet },
   { href: "/admin/carts", label: "Cart Insights", icon: ShoppingCart },
   { href: "/cashier", label: "POS (Cashier)", icon: ScanBarcode }, // quick access
   { href: "/admin/brands", label: "Brand Tabs", icon: Tags },

@@ -58,7 +58,7 @@ async function loadBoardRows(isAdmin: boolean) {
   const { data, error } = await sb
     .from("orders")
     .select(
-      "id,created_at,customer_name,shipping_method,shipping_details,shipping_status,courier,tracking_number,shipped_at,completed_at,shipping_region,address,cop_fee",
+      "id,created_at,customer_name,status,order_status,shipping_method,shipping_details,shipping_status,courier,tracking_number,shipped_at,completed_at,shipping_region,address,cop_fee",
     )
     .order("shipped_at", { ascending: false, nullsFirst: false })
     .order("completed_at", { ascending: false, nullsFirst: false })
