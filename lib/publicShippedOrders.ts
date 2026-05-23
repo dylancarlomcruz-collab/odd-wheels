@@ -24,6 +24,7 @@ export type PublicShipmentAdminDraft = {
   shippingStatus: "PENDING_SHIPPING" | "SHIPPED";
   trackingNumber: string;
   shippedAt: string;
+  scheduledShipAt: string;
   cop: boolean;
 };
 
@@ -42,6 +43,8 @@ export type PublicShipmentView = {
   trackingNumber: string | null;
   trackingPreview: string | null;
   estimatedDeliveryLabel: string | null;
+  shipmentDateLabel: string;
+  scheduledShipAt: string | null;
   cop: boolean;
   referenceDate: string;
   shippedAt: string | null;
@@ -120,6 +123,8 @@ export function formatPublicShipmentStatusLabel(
 ) {
   return status === "PENDING_SHIPPING" ? "Pending shipping" : "Shipped";
 }
+
+const MANILA_TIME_ZONE = "Asia/Manila";
 
 export function isPublicShipmentEligible(row: PublicShipmentSourceRow) {
   const details = parseShipmentJson(row.shipping_details);
@@ -452,46 +457,168 @@ export function resolvePublicShipmentZone(
   return "LUZON";
 }
 
-const PUBLIC_LBC_NCR_ETA: Record<Exclude<PublicShipmentZone, "ISLAND">, string> = {
-  NCR: "1-3 days",
-  LUZON: "2-4 days",
-  VISAYAS: "4-7 days",
-  MINDANAO: "6-9 days",
-  PUERTO_PRINCESA: "6-8 days",
-  BATANES: "30 days",
-  CORON: "7-11 days",
-  BICOL: "4-6 days",
+const PUBLIC_LBC_NCR_ETA: Record<
+  Exclude<PublicShipmentZone, "ISLAND">,
+  readonly [number, number]
+> = {
+  NCR: [1, 3],
+  LUZON: [2, 4],
+  VISAYAS: [4, 7],
+  MINDANAO: [6, 9],
+  PUERTO_PRINCESA: [6, 8],
+  BATANES: [30, 30],
+  CORON: [7, 11],
+  BICOL: [4, 6],
 };
 
-const PUBLIC_JNT_MNL_ETA: Record<PublicShipmentZone, string> = {
-  NCR: "1-2 days",
-  LUZON: "1-2 days",
-  VISAYAS: "3-4 days",
-  MINDANAO: "3-4 days",
-  PUERTO_PRINCESA: "5-6 days",
-  BATANES: "5-6 days",
-  CORON: "5-6 days",
-  BICOL: "1-2 days",
-  ISLAND: "5-6 days",
+const PUBLIC_JNT_MNL_ETA: Record<PublicShipmentZone, readonly [number, number]> = {
+  NCR: [1, 2],
+  LUZON: [1, 2],
+  VISAYAS: [3, 4],
+  MINDANAO: [3, 4],
+  PUERTO_PRINCESA: [5, 6],
+  BATANES: [5, 6],
+  CORON: [5, 6],
+  BICOL: [1, 2],
+  ISLAND: [5, 6],
 };
 
-export function getPublicEstimatedDeliveryLabel(
+function getManilaDateParts(value: Date) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: MANILA_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = formatter.formatToParts(value);
+  const year = Number(parts.find((part) => part.type === "year")?.value ?? "0");
+  const month = Number(parts.find((part) => part.type === "month")?.value ?? "0");
+  const day = Number(parts.find((part) => part.type === "day")?.value ?? "0");
+  return { year, month, day };
+}
+
+function toManilaCalendarDate(value: string | null | undefined) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return null;
+  const { year, month, day } = getManilaDateParts(date);
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+}
+
+function addCalendarDays(value: Date, days: number) {
+  const next = new Date(value);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function getManilaWeekday(value: Date) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: MANILA_TIME_ZONE,
+    weekday: "short",
+  }).format(value);
+}
+
+function addTransitDays(
+  shippedDate: Date,
+  days: number,
+  options?: { skipSunday?: boolean },
+) {
+  if (days <= 0) return shippedDate;
+  let cursor = new Date(shippedDate);
+  let remaining = days;
+  while (remaining > 0) {
+    cursor = addCalendarDays(cursor, 1);
+    if (options?.skipSunday && getManilaWeekday(cursor) === "Sun") {
+      continue;
+    }
+    remaining -= 1;
+  }
+  return cursor;
+}
+
+function formatManilaMonthDay(value: Date) {
+  return new Intl.DateTimeFormat("en-PH", {
+    timeZone: MANILA_TIME_ZONE,
+    month: "short",
+    day: "numeric",
+  }).format(value);
+}
+
+function formatManilaMonthDayYear(value: Date) {
+  return new Intl.DateTimeFormat("en-PH", {
+    timeZone: MANILA_TIME_ZONE,
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(value);
+}
+
+function formatManilaDateTime(value: string | null | undefined) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return "Unknown date";
+  return new Intl.DateTimeFormat("en-PH", {
+    timeZone: MANILA_TIME_ZONE,
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatDeliveryDateRange(start: Date, end: Date) {
+  const startParts = getManilaDateParts(start);
+  const endParts = getManilaDateParts(end);
+  if (
+    startParts.year === endParts.year &&
+    startParts.month === endParts.month &&
+    startParts.day === endParts.day
+  ) {
+    return `Expect to receive by ${formatManilaMonthDayYear(end)}`;
+  }
+  if (
+    startParts.year === endParts.year &&
+    startParts.month === endParts.month
+  ) {
+    return `Expect to receive by ${
+      new Intl.DateTimeFormat("en-PH", {
+        timeZone: MANILA_TIME_ZONE,
+        month: "short",
+        day: "numeric",
+      }).format(start)
+    }-${endParts.day}`;
+  }
+  return `Expect to receive by ${formatManilaMonthDay(start)}-${formatManilaMonthDayYear(end)}`;
+}
+
+function resolvePublicEtaRange(
   shippingMethod: "LBC" | "JNT",
   locationLabel: string | null | undefined,
 ) {
   const zone = resolvePublicShipmentZone(locationLabel);
   if (!zone) return null;
-  const eta =
-    shippingMethod === "LBC"
-      ? PUBLIC_LBC_NCR_ETA[zone === "ISLAND" ? "LUZON" : zone]
-      : PUBLIC_JNT_MNL_ETA[
-          zone === "PUERTO_PRINCESA" ||
-          zone === "BATANES" ||
-          zone === "CORON"
-            ? "ISLAND"
-            : zone
-        ];
-  return eta ? `Est. delivery ${eta}` : null;
+  return shippingMethod === "LBC"
+    ? PUBLIC_LBC_NCR_ETA[zone === "ISLAND" ? "LUZON" : zone]
+    : PUBLIC_JNT_MNL_ETA[
+        zone === "PUERTO_PRINCESA" ||
+        zone === "BATANES" ||
+        zone === "CORON"
+          ? "ISLAND"
+          : zone
+      ];
+}
+
+export function getPublicEstimatedDeliveryLabel(
+  shippingMethod: "LBC" | "JNT",
+  locationLabel: string | null | undefined,
+  shippedAt: string | null | undefined,
+) {
+  const eta = resolvePublicEtaRange(shippingMethod, locationLabel);
+  const shippedDate = toManilaCalendarDate(shippedAt);
+  if (!eta || !shippedDate) return null;
+  const skipSunday = shippingMethod === "LBC";
+  const startDate = addTransitDays(shippedDate, eta[0], { skipSunday });
+  const endDate = addTransitDays(shippedDate, eta[1], { skipSunday });
+  return formatDeliveryDateRange(startDate, endDate);
 }
 
 function formatDateTimeLocalValue(value: string | null | undefined) {
@@ -503,6 +630,26 @@ function formatDateTimeLocalValue(value: string | null | undefined) {
   const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
   return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function formatDateLocalValue(value: string | null | undefined) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return "";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function resolveScheduledShipAt(details: Record<string, unknown>) {
+  return (
+    String(
+      details.public_scheduled_ship_at ??
+        details.scheduled_ship_at ??
+        details.ship_on ??
+        "",
+    ).trim() || null
+  );
 }
 
 export function buildPublicShipmentView(
@@ -528,8 +675,22 @@ export function buildPublicShipmentView(
   );
   const maskedName = maskCustomerName(customerName);
   const referenceDate = resolvePublicShipmentDate(row);
-  const summaryParts = [maskedName, locationLabel, packageLabel];
-  if (cop) summaryParts.push("COP");
+  const summaryParts = [maskedName, shippingMethod === "JNT" ? "J&T" : "LBC"];
+  const shippedAt = row.shipped_at ?? null;
+  const scheduledShipAt = resolveScheduledShipAt(details);
+  const shippedReferenceDate = row.shipped_at ?? row.completed_at ?? row.created_at ?? null;
+  const estimatedDeliveryLabel =
+    shippingStatus === "SHIPPED"
+      ? getPublicEstimatedDeliveryLabel(
+          shippingMethod,
+          locationLabel,
+          shippedReferenceDate,
+        )
+      : null;
+  const shipmentDateLabel =
+    shippingStatus === "SHIPPED"
+      ? `Shipped on ${formatManilaDateTime(shippedReferenceDate ?? referenceDate)}`
+      : `Pending since ${formatManilaDateTime(referenceDate)}`;
 
   return {
     id: row.id,
@@ -543,10 +704,9 @@ export function buildPublicShipmentView(
     shippingStatus,
     trackingNumber: String(row.tracking_number ?? "").trim() || null,
     trackingPreview: getPublicTrackingPreview(row.tracking_number),
-    estimatedDeliveryLabel: getPublicEstimatedDeliveryLabel(
-      shippingMethod,
-      locationLabel,
-    ),
+    estimatedDeliveryLabel,
+    shipmentDateLabel,
+    scheduledShipAt,
     cop,
     referenceDate,
     shippedAt: row.shipped_at ?? null,
@@ -560,6 +720,7 @@ export function buildPublicShipmentView(
       shippingStatus,
       trackingNumber: String(row.tracking_number ?? "").trim(),
       shippedAt: formatDateTimeLocalValue(row.shipped_at ?? row.completed_at ?? row.created_at),
+      scheduledShipAt: formatDateLocalValue(scheduledShipAt),
       cop,
     },
   };

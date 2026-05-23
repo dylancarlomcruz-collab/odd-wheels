@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase/browser";
 export type Settings = {
   id: number;
   shipping_schedule_text: string | null;
+  shipping_days: string[] | null;
   shipping_cutoff_text: string | null;
   order_approval_enabled: boolean;
   show_prices: boolean;

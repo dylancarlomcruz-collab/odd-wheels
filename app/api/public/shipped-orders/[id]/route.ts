@@ -16,6 +16,7 @@ type UpdatePayload = {
   shippingStatus?: string;
   trackingNumber?: string;
   shippedAt?: string;
+  scheduledShipAt?: string;
   cop?: boolean;
 };
 
@@ -96,6 +97,7 @@ export async function PATCH(
 
     const locationLabel = String(body.locationLabel ?? "").trim() || "Unknown";
     const trackingNumber = String(body.trackingNumber ?? "").trim();
+    const scheduledShipAtIso = toIsoOrNull(body.scheduledShipAt);
     const packageCode = formatPublicPackageCode(shippingMethod, body.packageCode);
     const cop = shippingMethod === "LBC" && Boolean(body.cop);
     const nextCopFee = cop ? FEES.LBC_COP_CONVENIENCE : 0;
@@ -114,6 +116,8 @@ export async function PATCH(
       package: packageCode,
       package_size: packageCode,
       package_label: packageCode,
+      public_scheduled_ship_at:
+        shippingStatus === "PENDING_SHIPPING" ? scheduledShipAtIso : null,
       cop,
     };
 

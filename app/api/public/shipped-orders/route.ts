@@ -137,7 +137,15 @@ export async function POST(req: Request) {
       )
       .map(({ view, source }) => ({
         id: view.id,
+        customerName: resolvePublicCustomerName(source),
+        locationLabel: view.locationLabel,
+        shippingMethodLabel: view.shippingMethodLabel,
+        packageLabel: view.packageLabel,
+        shippingStatus: view.shippingStatus,
         trackingNumber: String(source.tracking_number ?? "").trim() || null,
+        shippedAt: view.shippedAt,
+        shipmentDateLabel: view.shipmentDateLabel,
+        estimatedDeliveryLabel: view.estimatedDeliveryLabel,
       }));
 
     return NextResponse.json({
@@ -147,7 +155,7 @@ export async function POST(req: Request) {
     });
   } catch (error: any) {
     return NextResponse.json(
-      { ok: false, error: error?.message ?? "Unable to load tracking number." },
+      { ok: false, error: error?.message ?? "Unable to search shipped orders." },
       { status: 500 },
     );
   }

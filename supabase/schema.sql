@@ -187,6 +187,7 @@ create index if not exists idx_announcements_created_at
 create table if not exists public.settings (
   id int primary key,
   shipping_schedule_text text,
+  shipping_days text[],
   shipping_cutoff_text text,
   order_approval_enabled boolean not null default true,
     show_prices boolean not null default true,
@@ -213,6 +214,7 @@ create table if not exists public.settings (
 insert into public.settings (
   id,
   shipping_schedule_text,
+  shipping_days,
   shipping_cutoff_text,
   order_approval_enabled,
   show_prices,
@@ -237,6 +239,7 @@ insert into public.settings (
 values (
   1,
   'Set your shipping schedule here.',
+  null,
   null,
   true,
   true,

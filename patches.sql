@@ -68,6 +68,9 @@ alter table public.settings
   add column if not exists allow_checkout boolean not null default true;
 
 alter table public.settings
+  add column if not exists shipping_days text[];
+
+alter table public.settings
   add column if not exists header_logo_url text;
 
 alter table public.settings

@@ -2392,7 +2392,7 @@ function CheckoutContent() {
                 : region,
           shipping_details,
           fees,
-          voucher_id: selectedVoucher?.voucher.id ?? null,
+            voucher_id: null,
           shipping_discount: shippingDiscount,
           discount_total: shippingDiscount,
           priority_requested: priorityRequested,
@@ -2542,7 +2542,6 @@ function CheckoutContent() {
             ) : null}
 
             {shippingMethod === "JNT" ||
-            shippingMethod === "LBC" ||
             shippingMethod === "LALAMOVE" ? (
               <Select
                 label={
@@ -2605,21 +2604,7 @@ function CheckoutContent() {
                   }
                 />
               </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Input
-                  label="Contact Number"
-                  value={phone}
-                  onChange={(e) => setPhone(sanitizePhone(e.target.value))}
-                  onBlur={() => setPhoneTouched(true)}
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  maxLength={PHONE_LENGTH}
-                  error={phoneError}
-                />
-                <div />
-              </div>
-            )}
+            ) : null}
 
             {shippingMethod === "JNT" ? (
               <div className="space-y-3">
@@ -2671,10 +2656,33 @@ function CheckoutContent() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <Input
+                    label="Contact Number"
+                    value={phone}
+                    onChange={(e) => setPhone(sanitizePhone(e.target.value))}
+                    onBlur={() => setPhoneTouched(true)}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={PHONE_LENGTH}
+                    error={phoneError}
+                  />
+                  <Input
                     label="LBC Branch Name"
                     value={lbcBranchName}
                     onChange={(e) => setLbcBranchName(e.target.value)}
                   />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <Select
+                    label="Region (for shipping fee table)"
+                    value={region}
+                    onChange={(e) => setRegion(e.target.value as Region)}
+                  >
+                    <option value="METRO_MANILA">Metro Manila</option>
+                    <option value="LUZON">Luzon</option>
+                    <option value="VISAYAS">Visayas</option>
+                    <option value="MINDANAO">Mindanao</option>
+                  </Select>
                   <Input
                     label="Branch City"
                     value={lbcBranchCity}
@@ -3070,93 +3078,6 @@ function CheckoutContent() {
         </Card>
 
         <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <div className="font-semibold">Vouchers</div>
-              <div className="text-sm text-white/60">
-                Apply free shipping vouchers before checkout.
-              </div>
-            </CardHeader>
-            <CardBody className="space-y-3 text-sm">
-              {voucherLoading ? (
-                <div className="text-white/60">Loading vouchers...</div>
-              ) : voucherError ? (
-                <div className="text-red-200">{voucherError}</div>
-              ) : selectedVoucher ? (
-                <div className="space-y-1">
-                  <div className="font-semibold">
-                    {selectedVoucher.voucher.title || "Free Shipping"}
-                  </div>
-                  <div className="text-xs text-white/60">
-                    Min spend{" "}
-                    {formatPHP(
-                      Number(selectedVoucher.voucher.min_subtotal ?? 0),
-                    )}
-                    {" - "}
-                    Cap{" "}
-                    {formatPHP(
-                      Number(selectedVoucher.voucher.shipping_cap ?? 0),
-                    )}
-                  </div>
-                  {formatCourierList(
-                    selectedVoucher.voucher.include_couriers
-                  ) ? (
-                    <div className="text-xs text-white/50">
-                      Couriers:{" "}
-                      {formatCourierList(
-                        selectedVoucher.voucher.include_couriers
-                      )}
-                    </div>
-                  ) : null}
-                  {selectedVoucher.voucher.details ? (
-                    <div className="space-y-1">
-                      <button
-                        type="button"
-                        className="text-xs text-white/60 underline underline-offset-2 hover:text-white/80"
-                        onClick={() => setShowVoucherDetails((prev) => !prev)}
-                      >
-                        {showVoucherDetails
-                          ? "Hide voucher details"
-                          : "Show voucher details"}
-                      </button>
-                      {showVoucherDetails ? (
-                        <div className="text-xs text-white/50 whitespace-pre-line">
-                          {selectedVoucher.voucher.details}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  <div className="text-xs text-emerald-200">
-                    Discount: Free shipping
-                  </div>
-                </div>
-              ) : (
-                <div className="text-white/60">No voucher applied.</div>
-              )}
-              {voucherNotice ? (
-                <div className="text-xs text-yellow-200">{voucherNotice}</div>
-              ) : null}
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setVoucherOpen(true)}
-                  disabled={voucherLoading}
-                >
-                  {selectedVoucher ? "Change voucher" : "Select voucher"}
-                </Button>
-                {selectedVoucher ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setSelectedVoucherWalletId(null)}
-                  >
-                    Remove
-                  </Button>
-                ) : null}
-              </div>
-            </CardBody>
-          </Card>
           <FeeBreakdown lines={feeLines} total={total} />
         </div>
       </div>
@@ -3171,7 +3092,7 @@ function CheckoutContent() {
         onClose={() => setJtLocationModalOpen(false)}
       />
       <VoucherModal
-        open={voucherOpen}
+        open={false}
         vouchers={voucherWallet}
         selectedId={selectedVoucherWalletId}
         onSelect={(id) => {

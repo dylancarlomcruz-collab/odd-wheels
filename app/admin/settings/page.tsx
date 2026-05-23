@@ -26,6 +26,16 @@ const FREE_SHIPPING_COURIERS = [
   { value: "LALAMOVE", label: "Lalamove" },
 ] as const;
 
+const SHIPPING_DAY_OPTIONS = [
+  { key: "MON", label: "Monday" },
+  { key: "TUE", label: "Tuesday" },
+  { key: "WED", label: "Wednesday" },
+  { key: "THU", label: "Thursday" },
+  { key: "FRI", label: "Friday" },
+  { key: "SAT", label: "Saturday" },
+  { key: "SUN", label: "Sunday" },
+] as const;
+
 const SHIPPING_METHOD_OPTIONS = [
   { value: "LBC", label: "LBC" },
   { value: "INTERNATIONAL", label: "International" },
@@ -67,6 +77,7 @@ type PickupScheduleState = Record<
   PickupDayKey,
   { enabled: boolean; slots: string }
 >;
+type ShippingDayKey = (typeof SHIPPING_DAY_OPTIONS)[number]["key"];
 
 function parseSlotLines(value: string) {
   return value
@@ -143,6 +154,13 @@ function normalizeList(values?: Array<string | null | undefined> | null) {
     .filter(Boolean);
 }
 
+function inferShippingDaysFromText(value: string | null | undefined) {
+  const normalized = String(value ?? "").toUpperCase();
+  return SHIPPING_DAY_OPTIONS.filter((day) =>
+    normalized.includes(day.label.toUpperCase())
+  ).map((day) => day.key);
+}
+
 function formatShipClassLabel(value: string) {
   switch (value) {
     case "ACRYLIC_TRUE_SCALE":
@@ -176,6 +194,7 @@ export default function AdminSettingsPage() {
   const [saving, setSaving] = React.useState(false);
 
   const [schedule, setSchedule] = React.useState("");
+  const [shippingDays, setShippingDays] = React.useState<ShippingDayKey[]>([]);
   const [cutoff, setCutoff] = React.useState("");
   const [showPrices, setShowPrices] = React.useState(true);
   const [allowAddToCart, setAllowAddToCart] = React.useState(true);
@@ -225,6 +244,15 @@ export default function AdminSettingsPage() {
 
     if (data) {
       setSchedule(data.shipping_schedule_text ?? "");
+      const shippingDayValues = normalizeList((data as any).shipping_days).filter(
+        (value) =>
+          SHIPPING_DAY_OPTIONS.some((day) => day.key === value)
+      ) as ShippingDayKey[];
+      setShippingDays(
+        shippingDayValues.length
+          ? shippingDayValues
+          : (inferShippingDaysFromText(data.shipping_schedule_text) as ShippingDayKey[])
+      );
       setCutoff(data.shipping_cutoff_text ?? "");
       setShowPrices((data as any).show_prices !== false);
       setAllowAddToCart((data as any).allow_add_to_cart !== false);
@@ -314,6 +342,7 @@ export default function AdminSettingsPage() {
       : 0;
     const { error } = await supabase.from("settings").update({
       shipping_schedule_text: schedule || null,
+      shipping_days: shippingDays.length ? shippingDays : null,
       shipping_cutoff_text: cutoff || null,
       show_prices: showPrices,
       allow_add_to_cart: allowAddToCart,
@@ -459,6 +488,26 @@ export default function AdminSettingsPage() {
           </div>
 
           <Textarea label="Shipping Schedule (shown on homepage & checkout)" value={schedule} onChange={(e) => setSchedule(e.target.value)} />
+          <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4 space-y-3">
+            <div className="font-semibold">Shipping Days</div>
+            <div className="text-sm text-white/60">
+              Pick the days you usually ship orders. This is saved separately from the schedule note.
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {SHIPPING_DAY_OPTIONS.map((day) => (
+                <Checkbox
+                  key={day.key}
+                  checked={shippingDays.includes(day.key)}
+                  onChange={(checked) =>
+                    setShippingDays((prev) =>
+                      toggleListValue(prev, day.key, checked)
+                    )
+                  }
+                  label={day.label}
+                />
+              ))}
+            </div>
+          </div>
           <Input label="Shipping Cut-off (optional)" value={cutoff} onChange={(e) => setCutoff(e.target.value)} />
           <Input
             label="Free shipping threshold (PHP)"
