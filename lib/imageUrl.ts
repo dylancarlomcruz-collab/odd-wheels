@@ -6,6 +6,7 @@ type ImageTransformOptions = {
   quality?: number;
   format?: ImageFormat;
   resize?: "cover" | "contain";
+  forceTransform?: boolean;
 };
 
 const SUPABASE_OBJECT_PATH = "/storage/v1/object/public/";
@@ -49,13 +50,14 @@ export function getOptimizedImageUrl(
   rawUrl: string,
   options: ImageTransformOptions = {},
 ) {
-  void options;
   if (!rawUrl) return rawUrl;
   if (rawUrl.startsWith("data:")) return rawUrl;
   const base = stripHash(rawUrl);
   const objectUrl = normalizeSupabaseObjectUrl(base);
   if (!objectUrl) return base;
-  if (!ENABLE_SUPABASE_IMAGE_TRANSFORMS) return objectUrl;
+  const shouldTransform =
+    ENABLE_SUPABASE_IMAGE_TRANSFORMS || options.forceTransform === true;
+  if (!shouldTransform) return objectUrl;
   if (transformFailureCache.has(objectUrl)) return objectUrl;
   let parsed: URL;
   try {
@@ -87,12 +89,13 @@ export function buildSrcSet(
   widths: number[],
   options: Omit<ImageTransformOptions, "width"> = {},
 ) {
-  void options;
   if (!rawUrl) return "";
   const base = stripHash(rawUrl);
   const objectUrl = normalizeSupabaseObjectUrl(base);
   if (!objectUrl) return "";
-  if (!ENABLE_SUPABASE_IMAGE_TRANSFORMS) return "";
+  const shouldTransform =
+    ENABLE_SUPABASE_IMAGE_TRANSFORMS || options.forceTransform === true;
+  if (!shouldTransform) return "";
   if (transformFailureCache.has(objectUrl)) return "";
   return widths
     .map((width) => {

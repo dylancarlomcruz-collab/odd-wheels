@@ -371,7 +371,10 @@ function buildProductCategorySearchTerms(product: ShopProduct, baseText: string)
     !brandKey.includes("inno64") &&
     (product.options ?? []).some((opt) => {
       const shipClass = String(opt.ship_class ?? "").toUpperCase();
-      return shipClass === "ACRYLIC_TRUE_SCALE";
+      return (
+        shipClass === "ACRYLIC_TRUE_SCALE" ||
+        shipClass === "TARMAC_ACRYLIC"
+      );
     })
   ) {
     categories.add("truescales");

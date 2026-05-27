@@ -34,6 +34,7 @@ import {
   resolveShopControls,
   SHOP_ADD_TO_CART_DISABLED_MESSAGE,
 } from "@/lib/shopControls";
+import { logClientGridDiagnostics } from "@/lib/egressDiagnostics";
 
 const BRAND_ALL_KEY = "__all__";
 const MAX_PRIMARY_BRAND_TABS = 9;
@@ -1404,7 +1405,38 @@ export default function ShopPageClient() {
       return;
     }
     try {
-      const result = await cart.add(option.id, 1);
+      const result = await cart.add(option.id, 1, {
+        available: Number(option.qty ?? 0),
+        productId: product.key,
+        optimisticLine: {
+          id: option.id,
+          user_id: "optimistic",
+          variant_id: option.id,
+          qty: 1,
+          protector_selected: false,
+          variant: {
+            id: option.id,
+            condition: option.condition,
+            issue_notes: null,
+            public_notes: null,
+            price: Number(option.price ?? 0),
+            sale_price: option.sale_price ?? null,
+            discount_percent: option.discount_percent ?? null,
+            qty: Number(option.qty ?? 0),
+            ship_class: null,
+            allowed_couriers: null,
+            allowed_lbc_packages: null,
+            allowed_jnt_pouches: null,
+            product: {
+              id: product.key,
+              title: product.title,
+              brand: product.brand ?? null,
+              model: product.model ?? null,
+              image_urls: product.image_urls ?? (product.image_url ? [product.image_url] : null),
+            },
+          },
+        },
+      });
       const effectivePrice = resolveEffectivePrice({
         price: Number(option.price),
         sale_price: option.sale_price ?? null,
@@ -1561,6 +1593,30 @@ export default function ShopPageClient() {
     ? mainSection.items.slice(0, visibleCount)
     : [];
   const canLoadMore = visibleMainItems.length < totalMainItems;
+
+  React.useEffect(() => {
+    logClientGridDiagnostics({
+      page: "shop",
+      viewMode: normalizedViewMode,
+      renderedCount: visibleMainItems.length,
+      totalProducts: totalMainItems,
+      imageUrls: visibleMainItems.flatMap((product) =>
+        (product.image_urls?.length ? product.image_urls : [product.image_url]) ?? []
+      ),
+      extra: {
+        suggestionSections: suggestionSections.length,
+        searchQuery: searchQuery || "",
+        pageSize,
+      },
+    });
+  }, [
+    normalizedViewMode,
+    pageSize,
+    searchQuery,
+    suggestionSections.length,
+    totalMainItems,
+    visibleMainItems,
+  ]);
 
   React.useEffect(() => {
     setVisibleCount(Math.min(pageSize, totalMainItems));
@@ -2110,7 +2166,7 @@ export default function ShopPageClient() {
             ? "mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4"
             : isDoubleView
             ? "mt-3 grid grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4"
-            : "mt-3 grid grid-cols-4 gap-2 sm:grid-cols-4 sm:gap-4 md:grid-cols-6 lg:grid-cols-8"
+            : "mt-3 grid grid-cols-4 gap-2.5 sm:grid-cols-4 sm:gap-4 md:grid-cols-6 lg:grid-cols-8"
         }
       >
         {mainSection ? (

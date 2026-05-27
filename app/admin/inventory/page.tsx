@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import JsBarcode from "jsbarcode";
 import { supabase } from "@/lib/supabase/browser";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
@@ -110,6 +111,7 @@ type Variant = {
     | "unsealed"
     | "unsealed_no_box"
     | "unsealed_no_acrylic"
+    | "unsealed_incomplete"
     | "unsealed_near_mint_box"
     | "unsealed_near_mint_blister"
     | "wheelswapped"
@@ -136,7 +138,9 @@ type ShipClass =
   | "SMALL_BOX_FIGURE"
   | "KAIDO"
   | "POPRACE"
+  | "TARMAC_BOX"
   | "ACRYLIC_TRUE_SCALE"
+  | "TARMAC_ACRYLIC"
   | "TRUCKS"
   | "BLISTER"
   | "TOMICA"
@@ -306,7 +310,9 @@ const BULK_SHIP_CLASS_FILTER_OPTIONS: Array<{ value: ShipClass; label: string }>
   { value: "SMALL_BOX_FIGURE", label: "Small Box Figure" },
   { value: "KAIDO", label: "Kaido" },
   { value: "POPRACE", label: "Pop Race" },
+  { value: "TARMAC_BOX", label: "Tarmac Box" },
   { value: "ACRYLIC_TRUE_SCALE", label: "Acrylic True Scale" },
+  { value: "TARMAC_ACRYLIC", label: "Tarmac Acrylic" },
   { value: "TRUCKS", label: "Trucks" },
   { value: "BLISTER", label: "Blister" },
   { value: "TOMICA", label: "Tomica" },
@@ -320,9 +326,11 @@ const BULK_SHIP_CLASS_FILTER_OPTIONS: Array<{ value: ShipClass; label: string }>
 
 const DEFAULT_COST_BY_SHIP_CLASS: Partial<Record<ShipClass, string>> = {
   ACRYLIC_TRUE_SCALE: "700",
+  TARMAC_ACRYLIC: "700",
   MINI_GT: "450",
   SMALL_BOX_FIGURE: "450",
   POPRACE: "500",
+  TARMAC_BOX: "500",
   KAIDO: "500",
   TOMICA_LIMITED_VINTAGE_NEO: "700",
 };
@@ -338,6 +346,15 @@ const WARM_FEATURE_MAX_IMAGES = 30;
 const WARM_FEATURE_MAX_PRODUCTS = 500;
 const WARM_BATCH_RETRY_LIMIT = 3;
 const INVENTORY_SCHEDULE_SETTINGS_KEY = "oddwheels:admin_inventory_schedule";
+const NIIMBOT_LABEL_WIDTH_MM = 50;
+const NIIMBOT_LABEL_HEIGHT_MM = 30;
+const NIIMBOT_LABEL_DP_MM = 8;
+
+type InventoryBarcodeLabelData = {
+  title: string;
+  subtitle?: string | null;
+  barcodeValue: string;
+};
 
 function autoMatchBadgeClass(status: string) {
   switch (status) {
@@ -378,6 +395,147 @@ function normalizeCandidates(raw: any): UploadCandidate[] {
     }
   }
   return [];
+}
+
+function wrapInventoryLabelText(
+  ctx: CanvasRenderingContext2D,
+  value: string,
+  maxWidth: number,
+  maxLines: number
+) {
+  const words = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+
+  if (!words.length) return [];
+
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (ctx.measureText(candidate).width <= maxWidth || !current) {
+      current = candidate;
+      continue;
+    }
+    lines.push(current);
+    current = word;
+    if (lines.length >= maxLines) break;
+  }
+
+  if (lines.length < maxLines && current) {
+    lines.push(current);
+  }
+
+  return lines.slice(0, maxLines);
+}
+
+function createInventoryBarcodeLabelCanvas(data: InventoryBarcodeLabelData) {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(NIIMBOT_LABEL_WIDTH_MM * NIIMBOT_LABEL_DP_MM);
+  canvas.height = Math.round(NIIMBOT_LABEL_HEIGHT_MM * NIIMBOT_LABEL_DP_MM);
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Unable to render barcode label.");
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#000000";
+  ctx.textBaseline = "top";
+
+  const paddingX = 18;
+  const maxWidth = canvas.width - paddingX * 2;
+  let y = 10;
+
+  ctx.font = "bold 20px Arial";
+  const titleLines = wrapInventoryLabelText(ctx, data.title, maxWidth, 2);
+  titleLines.forEach((line) => {
+    ctx.fillText(line, paddingX, y);
+    y += 22;
+  });
+
+  const subtitle = String(data.subtitle ?? "").trim();
+  if (subtitle) {
+    ctx.font = "14px Arial";
+    const subtitleLines = wrapInventoryLabelText(ctx, subtitle, maxWidth, 1);
+    subtitleLines.forEach((line) => {
+      ctx.fillText(line, paddingX, y);
+      y += 16;
+    });
+  }
+
+  y += 4;
+
+  const barcodeCanvas = document.createElement("canvas");
+  const barcodeValue = String(data.barcodeValue ?? "").trim();
+  const fallbackBarcode = barcodeValue
+    .replace(/[^0-9A-Z\-. $/+%]/gi, "")
+    .trim();
+
+  try {
+    JsBarcode(barcodeCanvas, barcodeValue || fallbackBarcode || "000000000000", {
+      format: "CODE128",
+      displayValue: false,
+      margin: 0,
+      background: "#ffffff",
+      lineColor: "#000000",
+      width: 2,
+      height: 62,
+    });
+  } catch {
+    JsBarcode(barcodeCanvas, fallbackBarcode || "000000000000", {
+      format: "CODE39",
+      displayValue: false,
+      margin: 0,
+      background: "#ffffff",
+      lineColor: "#000000",
+      width: 2,
+      height: 62,
+    });
+  }
+
+  const targetHeight = 62;
+  ctx.drawImage(barcodeCanvas, paddingX, y, maxWidth, targetHeight);
+  y += targetHeight + 4;
+
+  ctx.font = "14px Arial";
+  ctx.textAlign = "center";
+  ctx.fillText(
+    barcodeValue || fallbackBarcode || "000000000000",
+    canvas.width / 2,
+    y
+  );
+  ctx.textAlign = "left";
+
+  return canvas;
+}
+
+function supportsDirectNiimbotPrinting() {
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return false;
+  }
+  if (!window.isSecureContext) return false;
+
+  const bluetooth = (navigator as Navigator & {
+    bluetooth?: { requestDevice?: unknown };
+  }).bluetooth;
+
+  return Boolean(bluetooth && typeof bluetooth.requestDevice === "function");
+}
+
+function getNiimbotSupportMessage() {
+  if (typeof window === "undefined") {
+    return "Direct Bluetooth printing is only available in supported browsers.";
+  }
+  if (!window.isSecureContext) {
+    return "Niimbot requires HTTPS or localhost in a secure browser context.";
+  }
+  if (!supportsDirectNiimbotPrinting()) {
+    return "Direct Bluetooth printing is not supported in this browser.";
+  }
+  return null;
 }
 
 const SEARCH_TOKEN_ALIASES: Record<string, string[]> = {
@@ -575,6 +733,8 @@ function normalizeBulkCondition(
     unsealed_near_mint_blister: "unsealed_near_mint_blister",
     unsealed_no_acrylic: "unsealed_no_acrylic",
     no_acrylic: "unsealed_no_acrylic",
+    incomplete: "unsealed_incomplete",
+    unsealed_incomplete: "unsealed_incomplete",
     wheelswap: "wheelswapped",
     wheel_swap: "wheelswapped",
     wheelswapped: "wheelswapped",
@@ -937,7 +1097,9 @@ function VariantDraftPanel({
           <option value="SMALL_BOX_FIGURE">Small Box Figure</option>
           <option value="KAIDO">Kaido</option>
           <option value="POPRACE">Pop Race</option>
+          <option value="TARMAC_BOX">Tarmac Box</option>
           <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
+          <option value="TARMAC_ACRYLIC">Tarmac Acrylic</option>
           <option value="TRUCKS">Trucks</option>
           <option value="BLISTER">Blister</option>
           <option value="TOMICA">Tomica</option>
@@ -1502,6 +1664,14 @@ export default function AdminInventoryPage() {
   const [barcodeLogsError, setBarcodeLogsError] = React.useState<string | null>(
     null
   );
+  const [niimbotState, setNiimbotState] = React.useState<
+    "disconnected" | "connecting" | "connected"
+  >("disconnected");
+  const [niimbotPrinterName, setNiimbotPrinterName] = React.useState<string>("");
+  const [printingBarcodeLabels, setPrintingBarcodeLabels] =
+    React.useState(false);
+  const niimbotLibRef = React.useRef<any>(null);
+  const niimbotClientRef = React.useRef<any>(null);
   const [showBarcodeLogs, setShowBarcodeLogs] = React.useState(false);
   const [addQtyByVariant, setAddQtyByVariant] = React.useState<
     Record<string, string>
@@ -2787,6 +2957,7 @@ export default function AdminInventoryPage() {
     "unsealed",
     "unsealed_no_box",
     "unsealed_no_acrylic",
+    "unsealed_incomplete",
     "unsealed_near_mint_box",
     "wheelswapped",
     "customized",
@@ -2828,8 +2999,8 @@ export default function AdminInventoryPage() {
     setQty("1");
   }
 
-  function saveQueuedVariants() {
-    if (saving) return;
+  function saveQueuedVariants(options?: { printBarcodes?: boolean }) {
+    if (saving || printingBarcodeLabels) return;
     const currentDraft = buildVariantDraft();
     const drafts = isDraftEmpty(currentDraft)
       ? queuedVariants
@@ -2838,7 +3009,12 @@ export default function AdminInventoryPage() {
       toast({ intent: "error", message: "Add a variant before saving." });
       return;
     }
-    saveNewVariant({ keepProduct: true, drafts, reloadAfterSave: true });
+    saveNewVariant({
+      keepProduct: true,
+      drafts,
+      reloadAfterSave: true,
+      printBarcodes: Boolean(options?.printBarcodes),
+    });
   }
 
   async function tryQuickAddFromBarcodeMatches(
@@ -4589,6 +4765,7 @@ export default function AdminInventoryPage() {
     keepProduct?: boolean;
     drafts?: VariantDraft[];
     reloadAfterSave?: boolean;
+    printBarcodes?: boolean;
   }) {
     setSaving(true);
     const reloadAfterSave = Boolean(options?.reloadAfterSave);
@@ -4659,6 +4836,7 @@ export default function AdminInventoryPage() {
       }
 
       const createdVariants: Variant[] = [];
+      const labelsToPrint: InventoryBarcodeLabelData[] = [];
       for (const [idx, draft] of draftList.entries()) {
         if (!draft.cost || !draft.price || !draft.qty) {
           throw new Error(`Variant ${idx + 1}: cost, price, and qty are required.`);
@@ -4729,6 +4907,12 @@ export default function AdminInventoryPage() {
             normalizedTitle
           );
         }
+
+        labelsToPrint.push({
+          title: normalizedTitle,
+          subtitle: formatConditionLabel(draft.condition),
+          barcodeValue,
+        });
       }
 
       toast({
@@ -4738,6 +4922,19 @@ export default function AdminInventoryPage() {
             ? `Saved ${createdVariants.length} variants.`
             : "Saved product + variant.",
       });
+
+      if (options?.printBarcodes) {
+        try {
+          await printInventoryBarcodeLabels(labelsToPrint);
+        } catch (printError: any) {
+          toast({
+            intent: "error",
+            message:
+              printError?.message ??
+              "Saved successfully, but barcode printing failed.",
+          });
+        }
+      }
 
       if (reloadAfterSave) {
         clearProduct();
@@ -5095,10 +5292,122 @@ export default function AdminInventoryPage() {
     }
   }
 
+  const loadNiimbotLib = React.useCallback(async () => {
+    if (niimbotLibRef.current) return niimbotLibRef.current;
+    const lib = await import("@mmote/niimbluelib");
+    niimbotLibRef.current = lib;
+    return lib;
+  }, []);
+
+  const ensureNiimbotClient = React.useCallback(async () => {
+    const supportMessage = getNiimbotSupportMessage();
+    if (supportMessage) {
+      throw new Error(supportMessage);
+    }
+
+    const lib = await loadNiimbotLib();
+    if (!niimbotClientRef.current) {
+      const client = lib.instantiateClient("bluetooth");
+      client.on("connect", (event: any) => {
+        const name = String(event?.info?.deviceName ?? "").trim();
+        setNiimbotPrinterName(name);
+        setNiimbotState("connected");
+      });
+      client.on("disconnect", () => {
+        setNiimbotState("disconnected");
+        setNiimbotPrinterName("");
+      });
+      niimbotClientRef.current = client;
+    }
+
+    return { lib, client: niimbotClientRef.current };
+  }, [loadNiimbotLib]);
+
+  const printInventoryBarcodeLabels = React.useCallback(
+    async (labels: InventoryBarcodeLabelData[]) => {
+      const printable = labels.filter(
+        (label) => String(label.barcodeValue ?? "").trim().length > 0
+      );
+      if (!printable.length) {
+        throw new Error("No barcode labels available to print.");
+      }
+
+      setPrintingBarcodeLabels(true);
+      let client: any = null;
+      try {
+        const niimbot = await ensureNiimbotClient();
+        const lib = niimbot.lib;
+        client = niimbot.client;
+
+        if (niimbotState !== "connected") {
+          setNiimbotState("connecting");
+          await client.connect();
+          if (typeof client.fetchPrinterInfo === "function") {
+            await client.fetchPrinterInfo();
+          }
+        }
+
+        if (typeof client.stopHeartbeat === "function") {
+          client.stopHeartbeat();
+        }
+
+        const printTaskName =
+          (typeof client.getPrintTaskType === "function" &&
+            client.getPrintTaskType()) ||
+          "B1";
+        const printTask = client.abstraction.newPrintTask(printTaskName, {
+          totalPages: printable.length,
+          density: 3,
+          speed: 1,
+          labelType: lib.LabelType.WithGaps,
+          statusPollIntervalMs: 100,
+          statusTimeoutMs: 8000,
+        });
+
+        await printTask.printInit();
+        for (let index = 0; index < printable.length; index += 1) {
+          const canvas = createInventoryBarcodeLabelCanvas(printable[index]);
+          const encoded = lib.ImageEncoder.encodeCanvas(canvas, "top");
+          await printTask.printPage(encoded, index + 1);
+          await printTask.waitForFinished();
+        }
+        await printTask.printEnd();
+
+        toast({
+          intent: "success",
+          message:
+            printable.length === 1
+              ? `Barcode printed${niimbotPrinterName ? ` on ${niimbotPrinterName}` : ""}.`
+              : `${printable.length} barcode labels printed${niimbotPrinterName ? ` on ${niimbotPrinterName}` : ""}.`,
+        });
+      } finally {
+        try {
+          if (client && typeof client.startHeartbeat === "function") {
+            client.startHeartbeat();
+          }
+        } catch {
+          // Ignore heartbeat restart failures.
+        }
+        setPrintingBarcodeLabels(false);
+      }
+    },
+    [ensureNiimbotClient, niimbotPrinterName, niimbotState]
+  );
+
   function formatLogDate(value: string) {
     const d = new Date(value);
     return Number.isNaN(d.getTime()) ? value : d.toLocaleString("en-PH");
   }
+
+  React.useEffect(() => {
+    return () => {
+      try {
+        niimbotClientRef.current?.disconnect?.();
+      } catch {
+        // Ignore cleanup disconnect failures.
+      }
+    };
+  }, []);
 
   function formatDateTimeLabel(value: string | null | undefined) {
     if (!value) return "Never";
@@ -6870,9 +7179,11 @@ export default function AdminInventoryPage() {
                         <option value="SMALL_BOX_FIGURE">SMALL_BOX_FIGURE</option>
                         <option value="KAIDO">KAIDO</option>
                         <option value="POPRACE">POPRACE</option>
+                        <option value="TARMAC_BOX">TARMAC_BOX</option>
                         <option value="ACRYLIC_TRUE_SCALE">
                           ACRYLIC_TRUE_SCALE
                         </option>
+                        <option value="TARMAC_ACRYLIC">TARMAC_ACRYLIC</option>
                         <option value="TRUCKS">TRUCKS</option>
                         <option value="BLISTER">BLISTER</option>
                         <option value="TOMICA">TOMICA</option>
@@ -7043,7 +7354,9 @@ export default function AdminInventoryPage() {
                 <option value="SMALL_BOX_FIGURE">Small Box Figure</option>
                 <option value="KAIDO">Kaido</option>
                 <option value="POPRACE">Pop Race</option>
+                <option value="TARMAC_BOX">Tarmac Box</option>
                 <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
+                <option value="TARMAC_ACRYLIC">Tarmac Acrylic</option>
                 <option value="TRUCKS">Trucks</option>
                 <option value="BLISTER">Blister</option>
                 <option value="TOMICA">Tomica</option>
@@ -7202,21 +7515,44 @@ export default function AdminInventoryPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <Button onClick={saveQueuedVariants} disabled={saving}>
+              <Button
+                onClick={() => saveQueuedVariants()}
+                disabled={saving || printingBarcodeLabels}
+              >
                 {saving
                   ? "Saving..."
                   : queuedVariants.length
                     ? "Save variants"
                   : "Save"}
               </Button>
-              <Button variant="secondary" onClick={queueVariantDraft} disabled={saving}>
-                {saving ? "Saving..." : "+ Add another variant"}
+              <Button
+                variant="secondary"
+                onClick={() => saveQueuedVariants({ printBarcodes: true })}
+                disabled={saving || printingBarcodeLabels}
+              >
+                {saving
+                  ? "Saving..."
+                  : printingBarcodeLabels
+                    ? "Printing..."
+                    : "Save & Print Barcode"}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={queueVariantDraft}
+                disabled={saving || printingBarcodeLabels}
+              >
+                {saving || printingBarcodeLabels ? "Saving..." : "+ Add another variant"}
               </Button>
             </div>
 
             <div className="text-xs text-white/50">
               Cost/Price are empty by default. Qty defaults to 1.
             </div>
+            {niimbotState === "connected" ? (
+              <div className="text-xs text-emerald-200/80">
+                Niimbot connected{niimbotPrinterName ? `: ${niimbotPrinterName}` : ""}.
+              </div>
+            ) : null}
           </div>
 
           {compactAddMode ? (
@@ -7268,7 +7604,9 @@ export default function AdminInventoryPage() {
                 <option value="SMALL_BOX_FIGURE">Small Box Figure</option>
                 <option value="KAIDO">Kaido</option>
                 <option value="POPRACE">Pop Race</option>
+                <option value="TARMAC_BOX">Tarmac Box</option>
                 <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
+                <option value="TARMAC_ACRYLIC">Tarmac Acrylic</option>
                 <option value="TRUCKS">Trucks</option>
                 <option value="BLISTER">Blister</option>
                 <option value="TOMICA">Tomica</option>
@@ -8059,7 +8397,9 @@ export default function AdminInventoryPage() {
                     <option value="SMALL_BOX_FIGURE">Small Box Figure</option>
                     <option value="KAIDO">Kaido</option>
                     <option value="POPRACE">Pop Race</option>
+                    <option value="TARMAC_BOX">Tarmac Box</option>
                     <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
+                    <option value="TARMAC_ACRYLIC">Tarmac Acrylic</option>
                     <option value="TRUCKS">Trucks</option>
                     <option value="BLISTER">Blister</option>
                     <option value="TOMICA">Tomica</option>

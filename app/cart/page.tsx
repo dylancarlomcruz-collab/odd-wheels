@@ -286,11 +286,11 @@ type InvoicePdfRenderOptions = {
 
 const MAX_PDF_DOWNLOAD_BYTES = 24 * 1024 * 1024;
 const CART_INVOICE_RENDER_STAGES: InvoicePdfRenderOptions[] = [
-  { includeImages: true, imageQuality: 0.68, maxImageDimension: 900, photoSize: 42 },
-  { includeImages: true, imageQuality: 0.55, maxImageDimension: 720, photoSize: 40 },
-  { includeImages: true, imageQuality: 0.42, maxImageDimension: 560, photoSize: 38 },
-  { includeImages: true, imageQuality: 0.32, maxImageDimension: 420, photoSize: 36 },
-  { includeImages: false, imageQuality: 0.28, maxImageDimension: 360, photoSize: 34 },
+  { includeImages: true, imageQuality: 0.68, maxImageDimension: 900, photoSize: 88 },
+  { includeImages: true, imageQuality: 0.55, maxImageDimension: 720, photoSize: 82 },
+  { includeImages: true, imageQuality: 0.42, maxImageDimension: 560, photoSize: 76 },
+  { includeImages: true, imageQuality: 0.32, maxImageDimension: 420, photoSize: 70 },
+  { includeImages: false, imageQuality: 0.28, maxImageDimension: 360, photoSize: 64 },
 ];
 
 function sanitizeFileName(value: string) {
@@ -346,12 +346,21 @@ async function imageBlobToPdfDataUrl(
 
     const srcW = Math.max(1, img.naturalWidth || 1);
     const srcH = Math.max(1, img.naturalHeight || 1);
-    const scale =
-      Math.max(srcW, srcH) > options.maxImageDimension
-        ? options.maxImageDimension / Math.max(srcW, srcH)
-        : 1;
-    const outW = Math.max(1, Math.round(srcW * scale));
-    const outH = Math.max(1, Math.round(srcH * scale));
+    const targetRatio = 4 / 3;
+    let cropW = srcW;
+    let cropH = srcH;
+    if (srcW / srcH > targetRatio) {
+      cropW = srcH * targetRatio;
+    } else {
+      cropH = srcW / targetRatio;
+    }
+    const sx = Math.max(0, (srcW - cropW) / 2);
+    const sy = Math.max(0, (srcH - cropH) / 2);
+    const outW = Math.max(
+      220,
+      Math.min(options.maxImageDimension, Math.round(options.photoSize * 3))
+    );
+    const outH = Math.max(165, Math.round(outW * 0.75));
     const canvas = document.createElement("canvas");
     canvas.width = outW;
     canvas.height = outH;
@@ -361,7 +370,7 @@ async function imageBlobToPdfDataUrl(
     }
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, outW, outH);
-    ctx.drawImage(img, 0, 0, outW, outH);
+    ctx.drawImage(img, sx, sy, cropW, cropH, 0, 0, outW, outH);
     return canvas.toDataURL("image/jpeg", options.imageQuality);
   } finally {
     URL.revokeObjectURL(objectUrl);
@@ -396,6 +405,156 @@ function imageFormatForDataUrl(dataUrl: string): "PNG" | "JPEG" {
   return dataUrl.startsWith("data:image/png") ? "PNG" : "JPEG";
 }
 
+function drawInvoiceCustomerHeader(
+  doc: any,
+  payload: CartInvoicePayload,
+  pageWidth: number,
+  marginX: number,
+  marginTop: number
+) {
+  const fullWidth = pageWidth - marginX * 2;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(144, 113, 67);
+  doc.text("ODD WHEELS", marginX, marginTop);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.setTextColor(48, 48, 48);
+  doc.text("FB Cart Invoice", marginX, marginTop + 14);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(20);
+  doc.setTextColor(26, 26, 26);
+  const nameLines = doc.splitTextToSize(payload.customerName || "Customer", fullWidth);
+  doc.text(nameLines.slice(0, 2), marginX, marginTop + 38);
+  const underlineY = marginTop + 48 + Math.max(0, nameLines.length - 1) * 20;
+  doc.setDrawColor(225, 214, 190);
+  doc.line(marginX, underlineY, pageWidth - marginX, underlineY);
+  return underlineY + 8;
+}
+
+function drawInvoiceTableHeader(
+  doc: any,
+  topY: number,
+  pageWidth: number,
+  marginX: number,
+  photoLeft: number,
+  nameLeft: number,
+  qtyCenter: number,
+  amountRight: number
+) {
+  doc.setFillColor(245, 246, 248);
+  doc.roundedRect(marginX, topY, pageWidth - marginX * 2, 20, 6, 6, "F");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(88, 88, 88);
+  doc.text("PHOTO", photoLeft, topY + 13);
+  doc.text("PRODUCT", nameLeft, topY + 13);
+  doc.text("QTY", qtyCenter, topY + 13, { align: "center" });
+  doc.text("AMOUNT", amountRight, topY + 13, { align: "right" });
+  return topY + 20;
+}
+
+function drawInvoiceImageFrame(
+  doc: any,
+  dataUrl: string | null,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+) {
+  doc.setFillColor(250, 250, 250);
+  doc.roundedRect(x, y, width, height, 8, 8, "F");
+
+  if (!dataUrl) return;
+
+  try {
+    doc.addImage(
+      dataUrl,
+      imageFormatForDataUrl(dataUrl),
+      x,
+      y,
+      width,
+      height,
+      undefined,
+      "FAST"
+    );
+    doc.setDrawColor(225, 225, 225);
+    doc.roundedRect(x, y, width, height, 8, 8, "S");
+  } catch {
+    return;
+  }
+}
+
+function drawInvoiceTotalsSection(
+  doc: any,
+  payload: CartInvoicePayload,
+  x: number,
+  y: number,
+  width: number
+) {
+  doc.setFillColor(252, 250, 246);
+  doc.roundedRect(x, y, width, 92, 12, 12, "F");
+  doc.setDrawColor(226, 216, 196);
+  doc.roundedRect(x, y, width, 92, 12, 12, "S");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.setTextColor(28, 28, 28);
+  doc.text("Summary", x + 14, y + 18);
+
+  doc.setFillColor(255, 255, 255);
+  doc.roundedRect(x + 14, y + 28, 78, 28, 8, 8, "F");
+  doc.roundedRect(x + 98, y + 28, 78, 28, 8, 8, "F");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(7);
+  doc.setTextColor(144, 113, 67);
+  doc.text("QTY", x + 24, y + 39);
+  doc.text("LINES", x + 108, y + 39);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.setTextColor(28, 28, 28);
+  doc.text(String(payload.totalQty), x + 24, y + 51);
+  doc.text(String(payload.totalLines), x + 108, y + 51);
+
+  const rightX = x + width - 14;
+  let lineY = y + 30;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(78, 78, 78);
+  doc.text("Subtotal", rightX - 118, lineY);
+  doc.text(pdfMoney(payload.subtotalAmount), rightX, lineY, { align: "right" });
+  lineY += 14;
+  if (payload.shippingFeeAmount > 0) {
+    doc.text("Shipping fee", rightX - 118, lineY);
+    doc.text(pdfMoney(payload.shippingFeeAmount), rightX, lineY, { align: "right" });
+    lineY += 14;
+  }
+  if (payload.discountAmount > 0) {
+    doc.text("Discount", rightX - 118, lineY);
+    doc.text(`-${pdfMoney(payload.discountAmount)}`, rightX, lineY, { align: "right" });
+    lineY += 14;
+  }
+  if (payload.manualAdjustmentAmount !== 0) {
+    doc.text("Manual adjustment", rightX - 118, lineY);
+    doc.text(
+      `${payload.manualAdjustmentAmount > 0 ? "+" : "-"}${pdfMoney(Math.abs(payload.manualAdjustmentAmount))}`,
+      rightX,
+      lineY,
+      { align: "right" }
+    );
+    lineY += 14;
+  }
+
+  doc.setDrawColor(226, 216, 196);
+  doc.line(x + 14, y + 66, x + width - 14, y + 66);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.setTextColor(28, 28, 28);
+  doc.text("Total amount", rightX - 118, y + 83);
+  doc.setTextColor(144, 113, 67);
+  doc.text(pdfMoney(payload.totalAmount), rightX, y + 83, { align: "right" });
+}
+
 async function buildAdminCartInvoicePdfBlob(
   payload: CartInvoicePayload,
   imageCache: Map<string, string | null>,
@@ -403,98 +562,33 @@ async function buildAdminCartInvoicePdfBlob(
   options: InvoicePdfRenderOptions
 ) {
   const { jsPDF } = await import("jspdf");
-  const doc = new jsPDF({ unit: "pt", format: "a4" });
-  const generatedAt = now.toLocaleString("en-PH");
+  const doc = new jsPDF({ unit: "pt", format: "a4", orientation: "portrait" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
-  const marginX = 42;
-  const marginTop = 42;
-  const marginBottom = 48;
+  const marginX = 14;
+  const marginTop = 14;
+  const marginBottom = 16;
+  const totalsHeight = 92;
 
-  const photoLeft = marginX;
-  const photoSize = options.photoSize;
-  const nameLeft = photoLeft + photoSize + 12;
-  const qtyCenter = pageWidth - 120;
-  const amountRight = pageWidth - marginX;
-  const nameMaxWidth = qtyCenter - 24 - nameLeft;
+  const photoLeft = marginX + 12;
+  const photoWidth = options.photoSize;
+  const photoHeight = Math.round(options.photoSize * 0.75);
+  const nameLeft = photoLeft + photoWidth + 14;
+  const qtyCenter = pageWidth - 112;
+  const amountRight = pageWidth - marginX - 14;
+  const nameMaxWidth = qtyCenter - 34 - nameLeft;
 
-  const drawMeta = (continued: boolean) => {
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(17);
-    doc.setTextColor(20, 20, 20);
-    doc.text("ODD WHEELS", marginX, marginTop);
-
-    doc.setFontSize(12);
-    doc.text(
-      continued ? "FB Cart Invoice (Continued)" : "FB Cart Invoice",
-      marginX,
-      marginTop + 20
-    );
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.setTextColor(70, 70, 70);
-    doc.text(`Generated: ${generatedAt}`, pageWidth - marginX, marginTop, {
-      align: "right",
-    });
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(10);
-    doc.setTextColor(20, 20, 20);
-    const nameLines = doc.splitTextToSize(
-      `Customer: ${payload.customerName}`,
-      pageWidth - marginX * 2
-    );
-    doc.text(nameLines, marginX, marginTop + 42);
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.setTextColor(70, 70, 70);
-    let metaY = marginTop + 66;
-    doc.text(`Courier: ${formatCourierLabel(payload.shippingMethod)}`, marginX, metaY);
-    metaY += 13;
-    if (payload.shippingRegion) {
-      doc.text(`Region: ${payload.shippingRegion}`, marginX, metaY);
-      metaY += 13;
-    }
-    if (payload.packagingLabel) {
-      doc.text(`Packaging: ${payload.packagingLabel}`, marginX, metaY);
-      metaY += 13;
-    }
-    if (payload.shippingFeeAmount > 0) {
-      doc.text(`Shipping fee: ${pdfMoney(payload.shippingFeeAmount)}`, marginX, metaY);
-      metaY += 13;
-    }
-    if (payload.shippingDetails) {
-      const detailsLines = doc.splitTextToSize(
-        `Shipping details: ${payload.shippingDetails}`,
-        pageWidth - marginX * 2
-      );
-      doc.text(detailsLines, marginX, metaY);
-      metaY += detailsLines.length * 10 + 3;
-    }
-    doc.text("Source: Admin > Cart (FB checkout)", marginX, metaY);
-    return metaY;
-  };
-
-  const drawTableHeader = (topY: number) => {
-    doc.setDrawColor(220, 220, 220);
-    doc.line(marginX, topY, pageWidth - marginX, topY);
-
-    const textY = topY + 14;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(9);
-    doc.setTextColor(35, 35, 35);
-    doc.text("Photo", photoLeft, textY);
-    doc.text("Product", nameLeft, textY);
-    doc.text("Qty", qtyCenter, textY, { align: "center" });
-    doc.text("Amount", amountRight, textY, { align: "right" });
-    doc.line(marginX, textY + 6, pageWidth - marginX, textY + 6);
-    return textY + 6;
-  };
-
-  let metaBottom = drawMeta(false);
-  let y = drawTableHeader(metaBottom + 18) + 8;
+  let headerBottom = drawInvoiceCustomerHeader(doc, payload, pageWidth, marginX, marginTop);
+  let y = drawInvoiceTableHeader(
+    doc,
+    headerBottom + 6,
+    pageWidth,
+    marginX,
+    photoLeft,
+    nameLeft,
+    qtyCenter,
+    amountRight
+  ) + 6;
 
   if (payload.items.length === 0) {
     doc.setFont("helvetica", "normal");
@@ -503,134 +597,95 @@ async function buildAdminCartInvoicePdfBlob(
     doc.text("No selected cart items.", marginX, y + 18);
     y += 36;
   } else {
-    for (const item of payload.items) {
+    for (const [index, item] of payload.items.entries()) {
       const productName = item.name?.trim() || "Item";
-      const nameLines = doc.splitTextToSize(productName, nameMaxWidth);
-      const details: string[] = [];
-      if (item.condition) details.push(`Condition: ${item.condition}`);
-      if (item.notes) details.push(`Notes: ${item.notes}`);
-      const detailLines = details.flatMap((line) =>
-        doc.splitTextToSize(line, nameMaxWidth)
-      );
-      const nameHeight =
-        nameLines.length * 11 + (detailLines.length ? detailLines.length * 10 + 4 : 0);
-      const rowHeight = Math.max(photoSize + 10, nameHeight + 12);
+      const titleLines = doc.splitTextToSize(productName, nameMaxWidth);
+      const conditionText = item.condition?.trim() ? `Condition: ${item.condition.trim()}` : null;
+      const noteText = item.notes?.trim() ? `Notes: ${item.notes.trim()}` : null;
+      const conditionLines = conditionText ? doc.splitTextToSize(conditionText, nameMaxWidth) : [];
+      const noteLines = noteText ? doc.splitTextToSize(noteText, nameMaxWidth) : [];
+      const textHeight =
+        titleLines.length * 11 +
+        (conditionLines.length ? conditionLines.length * 9 + 5 : 0) +
+        (noteLines.length ? noteLines.length * 9 + 5 : 0);
+      const rowHeight = Math.max(photoHeight + 12, textHeight + 16);
+      const rowBottom = y + rowHeight;
+      const isLastItem = index === payload.items.length - 1;
+      const requiredBottomSpace = isLastItem ? totalsHeight + 8 : 0;
 
-      if (y + rowHeight + 90 > pageHeight - marginBottom) {
+      if (rowBottom + requiredBottomSpace > pageHeight - marginBottom) {
         doc.addPage();
-        metaBottom = drawMeta(true);
-        y = drawTableHeader(metaBottom + 18) + 8;
+        headerBottom = marginTop;
+        y = drawInvoiceTableHeader(
+          doc,
+          headerBottom,
+          pageWidth,
+          marginX,
+          photoLeft,
+          nameLeft,
+          qtyCenter,
+          amountRight
+        ) + 6;
       }
 
-      doc.setDrawColor(235, 235, 235);
-      doc.line(marginX, y + rowHeight, pageWidth - marginX, y + rowHeight);
+      const cardX = marginX;
+      const cardWidth = pageWidth - marginX * 2;
+      doc.setFillColor(255, 255, 255);
+      doc.roundedRect(cardX, y, cardWidth, rowHeight, 12, 12, "F");
+      doc.setDrawColor(232, 232, 232);
+      doc.roundedRect(cardX, y, cardWidth, rowHeight, 12, 12, "S");
 
-      if (options.includeImages && item.imageUrl) {
-        const dataUrl = await loadImageDataUrl(item.imageUrl, imageCache, options);
-        if (dataUrl) {
-          doc.addImage(
-            dataUrl,
-            imageFormatForDataUrl(dataUrl),
-            photoLeft,
-            y + 4,
-            photoSize,
-            photoSize,
-            undefined,
-            "FAST"
-          );
-        } else {
-          doc.setDrawColor(215, 215, 215);
-          doc.rect(photoLeft, y + 4, photoSize, photoSize);
-        }
-      } else {
-        doc.setDrawColor(215, 215, 215);
-        doc.rect(photoLeft, y + 4, photoSize, photoSize);
-      }
+      const dataUrl =
+        options.includeImages && item.imageUrl
+          ? await loadImageDataUrl(item.imageUrl, imageCache, options)
+          : null;
+      drawInvoiceImageFrame(doc, dataUrl, photoLeft, y + 6, photoWidth, photoHeight);
 
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(9);
-      doc.setTextColor(15, 15, 15);
-      doc.text(nameLines, nameLeft, y + 14);
-
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(8);
-      doc.setTextColor(90, 90, 90);
-      doc.text(detailLines, nameLeft, y + 14 + nameLines.length * 11 + 1);
-
-      const numbersY = y + rowHeight / 2 + 3;
-      doc.setFont("helvetica", "normal");
       doc.setFontSize(10);
-      doc.setTextColor(20, 20, 20);
-      doc.text(String(item.qty), qtyCenter, numbersY, { align: "center" });
-      doc.text(pdfMoney(item.amount), amountRight, numbersY, { align: "right" });
+      doc.setTextColor(18, 18, 18);
+      doc.text(titleLines, nameLeft, y + 18);
 
-      y += rowHeight;
+      let textY = y + 18 + titleLines.length * 11;
+      if (conditionLines.length) {
+        doc.setFillColor(248, 244, 236);
+        doc.roundedRect(nameLeft, textY - 8, Math.min(nameMaxWidth, 150), 14, 6, 6, "F");
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(7);
+        doc.setTextColor(144, 113, 67);
+        doc.text(conditionLines, nameLeft + 6, textY + 1);
+        textY += conditionLines.length * 9 + 3;
+      }
+      if (noteLines.length) {
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(7.5);
+        doc.setTextColor(92, 92, 92);
+        doc.text(noteLines, nameLeft, textY);
+      }
+
+      doc.setFillColor(250, 250, 250);
+      doc.roundedRect(qtyCenter - 20, y + rowHeight / 2 - 12, 40, 24, 8, 8, "F");
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(24, 24, 24);
+      doc.text(String(item.qty), qtyCenter, y + rowHeight / 2 + 3, { align: "center" });
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(24, 24, 24);
+      doc.text(pdfMoney(item.amount), amountRight, y + rowHeight / 2 + 3, {
+        align: "right",
+      });
+
+      y += rowHeight + 6;
     }
   }
 
-  if (y + 104 > pageHeight - marginBottom) {
+  if (y + totalsHeight > pageHeight - marginBottom) {
     doc.addPage();
-    metaBottom = drawMeta(true);
-    y = metaBottom + 28;
+    y = marginTop;
   }
-
-  doc.setDrawColor(220, 220, 220);
-  doc.line(marginX, y + 10, pageWidth - marginX, y + 10);
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  doc.setTextColor(20, 20, 20);
-  doc.text("Totals", marginX, y + 30);
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.text(`Total qty: ${payload.totalQty}`, marginX, y + 48);
-  doc.text(`Total lines: ${payload.totalLines}`, marginX, y + 64);
-  let totalsY = y + 30;
-  doc.text(`Subtotal: ${pdfMoney(payload.subtotalAmount)}`, pageWidth - marginX, totalsY, {
-    align: "right",
-  });
-  totalsY += 16;
-  if (payload.shippingFeeAmount > 0) {
-    doc.text(`Shipping fee: ${pdfMoney(payload.shippingFeeAmount)}`, pageWidth - marginX, totalsY, {
-      align: "right",
-    });
-    totalsY += 16;
-  }
-  if (payload.discountAmount > 0) {
-    doc.text(`Discount: -${pdfMoney(payload.discountAmount)}`, pageWidth - marginX, totalsY, {
-      align: "right",
-    });
-    totalsY += 16;
-  }
-  if (payload.manualAdjustmentAmount !== 0) {
-    const adjustmentText =
-      payload.manualAdjustmentAmount > 0
-        ? `Manual adjustment: +${pdfMoney(payload.manualAdjustmentAmount)}`
-        : `Manual adjustment: -${pdfMoney(Math.abs(payload.manualAdjustmentAmount))}`;
-    doc.text(adjustmentText, pageWidth - marginX, totalsY, {
-      align: "right",
-    });
-    totalsY += 16;
-  }
-  doc.setFont("helvetica", "bold");
-  doc.text(
-    `Total amount: ${pdfMoney(payload.totalAmount)}`,
-    pageWidth - marginX,
-    totalsY,
-    {
-      align: "right",
-    }
-  );
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  doc.setTextColor(120, 120, 120);
-  doc.text(
-    "Generated from current selected cart items in Admin mode.",
-    marginX,
-    pageHeight - 26
-  );
+  drawInvoiceTotalsSection(doc, payload, marginX, y, pageWidth - marginX * 2);
 
   return doc.output("blob") as Blob;
 }

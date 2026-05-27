@@ -45,6 +45,13 @@ export type AddResult = {
   capped: boolean;
 };
 
+type AddOptions = {
+  protectorSelected?: boolean;
+  available?: number;
+  productId?: string;
+  optimisticLine?: CartLine;
+};
+
 const CART_EVENT = "oddwheels:cart-updated";
 const GUEST_CART_KEY = "oddwheels:guest-cart";
 const GUEST_CART_SYNC_KEY = "oddwheels:guest-cart-sync";
@@ -108,6 +115,47 @@ function writeGuestCart(items: GuestCartItem[]) {
   window.localStorage.setItem(GUEST_CART_KEY, JSON.stringify(normalized));
 }
 
+function findLineIndex(lines: CartLine[], variantId: string) {
+  return lines.findIndex(
+    (line) => line.variant_id === variantId || line.id === variantId
+  );
+}
+
+function upsertLine(
+  lines: CartLine[],
+  variantId: string,
+  nextQty: number,
+  protectorSelected: boolean,
+  optimisticLine?: CartLine
+) {
+  const index = findLineIndex(lines, variantId);
+  if (index >= 0) {
+    return lines.map((line, lineIndex) =>
+      lineIndex === index
+        ? {
+            ...line,
+            qty: nextQty,
+            protector_selected: protectorSelected || line.protector_selected,
+          }
+        : line
+    );
+  }
+
+  if (!optimisticLine) return lines;
+
+  return [
+    {
+      ...optimisticLine,
+      id: optimisticLine.id || variantId,
+      variant_id: variantId,
+      qty: nextQty,
+      protector_selected:
+        protectorSelected || Boolean(optimisticLine.protector_selected),
+    },
+    ...lines,
+  ];
+}
+
 async function syncGuestCart(items: GuestCartItem[]) {
   const sessionId = getOrCreateGuestSessionId();
   if (!sessionId) return;
@@ -141,14 +189,19 @@ export function useCart() {
   const [loading, setLoading] = React.useState(true);
   const instanceId = React.useRef(`cart-${Math.random().toString(36).slice(2)}`);
 
-  const reload = React.useCallback(async () => {
-    setLoading(true);
+  const reload = React.useCallback(async (options?: { silent?: boolean }) => {
+    const silent = Boolean(options?.silent);
+    if (!silent) {
+      setLoading(true);
+    }
 
     if (!user) {
       const guestItems = readGuestCart();
       if (!guestItems.length) {
         setLines([]);
-        setLoading(false);
+        if (!silent) {
+          setLoading(false);
+        }
         return;
       }
 
@@ -170,7 +223,9 @@ export function useCart() {
         setLines([]);
       }
 
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
       return;
     }
 
@@ -184,7 +239,9 @@ export function useCart() {
       setLines([]);
     }
 
-    setLoading(false);
+    if (!silent) {
+      setLoading(false);
+    }
   }, [user?.id]);
 
   React.useEffect(() => {
@@ -223,7 +280,7 @@ export function useCart() {
   React.useEffect(() => {
     if (!user) return;
     mergeGuestCartToUser()
-      .then(() => reload())
+      .then(() => reload({ silent: true }))
       .catch((err) => console.error("Failed to merge guest cart:", err));
   }, [user?.id, mergeGuestCartToUser, reload]);
 
@@ -232,7 +289,7 @@ export function useCart() {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ source?: string }>).detail;
       if (detail?.source === instanceId.current) return;
-      void reload();
+      void reload({ silent: true });
     };
     window.addEventListener(CART_EVENT, handler as EventListener);
     return () => {
@@ -253,7 +310,7 @@ export function useCart() {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "product_variants", filter },
         () => {
-          void reload();
+          void reload({ silent: true });
         }
       )
       .subscribe();
@@ -267,30 +324,40 @@ export function useCart() {
     async (
       variantId: string,
       qty = 1,
-      options?: { protectorSelected?: boolean }
+      options?: AddOptions
     ): Promise<AddResult> => {
-      const summary = await fetchJson<{
-        ok: true;
-        available: number;
-        productId: string;
-        allowAddToCart?: boolean;
-      }>("/api/cart", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "variantSummary", variantId }),
-      });
-
-      if (summary.allowAddToCart === false) {
-        throw new Error(SHOP_ADD_TO_CART_DISABLED_MESSAGE);
-      }
-
-      const available = Number(summary.available ?? 0);
-      const productId = summary.productId || undefined;
-      if (available <= 0) throw new Error("Item sold out");
-
       const protectorSelected = Boolean(options?.protectorSelected);
+      const optimisticLine = options?.optimisticLine;
+      const optimisticAvailable = Number(options?.available);
+      const hasOptimisticAvailable =
+        Number.isFinite(optimisticAvailable) && optimisticAvailable >= 0;
 
       if (!user) {
+        let available = hasOptimisticAvailable ? optimisticAvailable : 0;
+        let productId = options?.productId;
+
+        if (!hasOptimisticAvailable) {
+          const summary = await fetchJson<{
+            ok: true;
+            available: number;
+            productId: string;
+            allowAddToCart?: boolean;
+          }>("/api/cart", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "variantSummary", variantId }),
+          });
+
+          if (summary.allowAddToCart === false) {
+            throw new Error(SHOP_ADD_TO_CART_DISABLED_MESSAGE);
+          }
+
+          available = Number(summary.available ?? 0);
+          productId = summary.productId || productId;
+        }
+
+        if (available <= 0) throw new Error("Item sold out");
+
         const guestItems = readGuestCart();
         const existing = guestItems.find((item) => item.variant_id === variantId);
         const prevQty = Number(existing?.qty ?? 0);
@@ -319,8 +386,18 @@ export function useCart() {
         }
 
         writeGuestCart(guestItems);
+        setLines((prev) =>
+          upsertLine(
+            prev,
+            variantId,
+            nextQty,
+            protectorSelected,
+            optimisticLine
+          )
+        );
+        emitCartUpdated(instanceId.current);
         void syncGuestCart(guestItems);
-        await reload();
+        void reload({ silent: true });
 
         if (productId) {
           const sessionId = getOrCreateGuestSessionId();
@@ -337,8 +414,31 @@ export function useCart() {
             );
         }
 
-        emitCartUpdated(instanceId.current);
         return { available, desiredQty, nextQty, prevQty, capped };
+      }
+
+      const previousLines = lines;
+      const currentLineIndex = findLineIndex(lines, variantId);
+      const currentLine = currentLineIndex >= 0 ? lines[currentLineIndex] : null;
+      const prevQty = Number(currentLine?.qty ?? 0);
+      const desiredQty = prevQty + Math.max(1, Math.trunc(Number(qty) || 1));
+      const nextProtectorSelected =
+        protectorSelected || Boolean(currentLine?.protector_selected);
+
+      if (currentLine || optimisticLine) {
+        const optimisticNextQty = hasOptimisticAvailable
+          ? Math.max(1, Math.min(desiredQty, optimisticAvailable))
+          : Math.max(1, desiredQty);
+        setLines((prev) =>
+          upsertLine(
+            prev,
+            variantId,
+            optimisticNextQty,
+            nextProtectorSelected,
+            optimisticLine
+          )
+        );
+        emitCartUpdated(instanceId.current);
       }
 
       const payload = await fetchAuthedJson<{
@@ -357,14 +457,28 @@ export function useCart() {
           qty,
           protectorSelected,
         }),
+      }).catch((error) => {
+        setLines(previousLines);
+        emitCartUpdated(instanceId.current);
+        throw error;
       });
 
-      await reload();
+      setLines((prev) =>
+        upsertLine(
+          prev,
+          variantId,
+          payload.nextQty,
+          nextProtectorSelected,
+          optimisticLine
+        )
+      );
+      emitCartUpdated(instanceId.current);
+      void reload({ silent: true });
 
-      if (payload.productId || productId) {
+      if (payload.productId || options?.productId) {
         supabase
           .rpc("increment_product_add_to_cart_detailed", {
-            p_product_id: payload.productId || productId,
+            p_product_id: payload.productId || options?.productId,
             p_variant_id: variantId,
             p_qty: Math.max(1, Number(qty) || 1),
             p_session_id: null,
@@ -385,7 +499,6 @@ export function useCart() {
         );
       }
 
-      emitCartUpdated(instanceId.current);
       return {
         available: payload.available,
         desiredQty: payload.desiredQty,
@@ -429,10 +542,24 @@ export function useCart() {
         existing.qty = nextQty;
         writeGuestCart(guestItems);
         void syncGuestCart(guestItems);
-        await reload();
+        setLines((prev) =>
+          prev.map((line) =>
+            line.variant_id === lineId || line.id === lineId
+              ? { ...line, qty: nextQty }
+              : line
+          )
+        );
+        await reload({ silent: true });
         emitCartUpdated(instanceId.current);
         return;
       }
+
+      const prevLines = lines;
+      setLines((current) =>
+        current.map((line) =>
+          line.id === lineId ? { ...line, qty: Math.max(1, Math.trunc(qty || 1)) } : line
+        )
+      );
 
       await fetchAuthedJson<{ ok: true; nextQty: number; available: number }>(
         "/api/cart",
@@ -440,11 +567,14 @@ export function useCart() {
           method: "POST",
           body: JSON.stringify({ action: "updateQty", lineId, qty }),
         }
-      );
-      await reload();
+      ).catch((error) => {
+        setLines(prevLines);
+        throw error;
+      });
+      await reload({ silent: true });
       emitCartUpdated(instanceId.current);
     },
-    [reload, user?.id]
+    [lines, reload, user?.id]
   );
 
   const remove = React.useCallback(
@@ -455,19 +585,26 @@ export function useCart() {
         );
         writeGuestCart(guestItems);
         void syncGuestCart(guestItems);
-        await reload();
+        setLines((prev) => prev.filter((line) => line.variant_id !== lineId && line.id !== lineId));
+        await reload({ silent: true });
         emitCartUpdated(instanceId.current);
         return;
       }
 
+      const prevLines = lines;
+      setLines((current) => current.filter((line) => line.id !== lineId));
+
       await fetchAuthedJson<{ ok: true }>("/api/cart", {
         method: "POST",
         body: JSON.stringify({ action: "remove", lineId }),
+      }).catch((error) => {
+        setLines(prevLines);
+        throw error;
       });
-      await reload();
+      await reload({ silent: true });
       emitCartUpdated(instanceId.current);
     },
-    [reload, user?.id]
+    [lines, reload, user?.id]
   );
 
   const updateProtector = React.useCallback(
@@ -480,19 +617,36 @@ export function useCart() {
         existing.protector_selected = selected;
         writeGuestCart(guestItems);
         void syncGuestCart(guestItems);
-        await reload();
+        setLines((prev) =>
+          prev.map((line) =>
+            line.variant_id === lineId || line.id === lineId
+              ? { ...line, protector_selected: selected }
+              : line
+          )
+        );
+        await reload({ silent: true });
         emitCartUpdated(instanceId.current);
         return;
       }
 
+      const prevLines = lines;
+      setLines((current) =>
+        current.map((line) =>
+          line.id === lineId ? { ...line, protector_selected: selected } : line
+        )
+      );
+
       await fetchAuthedJson<{ ok: true }>("/api/cart", {
         method: "POST",
         body: JSON.stringify({ action: "updateProtector", lineId, selected }),
+      }).catch((error) => {
+        setLines(prevLines);
+        throw error;
       });
-      await reload();
+      await reload({ silent: true });
       emitCartUpdated(instanceId.current);
     },
-    [reload, user?.id]
+    [lines, reload, user?.id]
   );
 
   return {

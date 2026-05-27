@@ -83,9 +83,12 @@ export function matchesShopCategory(product: ShopProduct, category: string) {
         return false;
       }
       return (product.options ?? []).some((opt) => {
-        const shipClass = String(opt.ship_class ?? "").toUpperCase();
-        return shipClass === "ACRYLIC_TRUE_SCALE";
-      });
+      const shipClass = String(opt.ship_class ?? "").toUpperCase();
+      return (
+        shipClass === "ACRYLIC_TRUE_SCALE" ||
+        shipClass === "TARMAC_ACRYLIC"
+      );
+    });
     case "blistered":
       return (product.options ?? []).some((opt) =>
         isBlisterCondition(opt.condition_raw)

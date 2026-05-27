@@ -8,7 +8,9 @@ export type ShipClass =
   | "SMALL_BOX_FIGURE"
   | "KAIDO"
   | "POPRACE"
+  | "TARMAC_BOX"
   | "ACRYLIC_TRUE_SCALE"
+  | "TARMAC_ACRYLIC"
   | "TRUCKS"
   | "BLISTER"
   | "TOMICA"
@@ -51,7 +53,9 @@ export const JNT_CAPACITY: Record<JntPouch, Record<ShipClass, number>> = {
     SMALL_BOX_FIGURE: 2,
     KAIDO: 2,
     POPRACE: 2,
+    TARMAC_BOX: 2,
     ACRYLIC_TRUE_SCALE: 1,
+    TARMAC_ACRYLIC: 1,
     TRUCKS: 0,
     BLISTER: 0,
     TOMICA: 10,
@@ -67,7 +71,9 @@ export const JNT_CAPACITY: Record<JntPouch, Record<ShipClass, number>> = {
     SMALL_BOX_FIGURE: 8,
     KAIDO: 8,
     POPRACE: 8,
+    TARMAC_BOX: 8,
     ACRYLIC_TRUE_SCALE: 4,
+    TARMAC_ACRYLIC: 4,
     TRUCKS: 1,
     BLISTER: 2,
     TOMICA: 30,
@@ -86,7 +92,9 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     SMALL_BOX_FIGURE: 2,
     KAIDO: 1,
     POPRACE: 1,
+    TARMAC_BOX: 1,
     ACRYLIC_TRUE_SCALE: 1,
+    TARMAC_ACRYLIC: 1,
     TRUCKS: 0,
     BLISTER: 0,
     TOMICA: 4,
@@ -102,7 +110,9 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     SMALL_BOX_FIGURE: 9,
     KAIDO: 4,
     POPRACE: 4,
+    TARMAC_BOX: 4,
     ACRYLIC_TRUE_SCALE: 4,
+    TARMAC_ACRYLIC: 4,
     TRUCKS: 1,
     BLISTER: 1,
     TOMICA: 20,
@@ -118,7 +128,9 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     SMALL_BOX_FIGURE: Math.floor(9 * 3.5),
     KAIDO: Math.floor(4 * 3.5),
     POPRACE: Math.floor(4 * 3.5),
+    TARMAC_BOX: Math.floor(4 * 3.5),
     ACRYLIC_TRUE_SCALE: Math.floor(4 * 3.5),
+    TARMAC_ACRYLIC: Math.floor(4 * 3.5),
     TRUCKS: 3,
     BLISTER: 8,
     TOMICA: 20,

@@ -10,6 +10,7 @@ import { Select } from "@/components/ui/Select";
 import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 import { toast } from "@/components/ui/toast";
 import { normalizeBarcode } from "@/lib/barcode";
+import { useCart } from "@/hooks/useCart";
 import {
   ALL_VARIANT_CONDITIONS,
   formatConditionLabel,
@@ -134,7 +135,9 @@ const SHIP_CLASS_OPTIONS = [
   "SMALL_BOX_FIGURE",
   "KAIDO",
   "POPRACE",
+  "TARMAC_BOX",
   "ACRYLIC_TRUE_SCALE",
+  "TARMAC_ACRYLIC",
   "TRUCKS",
   "BLISTER",
   "TOMICA",
@@ -767,6 +770,7 @@ export function InventoryRefresher({
 }: {
   inventoryUnitsInStock?: number | null;
 }) {
+  const cart = useCart();
   const [items, setItems] = React.useState<RefresherItem[]>([]);
   const [brandTabs, setBrandTabs] = React.useState<BrandTab[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -1406,6 +1410,64 @@ export function InventoryRefresher({
     addItemToSession(item, { clearQuery: true });
   }
 
+  async function addAllUnseenToAdminCart() {
+    if (busyKey === "bulk-admin-cart") return;
+    if (!cart.isLoggedIn) {
+      toast({
+        intent: "error",
+        title: "Admin cart unavailable",
+        message: "Sign in to add unseen items to the admin cart.",
+      });
+      return;
+    }
+
+    const unseenItems = remainingItems;
+    if (unseenItems.length === 0) {
+      toast({
+        intent: "success",
+        title: "Nothing to add",
+        message: "There are no unseen items left in the current scope.",
+      });
+      return;
+    }
+
+    setBusyKey("bulk-admin-cart");
+    let addedVariants = 0;
+    let addedUnits = 0;
+    let cappedVariants = 0;
+
+    try {
+      for (const item of unseenItems) {
+        const unseenQty = getUnseenQty(item.variant_id, item.qty);
+        if (unseenQty <= 0) continue;
+        const result = await cart.add(item.variant_id, unseenQty);
+        addedVariants += 1;
+        addedUnits += Math.max(0, result.nextQty - result.prevQty);
+        if (result.capped) cappedVariants += 1;
+      }
+    } catch (error) {
+      setBusyKey(null);
+      toast({
+        intent: "error",
+        title: "Admin cart update failed",
+        message:
+          error instanceof Error ? error.message : "Could not add unseen items to the admin cart.",
+      });
+      return;
+    }
+
+    setBusyKey(null);
+    toast({
+      intent: "success",
+      title: "Unseen items added",
+      message:
+        cappedVariants > 0
+          ? `${addedVariants} variant(s) and ${addedUnits} unit(s) were added to the admin cart. ${cappedVariants} variant(s) were capped by current stock.`
+          : `${addedVariants} variant(s) and ${addedUnits} unit(s) were added to the admin cart.`,
+      action: { label: "View cart", href: "/cart" },
+    });
+  }
+
   function markUnseen(variantId: string) {
     const seenRecord = seenRecords.find((item) => item.variant_id === variantId);
     if (!seenRecord) return;
@@ -1845,6 +1907,20 @@ export function InventoryRefresher({
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => setScannerOpen(true)}>
               Scan
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => void addAllUnseenToAdminCart()}
+              disabled={
+                loading ||
+                cart.loading ||
+                remainingItems.length === 0 ||
+                busyKey === "bulk-admin-cart"
+              }
+            >
+              {busyKey === "bulk-admin-cart"
+                ? "Adding unseen..."
+                : `Add all unseen to admin cart (${remainingItems.length})`}
             </Button>
             <Button variant="ghost" onClick={() => void loadInventory()} disabled={loading}>
               {loading ? "Refreshing..." : "Refresh inventory"}

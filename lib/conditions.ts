@@ -9,6 +9,7 @@ export type VariantCondition =
   | "unsealed"
   | "unsealed_no_box"
   | "unsealed_no_acrylic"
+  | "unsealed_incomplete"
   | "unsealed_near_mint_box"
   | "unsealed_near_mint_blister"
   | "wheelswapped"
@@ -30,6 +31,7 @@ export const ALL_VARIANT_CONDITIONS: VariantCondition[] = [
   "unsealed",
   "unsealed_no_box",
   "unsealed_no_acrylic",
+  "unsealed_incomplete",
   "unsealed_near_mint_box",
   "unsealed_blister",
   "unsealed_near_mint_blister",
@@ -50,6 +52,7 @@ const CONDITION_LABELS: Record<VariantCondition, string> = {
   unsealed: "Unsealed",
   unsealed_no_box: "Unsealed - No Box",
   unsealed_no_acrylic: "Unsealed - No Acrylic",
+  unsealed_incomplete: "Unsealed - Incomplete",
   unsealed_near_mint_box: "Unsealed - Near Mint Box",
   unsealed_near_mint_blister: "Unsealed - Near Mint Blister",
   wheelswapped: "Wheelswapped",
@@ -85,6 +88,7 @@ export function isNearMintCondition(value: string | null | undefined): boolean {
     value === "near_mint" ||
     value === "sealed_near_mint_box" ||
     value === "sealed_near_mint_blister" ||
+    value === "unsealed_incomplete" ||
     value === "unsealed_near_mint_box" ||
     value === "unsealed_near_mint_blister"
   );
@@ -136,21 +140,23 @@ export function conditionSortOrder(value: string | null | undefined): number {
       return 9;
     case "unsealed_no_acrylic":
       return 10;
-    case "unsealed_near_mint_box":
+    case "unsealed_incomplete":
       return 11;
-    case "unsealed_blister":
+    case "unsealed_near_mint_box":
       return 12;
-    case "unsealed_near_mint_blister":
+    case "unsealed_blister":
       return 13;
-    case "blistered":
+    case "unsealed_near_mint_blister":
       return 14;
-    case "wheelswapped":
+    case "blistered":
       return 15;
-    case "customized":
+    case "wheelswapped":
       return 16;
-    case "with_issues":
+    case "customized":
       return 17;
-    default:
+    case "with_issues":
       return 18;
+    default:
+      return 19;
   }
 }

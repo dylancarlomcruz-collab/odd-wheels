@@ -46,6 +46,7 @@ type Variant = {
     | "unsealed"
     | "unsealed_no_box"
     | "unsealed_no_acrylic"
+    | "unsealed_incomplete"
     | "unsealed_near_mint_box"
     | "unsealed_near_mint_blister"
     | "wheelswapped"
@@ -1077,8 +1078,6 @@ export default function CashierPOSPage() {
                   ref={barcodeRef}
                   label="Barcode Scan (DB-only)"
                   value={barcode}
-                  inputMode="numeric"
-                  pattern="[0-9]*"
                   onChange={(e) => {
                     const next = normalizeBarcode(e.target.value);
                     setBarcode(next);

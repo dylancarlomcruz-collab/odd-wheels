@@ -25,6 +25,7 @@ import {
   resolveShopControls,
   SHOP_ADD_TO_CART_DISABLED_MESSAGE,
 } from "@/lib/shopControls";
+import { logClientGridDiagnostics } from "@/lib/egressDiagnostics";
 import { supabase } from "@/lib/supabase/browser";
 import { isNewArrivalCreatedAt } from "@/lib/newArrivals";
 
@@ -146,6 +147,8 @@ export default function SearchContent() {
     "single"
   );
   const [isDesktop, setIsDesktop] = React.useState(false);
+  const searchProductSelect =
+    "id,title,brand,model,variation,special_tags,image_urls,is_active,created_at,product_variants(id,created_at,condition,barcode,issue_notes,issue_photo_urls,public_notes,ship_class,price,sale_price,discount_percent,qty,release_at)";
 
   const normalizedViewMode =
     isDesktop && viewMode === "double" ? "single" : viewMode;
@@ -245,7 +248,7 @@ export default function SearchContent() {
         ? "grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4"
         : isDoubleView
         ? "grid grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4"
-        : "grid grid-cols-4 gap-2 sm:grid-cols-4 sm:gap-4 md:grid-cols-6 lg:grid-cols-8",
+        : "grid grid-cols-4 gap-2.5 sm:grid-cols-4 sm:gap-4 md:grid-cols-6 lg:grid-cols-8",
     [isDoubleView, isQuadView, isSingleView]
   );
 
@@ -466,9 +469,7 @@ export default function SearchContent() {
         if (orClause) {
           const { data } = await supabase
             .from("products")
-              .select(
-                "*, product_variants(id, created_at, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty, release_at)"
-              )
+            .select(searchProductSelect)
             .eq("is_active", true)
             .or(orClause)
             .order("created_at", { ascending: false })
@@ -489,9 +490,7 @@ export default function SearchContent() {
         if (sellerIds.length) {
           const { data: sellerProducts } = await supabase
             .from("products")
-              .select(
-                "*, product_variants(id, created_at, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty, release_at)"
-              )
+            .select(searchProductSelect)
             .in("id", sellerIds);
 
           sellers = mapProductsToShopProducts((sellerProducts as any[]) ?? []);
@@ -509,9 +508,7 @@ export default function SearchContent() {
         if (recentIds.length) {
           const { data: recentProducts } = await supabase
             .from("products")
-              .select(
-                "*, product_variants(id, created_at, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty, release_at)"
-              )
+            .select(searchProductSelect)
             .in("id", recentIds);
 
           recents = mapProductsToShopProducts((recentProducts as any[]) ?? []);
@@ -607,6 +604,32 @@ export default function SearchContent() {
     } shown`;
   }, [activeFilterCount, filteredProducts.length, loading, products.length, q]);
 
+  React.useEffect(() => {
+    logClientGridDiagnostics({
+      page: "search",
+      viewMode: normalizedViewMode,
+      renderedCount: filteredProducts.length,
+      totalProducts: products.length,
+      imageUrls: filteredProducts.flatMap((product) =>
+        (product.image_urls?.length ? product.image_urls : [product.image_url]) ?? []
+      ),
+      extra: {
+        query: q,
+        closestMatches: closestMatches.length,
+        topSellers: topSellers.length,
+        recentlyViewed: recentlyViewed.length,
+      },
+    });
+  }, [
+    closestMatches.length,
+    filteredProducts,
+    normalizedViewMode,
+    products.length,
+    q,
+    recentlyViewed.length,
+    topSellers.length,
+  ]);
+
   function openFilters() {
     setDraftFilters(cloneSearchFilters(filters));
     setFiltersOpen(true);
@@ -636,7 +659,38 @@ export default function SearchContent() {
       return;
     }
     try {
-      const result = await cart.add(option.id, 1);
+      const result = await cart.add(option.id, 1, {
+        available: Number(option.qty ?? 0),
+        productId: product.key,
+        optimisticLine: {
+          id: option.id,
+          user_id: "optimistic",
+          variant_id: option.id,
+          qty: 1,
+          protector_selected: false,
+          variant: {
+            id: option.id,
+            condition: option.condition,
+            issue_notes: null,
+            public_notes: null,
+            price: Number(option.price ?? 0),
+            sale_price: option.sale_price ?? null,
+            discount_percent: option.discount_percent ?? null,
+            qty: Number(option.qty ?? 0),
+            ship_class: null,
+            allowed_couriers: null,
+            allowed_lbc_packages: null,
+            allowed_jnt_pouches: null,
+            product: {
+              id: product.key,
+              title: product.title,
+              brand: product.brand ?? null,
+              model: product.model ?? null,
+              image_urls: product.image_urls ?? (product.image_url ? [product.image_url] : null),
+            },
+          },
+        },
+      });
       const effectivePrice = resolveEffectivePrice({
         price: Number(option.price),
         sale_price: option.sale_price ?? null,

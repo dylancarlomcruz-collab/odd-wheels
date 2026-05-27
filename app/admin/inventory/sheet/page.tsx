@@ -331,7 +331,12 @@ function formatBaseDownloadCategory(row: SheetRow) {
 
   let baseCategory = "Others";
   if (shipClass && shipClass !== "UNASSIGNED") {
-    if (shipClass === "ACRYLIC_TRUE_SCALE") baseCategory = "Truescales";
+    if (
+      shipClass === "ACRYLIC_TRUE_SCALE" ||
+      shipClass === "TARMAC_ACRYLIC"
+    ) {
+      baseCategory = "Truescales";
+    }
     else if (shipClass === "MINI_GT") baseCategory = "Mini GT";
     else if (shipClass === "BLISTER") baseCategory = "Blistered Truescales";
     else if (shipClass === "FIGURES_DIORAMA") baseCategory = "Figures and Dioramas";
@@ -1298,6 +1303,7 @@ const COMPACT_CONDITION_LABELS: Record<string, string> = {
   unsealed: "UNSEAL",
   unsealed_no_box: "NO BOX",
   unsealed_no_acrylic: "NO ACRYL",
+  unsealed_incomplete: "INCOMP",
   unsealed_near_mint_box: "U-NM BOX",
   unsealed_near_mint_blister: "U-NM BL",
   wheelswapped: "W-SWAP",

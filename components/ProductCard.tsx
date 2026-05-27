@@ -84,6 +84,7 @@ const COMPACT_CONDITION_LABELS: Record<string, string> = {
   unsealed: "UNSEAL",
   unsealed_no_box: "NO BOX",
   unsealed_no_acrylic: "NO ACRYL",
+  unsealed_incomplete: "INCOMP",
   unsealed_near_mint_box: "U-NM BOX",
   unsealed_near_mint_blister: "U-NM BL",
   wheelswapped: "W-SWAP",
@@ -362,8 +363,9 @@ export default function ProductCard({
       parsedCardImage
         ? getOptimizedImageUrl(parsedCardImage.src, {
             width: 480,
-            quality: 100,
+            quality: 90,
             format: "webp",
+            forceTransform: true,
           })
         : "",
     [parsedCardImage]
@@ -372,8 +374,9 @@ export default function ProductCard({
     () =>
       parsedCardImage
         ? buildSrcSet(parsedCardImage.src, [200, 320, 480], {
-            quality: 100,
+            quality: 90,
             format: "webp",
+            forceTransform: true,
           })
         : "",
     [parsedCardImage]
@@ -466,8 +469,8 @@ export default function ProductCard({
     : compactConditionLabel;
   const desktopPanelHeight = wideView
     ? showCardPageActions
-      ? "12.25rem"
-      : "9.5rem"
+      ? "11.5rem"
+      : "8.6rem"
     : showCardPageActions
       ? "17.25rem"
       : "14.75rem";
@@ -503,8 +506,9 @@ export default function ProductCard({
       parsedMobilePrimaryImage
         ? getOptimizedImageUrl(parsedMobilePrimaryImage.src, {
             width: 480,
-            quality: 100,
+            quality: 90,
             format: "webp",
+            forceTransform: true,
           })
         : "",
     [parsedMobilePrimaryImage]
@@ -513,8 +517,9 @@ export default function ProductCard({
     () =>
       parsedMobilePrimaryImage
         ? buildSrcSet(parsedMobilePrimaryImage.src, [200, 320, 480], {
-            quality: 100,
+            quality: 90,
             format: "webp",
+            forceTransform: true,
           })
         : "",
     [parsedMobilePrimaryImage]
@@ -537,19 +542,19 @@ export default function ProductCard({
       mode === "mobile"
         ? "absolute left-3 top-3 z-10 flex max-w-[74%] flex-col items-start gap-2"
         : wideView
-          ? "absolute left-2 top-2 z-10 flex max-w-[72%] items-start"
+          ? "absolute left-1.5 top-1.5 z-10 flex max-w-[68%] items-start"
           : "absolute left-3 top-3 z-10 flex max-w-[74%] flex-col items-start gap-2";
     const badgeClassName =
       mode === "mobile"
         ? "max-w-full px-3.5 py-1.5 text-[10px] leading-none tracking-[0.16em] sm:px-4 sm:py-2 sm:text-[11px]"
         : wideView
-          ? "max-w-full whitespace-nowrap px-2.5 py-1 text-[8px] leading-none tracking-[0.08em]"
+          ? "max-w-full whitespace-nowrap rounded-[999px] px-2 py-0.5 text-[7px] font-extrabold leading-none tracking-[0.14em] shadow-[0_4px_12px_rgba(0,0,0,0.26)]"
           : "px-3 py-1.5 text-[10px] leading-none tracking-[0.16em] sm:px-3.5 sm:py-2 sm:text-[11px]";
     const dotClassName =
       mode === "mobile"
         ? "h-2 w-2"
         : wideView
-          ? "h-1.5 w-1.5"
+          ? "h-1 w-1"
           : "h-2 w-2";
 
     return (
@@ -1476,8 +1481,9 @@ export default function ProductCard({
                   alt={displayTitle}
                   className="h-full w-full object-cover object-center"
                   style={cropStyle(parsedMobilePrimaryImage?.crop)}
-                  loading="eager"
+                  loading="lazy"
                   decoding="async"
+                  fetchPriority="low"
                   onError={(e) =>
                     applyImageFallback(e.currentTarget, mobilePrimaryImage)
                   }
@@ -1548,7 +1554,14 @@ export default function ProductCard({
   );
 
   const desktopCard = (
-    <div className="flex flex-col overflow-hidden rounded-xl border border-white/20 bg-bg-900/70 shadow-sm dark:border-white/10 dark:bg-paper/5 sm:rounded-2xl">
+    <div
+      className={[
+        "flex flex-col overflow-hidden border shadow-sm dark:border-white/10 dark:bg-paper/5",
+        wideView
+          ? "rounded-[18px] border-white/12 bg-[#0d0e13]/92 shadow-[0_10px_24px_rgba(0,0,0,0.34)]"
+          : "rounded-xl border-white/20 bg-bg-900/70 sm:rounded-2xl",
+      ].join(" ")}
+    >
         <button
           type="button"
           onClick={() => {
@@ -1559,21 +1572,32 @@ export default function ProductCard({
             }
             openPreview();
           }}
-          className="relative flex aspect-[4/3] w-full shrink-0 items-center justify-center overflow-hidden bg-black/10"
+          className={[
+            "relative flex w-full shrink-0 items-center justify-center overflow-hidden",
+            wideView ? "aspect-[4/3] bg-white" : "aspect-[4/3] bg-black/10",
+          ].join(" ")}
           aria-label={`Preview ${displayTitle}`}
         >
           {parsedCardImage ? (
-            <div className="h-full w-full bg-neutral-50">
+            <div className={wideView ? "h-full w-full bg-white" : "h-full w-full bg-neutral-50"}>
+              {wideView ? (
+                <div className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-8 bg-gradient-to-b from-black/30 via-black/10 to-transparent" />
+              ) : null}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={cardImageFinalSrc}
                 srcSet={cardImageFinalSrcSet}
                 sizes="(min-width: 1024px) 240px, (min-width: 640px) 200px, 45vw"
                 alt={displayTitle}
-                className="h-full w-full object-contain"
+                className={[
+                  "h-full w-full",
+                  "object-contain",
+                  wideView ? "object-center" : "",
+                ].join(" ")}
                 style={cropStyle(parsedCardImage?.crop)}
-                loading="eager"
+                loading="lazy"
                 decoding="async"
+                fetchPriority="low"
                 onError={(e) =>
                   applyImageFallback(e.currentTarget, parsedCardImage.src)
                 }
@@ -1591,7 +1615,7 @@ export default function ProductCard({
         </button>
 
         <div
-          className="flex flex-col p-2.5 sm:p-4"
+          className={wideView ? "flex flex-col p-2" : "flex flex-col p-2.5 sm:p-4"}
           style={{ height: desktopPanelHeight }}
         >
           <button
@@ -1599,7 +1623,7 @@ export default function ProductCard({
             onClick={openPreview}
             className={
               wideView
-                ? "block h-[1.9rem] max-h-[1.9rem] w-full overflow-hidden text-left text-[10px] font-semibold leading-snug text-white line-clamp-2 sm:h-[2.3rem] sm:max-h-[2.3rem] sm:text-xs"
+                ? "block h-[2.35rem] max-h-[2.35rem] w-full overflow-hidden text-left text-[10.5px] font-semibold leading-[1.12rem] tracking-[-0.01em] text-white line-clamp-2"
                 : "block h-[3rem] max-h-[3rem] w-full overflow-hidden text-left text-base font-semibold leading-normal text-white line-clamp-2 sm:h-[3.5rem] sm:max-h-[3.5rem] sm:text-lg"
             }
           >
@@ -1609,15 +1633,20 @@ export default function ProductCard({
           <div
             className={[
               "flex h-5 min-h-[1.25rem] items-center justify-between gap-2 overflow-hidden",
-              wideView ? "mt-1" : "mt-1.5 sm:mt-3",
+              wideView ? "mt-1.5 h-6 min-h-[1.5rem] items-end" : "mt-1.5 sm:mt-3",
             ].join(" ")}
           >
-            <div className="text-price text-[13px] sm:text-base whitespace-nowrap">
+            <div
+              className={[
+                "text-price whitespace-nowrap",
+                wideView ? "text-[13px] font-semibold leading-none" : "text-[13px] sm:text-base",
+              ].join(" ")}
+            >
               {wideView ? (
                 wideStrikePrice ? (
-                  <div className="flex items-baseline gap-2">
+                  <div className="flex items-baseline gap-1">
                     <span>{wideDisplayPrice}</span>
-                    <span className="text-[10px] text-white/40 line-through">
+                    <span className="text-[8px] text-white/35 line-through">
                       {wideStrikePrice}
                     </span>
                   </div>
@@ -1676,14 +1705,10 @@ export default function ProductCard({
           <div
             className={[
               "space-y-2",
-              wideView ? "mt-1 space-y-1" : "mt-1.5 sm:mt-3",
+              wideView ? "mt-1.5 space-y-1.5" : "mt-1.5 sm:mt-3",
             ].join(" ")}
           >
-            {wideView ? (
-              <div className="flex h-5 items-center justify-between overflow-hidden rounded-full border border-white/10 bg-bg-900/60 px-2 text-[9px] uppercase tracking-wide text-white/70">
-                <span className="truncate">{wideVariantLabel}</span>
-              </div>
-            ) : hasMultipleVariants ? (
+            {wideView ? null : hasMultipleVariants ? (
               <button
                 type="button"
                 onClick={() => setVariantPickerOpen(true)}
@@ -1726,7 +1751,12 @@ export default function ProductCard({
             )}
 
             <button
-              className="flex h-10 w-full items-center justify-center rounded-xl bg-amber-600 px-3 text-[12px] font-semibold text-black hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50 sm:h-11 sm:px-4 sm:text-sm"
+              className={[
+                "flex w-full items-center justify-center bg-amber-600 font-semibold text-black hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50",
+                wideView
+                  ? "h-9 rounded-[14px] px-2 text-[11px] tracking-[-0.01em] shadow-[inset_0_1px_0_rgba(255,255,255,0.18)]"
+                  : "h-10 rounded-xl px-3 text-[12px] sm:h-11 sm:px-4 sm:text-sm",
+              ].join(" ")}
               disabled={!canAddToCart || isOut}
               onClick={handleAddClick}
             >

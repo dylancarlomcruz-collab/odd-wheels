@@ -12,12 +12,14 @@ import { BarcodeScannerModal } from "@/components/pos/BarcodeScannerModal";
 import { normalizeBarcode } from "@/lib/barcode";
 import { conditionSortOrder, formatConditionLabel, isBlisterCondition } from "@/lib/conditions";
 import { cropStyle, parseImageCrop } from "@/lib/imageCrop";
+import { getOptimizedImageUrl } from "@/lib/imageUrl";
 import {
   formatReleaseDateTime,
   getProductReleaseSummary,
   getReleaseBadgeClass,
   getVariantReleaseLabel,
 } from "@/lib/inventoryRelease";
+import { logClientGridDiagnostics } from "@/lib/egressDiagnostics";
 
 export type AdminVariant = {
   id: string;
@@ -32,6 +34,7 @@ export type AdminVariant = {
     | "unsealed"
     | "unsealed_no_box"
     | "unsealed_no_acrylic"
+    | "unsealed_incomplete"
     | "unsealed_near_mint_box"
     | "unsealed_near_mint_blister"
     | "wheelswapped"
@@ -78,6 +81,7 @@ const CONDITION_OPTIONS: AdminVariant["condition"][] = [
   "unsealed",
   "unsealed_no_box",
   "unsealed_no_acrylic",
+  "unsealed_incomplete",
   "unsealed_near_mint_box",
   "wheelswapped",
   "customized",
@@ -102,7 +106,9 @@ const SHIP_CLASS_OPTIONS = [
   "SMALL_BOX_FIGURE",
   "KAIDO",
   "POPRACE",
+  "TARMAC_BOX",
   "ACRYLIC_TRUE_SCALE",
+  "TARMAC_ACRYLIC",
   "TRUCKS",
   "BLISTER",
   "TOMICA",
@@ -154,6 +160,10 @@ function formatShipClassLabel(value: string) {
   switch (value) {
     case "ACRYLIC_TRUE_SCALE":
       return "Acrylic True-Scale";
+    case "TARMAC_BOX":
+      return "Tarmac Box";
+    case "TARMAC_ACRYLIC":
+      return "Tarmac Acrylic";
     case "SMALL_BOX_FIGURE":
       return "Small Box Figure";
     case "FIGURES_DIORAMA":
@@ -296,10 +306,19 @@ function AdminProductCard({
             return (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={preview.src}
+                src={
+                  getOptimizedImageUrl(preview.src, {
+                    width: 480,
+                    quality: 85,
+                    format: "webp",
+                    forceTransform: true,
+                  }) || preview.src
+                }
                 alt={product.title}
                 className="h-full w-full object-contain bg-neutral-50"
                 style={cropStyle(preview.crop)}
+                loading="lazy"
+                decoding="async"
               />
             );
           })()
@@ -574,6 +593,28 @@ export function InventoryBrowseGrid({
     showSoldOut,
     releaseFilter,
     noPhotoOnly,
+  ]);
+
+  React.useEffect(() => {
+    logClientGridDiagnostics({
+      page: "admin-inventory-browse",
+      renderedCount: filteredRows.length,
+      totalProducts: rows.length,
+      imageUrls: filteredRows.flatMap((product) => product.image_urls ?? []),
+      extra: {
+        inStockOnly,
+        showSoldOut,
+        noPhotoOnly,
+        releaseFilter,
+      },
+    });
+  }, [
+    filteredRows,
+    inStockOnly,
+    noPhotoOnly,
+    releaseFilter,
+    rows.length,
+    showSoldOut,
   ]);
 
   const loadPage = React.useCallback(

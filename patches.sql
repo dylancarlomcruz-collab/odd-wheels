@@ -1136,6 +1136,36 @@ alter table public.product_variants
       'unsealed',
       'unsealed_no_box',
       'unsealed_no_acrylic',
+      'unsealed_incomplete',
+      'unsealed_near_mint_box',
+      'unsealed_near_mint_blister',
+      'wheelswapped',
+      'customized',
+      'with_issues',
+      'blistered',
+      'sealed_blister',
+      'unsealed_blister'
+    )
+  );
+
+alter table public.inventory_refresher_seen_items
+  drop constraint if exists inventory_refresher_seen_items_condition_check;
+
+alter table public.inventory_refresher_seen_items
+  add constraint inventory_refresher_seen_items_condition_check
+  check (
+    condition in (
+      'sealed',
+      'resealed',
+      'near_mint',
+      'sealed_near_mint_box',
+      'sealed_near_mint_blister',
+      'sealed_not_mint_box',
+      'sealed_not_mint_blister',
+      'unsealed',
+      'unsealed_no_box',
+      'unsealed_no_acrylic',
+      'unsealed_incomplete',
       'unsealed_near_mint_box',
       'unsealed_near_mint_blister',
       'wheelswapped',
@@ -1162,7 +1192,9 @@ alter table public.product_variants
       'SMALL_BOX_FIGURE',
       'KAIDO',
       'POPRACE',
+      'TARMAC_BOX',
       'ACRYLIC_TRUE_SCALE',
+      'TARMAC_ACRYLIC',
       'TRUCKS',
       'BLISTER',
       'TOMICA',

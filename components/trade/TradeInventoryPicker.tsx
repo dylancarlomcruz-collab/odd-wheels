@@ -32,6 +32,7 @@ type TradeVariant = {
     | "unsealed"
     | "unsealed_no_box"
     | "unsealed_no_acrylic"
+    | "unsealed_incomplete"
     | "unsealed_near_mint_box"
     | "unsealed_near_mint_blister"
     | "wheelswapped"

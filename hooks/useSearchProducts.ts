@@ -12,6 +12,7 @@ import {
   normalizeSearchTerm,
   matchesSearchText,
 } from "@/lib/search";
+import { logClientPayloadDiagnostics } from "@/lib/egressDiagnostics";
 import { mapProductsToShopProducts } from "@/lib/shopProducts";
 
 export function useSearchProducts(q: string) {
@@ -47,6 +48,8 @@ export function useSearchProducts(q: string) {
       setNormalizedQuery(normalized);
       const terms = expandSearchTerms(query);
       const orClause = buildSearchOr(terms);
+      const productSelect =
+        "id,title,brand,model,variation,special_tags,image_urls,is_active,created_at,product_variants(id,created_at,condition,barcode,issue_notes,issue_photo_urls,public_notes,ship_class,price,sale_price,discount_percent,qty,release_at)";
       if (!orClause) {
         setProducts([]);
         setLoading(false);
@@ -55,9 +58,7 @@ export function useSearchProducts(q: string) {
 
         const { data, error } = await supabase
           .from("products")
-          .select(
-            "*, product_variants(id, created_at, condition, barcode, issue_notes, issue_photo_urls, public_notes, ship_class, price, sale_price, discount_percent, qty, release_at)"
-          )
+          .select(productSelect)
         .eq("is_active", true)
         .or(orClause)
         .order("created_at", { ascending: false })
@@ -70,6 +71,11 @@ export function useSearchProducts(q: string) {
         setProducts([]);
         setError(error.message);
       } else {
+        logClientPayloadDiagnostics("search:products", data, {
+          query,
+          normalizedQuery: normalized,
+          productRows: Array.isArray(data) ? data.length : 0,
+        });
         const mapped = mapProductsToShopProducts((data as any[]) ?? []);
         if (!mapped.length) {
           setProducts([]);
@@ -92,6 +98,19 @@ export function useSearchProducts(q: string) {
             p_days: 30,
           }),
         ]);
+
+        logClientPayloadDiagnostics(
+          "search:metrics",
+          {
+            clicks: clicksRes.data ?? [],
+            adds: addsRes.data ?? [],
+            sales: salesRes.data ?? [],
+          },
+          {
+            query,
+            productIds: productIds.length,
+          }
+        );
 
         const clickMap: Record<string, number> = {};
         (clicksRes.data as any[] | null)?.forEach((row) => {

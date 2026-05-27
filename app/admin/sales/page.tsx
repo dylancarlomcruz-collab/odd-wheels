@@ -454,6 +454,7 @@ export default function AdminSalesPage() {
       id: string;
       created_at: string;
       channel: string;
+      customer_name: string;
       revenue: number;
       cogs: number;
       itemsSold: number;
@@ -807,6 +808,7 @@ export default function AdminSalesPage() {
           id,
           created_at: row.created_at,
           channel: String(row.channel ?? "WEB").toUpperCase(),
+          customer_name: String(row.customer_name ?? "").trim() || "Guest",
           revenue: adjusted?.revenue ?? 0,
           cogs: adjusted?.cogs ?? 0,
           itemsSold: adjusted?.itemsSold ?? 0,
@@ -2286,7 +2288,7 @@ export default function AdminSalesPage() {
                     >
                       <div className="min-w-0">
                         <div className="font-medium">
-                          Order #{String(o.id).slice(0, 8)}
+                          {String(o.customer_name ?? "").trim() || "Guest"}
                         </div>
                         <div className="text-xs text-white/60">
                           {time} · {String(o.channel ?? "WEB").toUpperCase()}
@@ -2429,7 +2431,7 @@ export default function AdminSalesPage() {
                         >
                           <div className="min-w-0">
                             <div className="font-medium">
-                              Order #{o.id.slice(0, 8)}
+                              {String(o.customer_name ?? "").trim() || "Guest"}
                             </div>
                             <div className="text-xs text-white/60">
                               {time} · {o.channel}
@@ -2495,7 +2497,7 @@ export default function AdminSalesPage() {
                     >
                       <div className="min-w-0">
                         <div className="font-medium">
-                          Order #{o.id.slice(0, 8)}
+                          {String(o.customer_name ?? "").trim() || "Guest"}
                         </div>
                         <div className="text-xs text-white/60">
                           {time} · {o.channel}
@@ -2522,8 +2524,8 @@ export default function AdminSalesPage() {
           open={Boolean(selectedOrderId)}
           onClose={() => setSelectedOrderId(null)}
           title={
-            selectedOrderId
-              ? `Order #${String(selectedOrderId).slice(0, 8)}`
+            selectedOrder
+              ? String(selectedOrder.customer_name ?? "").trim() || "Guest"
               : "Order details"
           }
         >

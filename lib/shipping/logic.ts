@@ -8,7 +8,9 @@ export function emptyShipCounts(): ShipCounts {
     SMALL_BOX_FIGURE: 0,
     KAIDO: 0,
     POPRACE: 0,
+    TARMAC_BOX: 0,
     ACRYLIC_TRUE_SCALE: 0,
+    TARMAC_ACRYLIC: 0,
     TRUCKS: 0,
     BLISTER: 0,
     TOMICA: 0,
@@ -26,7 +28,9 @@ export function fitsCapacity(counts: ShipCounts, capacity: Record<ShipClass, num
     counts.TRUCKS > 0
       ? {
           ...counts,
-          ACRYLIC_TRUE_SCALE: counts.ACRYLIC_TRUE_SCALE + counts.TRUCKS * 4,
+          ACRYLIC_TRUE_SCALE:
+            counts.ACRYLIC_TRUE_SCALE + counts.TARMAC_ACRYLIC + counts.TRUCKS * 4,
+          TARMAC_ACRYLIC: 0,
         }
       : counts;
   return (Object.keys(normalized) as ShipClass[]).every(

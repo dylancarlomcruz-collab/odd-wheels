@@ -60,7 +60,9 @@ const SHIP_CLASS_OPTIONS: ShipClass[] = [
   "SMALL_BOX_FIGURE",
   "KAIDO",
   "POPRACE",
+  "TARMAC_BOX",
   "ACRYLIC_TRUE_SCALE",
+  "TARMAC_ACRYLIC",
   "TRUCKS",
   "BLISTER",
   "TOMICA",
@@ -165,6 +167,10 @@ function formatShipClassLabel(value: string) {
   switch (value) {
     case "ACRYLIC_TRUE_SCALE":
       return "Acrylic True-Scale";
+    case "TARMAC_BOX":
+      return "Tarmac Box";
+    case "TARMAC_ACRYLIC":
+      return "Tarmac Acrylic";
     case "SMALL_BOX_FIGURE":
       return "Small Box Figure";
     case "FIGURES_DIORAMA":

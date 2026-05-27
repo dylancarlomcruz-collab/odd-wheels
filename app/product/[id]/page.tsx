@@ -324,7 +324,35 @@ export default function ProductDetailPage() {
     }
     try {
       const pricing = getOptionPricing(variant);
-      const result = await cart.add(variant.id, 1);
+      const result = await cart.add(variant.id, 1, {
+        available: Number(variant.qty ?? 0),
+        productId: product?.id ?? id,
+        optimisticLine: {
+          id: variant.id,
+          user_id: "optimistic",
+          variant_id: variant.id,
+          qty: 1,
+          protector_selected: false,
+          variant: {
+            id: variant.id,
+            condition: variant.condition,
+            issue_notes: variant.issue_notes ?? null,
+            public_notes: variant.public_notes ?? null,
+            price: Number(variant.price ?? 0),
+            sale_price: variant.sale_price ?? null,
+            discount_percent: variant.discount_percent ?? null,
+            qty: Number(variant.qty ?? 0),
+            ship_class: variant.ship_class ?? null,
+            product: {
+              id: product?.id ?? id,
+              title: product?.title ?? displayTitle,
+              brand: product?.brand ?? null,
+              model: product?.model ?? null,
+              image_urls: images.length ? images : null,
+            },
+          },
+        },
+      });
       const baseToast = {
         title: displayTitle,
         image_url: images[0] ?? null,
@@ -363,7 +391,35 @@ export default function ProductDetailPage() {
     }
     try {
       const pricing = getOptionPricing(option);
-      const result = await cart.add(option.id, 1);
+      const result = await cart.add(option.id, 1, {
+        available: Number(option.qty ?? 0),
+        productId: item.key,
+        optimisticLine: {
+          id: option.id,
+          user_id: "optimistic",
+          variant_id: option.id,
+          qty: 1,
+          protector_selected: false,
+          variant: {
+            id: option.id,
+            condition: option.condition,
+            issue_notes: option.issue_notes ?? null,
+            public_notes: option.public_notes ?? null,
+            price: Number(option.price ?? 0),
+            sale_price: option.sale_price ?? null,
+            discount_percent: option.discount_percent ?? null,
+            qty: Number(option.qty ?? 0),
+            ship_class: option.ship_class ?? null,
+            product: {
+              id: item.key,
+              title: item.title,
+              brand: item.brand ?? null,
+              model: item.model ?? null,
+              image_urls: item.image_urls ?? (item.image_url ? [item.image_url] : null),
+            },
+          },
+        },
+      });
       const baseToast = {
         title: formatTitle(item.title) || item.title,
         image_url: item.image_url,
