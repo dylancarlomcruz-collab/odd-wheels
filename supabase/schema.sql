@@ -2183,7 +2183,8 @@ begin
       new_qty,
       movement_type,
       actor_user_id,
-      recorded_at
+      recorded_at,
+      meta
     )
     values (
       v_product_id,
@@ -2193,7 +2194,12 @@ begin
       v_new_qty,
       'initial_stock',
       auth.uid(),
-      coalesce(v_last_stock_added_at, v_created_at, v_recorded_at)
+      coalesce(v_last_stock_added_at, v_created_at, v_recorded_at),
+      jsonb_build_object(
+        'unit_cost_snapshot', greatest(coalesce(new.cost, 0), 0),
+        'condition', new.condition,
+        'ship_class', new.ship_class
+      )
     );
 
     return new;
@@ -2220,7 +2226,8 @@ begin
     new_qty,
     movement_type,
     actor_user_id,
-    recorded_at
+    recorded_at,
+    meta
   )
   values (
     v_product_id,
@@ -2230,7 +2237,12 @@ begin
     v_new_qty,
     v_movement_type,
     auth.uid(),
-    v_recorded_at
+    v_recorded_at,
+    jsonb_build_object(
+      'unit_cost_snapshot', greatest(coalesce(new.cost, 0), 0),
+      'condition', new.condition,
+      'ship_class', new.ship_class
+    )
   );
 
   return new;
@@ -2265,7 +2277,12 @@ select
   pv.qty,
   'initial_stock',
   coalesce(pv.last_stock_added_at, pv.first_stocked_at, pv.created_at),
-  jsonb_build_object('seeded', true)
+  jsonb_build_object(
+    'seeded', true,
+    'unit_cost_snapshot', greatest(coalesce(pv.cost, 0), 0),
+    'condition', pv.condition,
+    'ship_class', pv.ship_class
+  )
 from public.product_variants pv
 where pv.qty > 0
   and not exists (
@@ -2834,6 +2851,7 @@ create table if not exists public.inventory_cost_events (
   id uuid primary key default gen_random_uuid(),
   variant_id uuid not null references public.product_variants(id) on delete cascade,
   product_id uuid not null references public.products(id) on delete cascade,
+  stock_movement_id uuid references public.variant_stock_movements(id) on delete cascade,
   qty_added int not null check (qty_added > 0),
   unit_cost numeric not null default 0 check (unit_cost >= 0),
   subtotal numeric not null default 0 check (subtotal >= 0),
@@ -2845,11 +2863,18 @@ create table if not exists public.inventory_cost_events (
   meta jsonb not null default '{}'::jsonb
 );
 
+alter table public.inventory_cost_events
+  add column if not exists stock_movement_id uuid references public.variant_stock_movements(id) on delete cascade;
+
 create index if not exists idx_inventory_cost_events_entry_date
   on public.inventory_cost_events (entry_date desc, occurred_at desc);
 
 create index if not exists idx_inventory_cost_events_variant
   on public.inventory_cost_events (variant_id, occurred_at desc);
+
+create unique index if not exists idx_inventory_cost_events_stock_movement_unique
+  on public.inventory_cost_events (stock_movement_id)
+  where stock_movement_id is not null;
 
 alter table public.inventory_cost_events enable row level security;
 
@@ -2860,6 +2885,124 @@ for select using (public.is_staff());
 drop policy if exists "staff manage inventory cost events" on public.inventory_cost_events;
 create policy "staff manage inventory cost events" on public.inventory_cost_events
 for all using (public.is_staff()) with check (public.is_staff());
+
+create or replace function public.fn_sync_inventory_cost_event_from_stock_movement(
+  p_stock_movement_id uuid
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_movement public.variant_stock_movements%rowtype;
+  v_unit_cost numeric := 0;
+  v_event_id uuid;
+  v_existing_event_id uuid;
+  v_event_meta jsonb;
+  v_event_entry_date date;
+begin
+  if p_stock_movement_id is null then
+    return null;
+  end if;
+
+  select *
+  into v_movement
+  from public.variant_stock_movements
+  where id = p_stock_movement_id;
+
+  if not found or v_movement.qty_delta <= 0 or v_movement.movement_type not in ('initial_stock', 'restock', 'increase') then
+    select id
+    into v_existing_event_id
+    from public.inventory_cost_events
+    where stock_movement_id = p_stock_movement_id;
+
+    if found then
+      delete from public.cashflow_entries
+      where source_type = 'INVENTORY_COST_EVENT'
+        and source_key = v_existing_event_id::text;
+
+      delete from public.inventory_cost_events
+      where id = v_existing_event_id;
+    end if;
+
+    return null;
+  end if;
+
+  select greatest(
+      coalesce(nullif(v_movement.meta->>'unit_cost_snapshot', '')::numeric, pv.cost, 0),
+      0
+    )
+  into v_unit_cost
+  from public.product_variants pv
+  where pv.id = v_movement.variant_id;
+
+  v_event_entry_date := timezone('Asia/Manila', v_movement.recorded_at)::date;
+  v_event_meta := coalesce(v_movement.meta, '{}'::jsonb) || jsonb_build_object(
+    'stock_movement_id', v_movement.id,
+    'cost_basis', case
+      when nullif(v_movement.meta->>'unit_cost_snapshot', '') is not null then 'movement_snapshot'
+      else 'current_variant_cost'
+    end,
+    'timezone', 'Asia/Manila'
+  );
+
+  select id
+  into v_existing_event_id
+  from public.inventory_cost_events
+  where stock_movement_id = v_movement.id
+  limit 1;
+
+  if v_existing_event_id is not null then
+    update public.inventory_cost_events
+    set
+      variant_id = v_movement.variant_id,
+      product_id = v_movement.product_id,
+      stock_movement_id = v_movement.id,
+      qty_added = v_movement.qty_delta,
+      unit_cost = v_unit_cost,
+      subtotal = v_movement.qty_delta * v_unit_cost,
+      movement_type = v_movement.movement_type,
+      actor_user_id = v_movement.actor_user_id,
+      occurred_at = v_movement.recorded_at,
+      entry_date = v_event_entry_date,
+      meta = v_event_meta
+    where id = v_existing_event_id
+    returning id into v_event_id;
+  else
+    insert into public.inventory_cost_events (
+      variant_id,
+      product_id,
+      stock_movement_id,
+      qty_added,
+      unit_cost,
+      subtotal,
+      movement_type,
+      actor_user_id,
+      occurred_at,
+      entry_date,
+      meta
+    )
+    values (
+      v_movement.variant_id,
+      v_movement.product_id,
+      v_movement.id,
+      v_movement.qty_delta,
+      v_unit_cost,
+      v_movement.qty_delta * v_unit_cost,
+      v_movement.movement_type,
+      v_movement.actor_user_id,
+      v_movement.recorded_at,
+      v_event_entry_date,
+      v_event_meta
+    )
+    returning id into v_event_id;
+  end if;
+
+  return v_event_id;
+end;
+$$;
 
 create or replace function public.fn_sync_inventory_daily_cashflow(
   p_entry_date date
@@ -2875,21 +3018,38 @@ declare
   v_amount numeric := 0;
   v_event_count int := 0;
   v_units int := 0;
+  v_on_hand_units int := 0;
+  v_consumed_units int := 0;
 begin
   if v_entry_date is null then
     return;
   end if;
 
   select
-    coalesce(sum(subtotal), 0),
-    count(*)::int,
-    coalesce(sum(qty_added), 0)::int
+    coalesce(r.amount, 0),
+    coalesce(r.event_count, 0)::int,
+    coalesce(r.units_added, 0)::int,
+    coalesce(r.on_hand_units, 0)::int,
+    coalesce(r.consumed_units, 0)::int
   into
     v_amount,
     v_event_count,
-    v_units
-  from public.inventory_cost_events
-  where entry_date = v_entry_date;
+    v_units,
+    v_on_hand_units,
+    v_consumed_units
+  from (
+    select
+      amount,
+      event_count,
+      units_added,
+      on_hand_units,
+      consumed_units
+    from public.inventory_cashflow_daily_rollup
+    where entry_date = v_entry_date
+    union all
+    select 0::numeric, 0::int, 0::int, 0::int, 0::int
+    limit 1
+  ) r;
 
   if v_event_count <= 0 then
     delete from public.cashflow_entries
@@ -2926,6 +3086,8 @@ begin
     jsonb_build_object(
       'event_count', v_event_count,
       'units_added', v_units,
+      'on_hand_units', v_on_hand_units,
+      'consumed_units', v_consumed_units,
       'timezone', 'Asia/Manila'
     ),
     null
@@ -2945,6 +3107,39 @@ begin
 end;
 $$;
 
+create or replace function public.fn_sync_inventory_cashflow_after_event_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+begin
+  if tg_op = 'DELETE' then
+    delete from public.cashflow_entries
+    where source_type = 'INVENTORY_COST_EVENT'
+      and source_key = old.id::text;
+
+    perform public.fn_sync_inventory_daily_cashflow(old.entry_date);
+    return old;
+  end if;
+
+  perform public.fn_sync_inventory_cashflow_from_event(new.id);
+
+  if tg_op = 'UPDATE' and old.entry_date is distinct from new.entry_date then
+    perform public.fn_sync_inventory_daily_cashflow(old.entry_date);
+  end if;
+
+  perform public.fn_sync_inventory_daily_cashflow(new.entry_date);
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_inventory_cost_events_cashflow_sync on public.inventory_cost_events;
+create trigger trg_inventory_cost_events_cashflow_sync
+after insert or update or delete on public.inventory_cost_events
+for each row execute procedure public.fn_sync_inventory_cashflow_after_event_change();
+
 create or replace function public.fn_sync_inventory_cashflow_from_event(
   p_event_id uuid
 )
@@ -2955,7 +3150,7 @@ set search_path = public
 set row_security = off
 as $$
 declare
-  v_event public.inventory_cost_events%rowtype;
+  v_event record;
 begin
   if p_event_id is null then
     return;
@@ -2963,10 +3158,10 @@ begin
 
   select *
   into v_event
-  from public.inventory_cost_events
+  from public.inventory_cost_event_effective
   where id = p_event_id;
 
-  if not found then
+  if not found or coalesce(v_event.effective_expense_qty, 0) <= 0 then
     delete from public.cashflow_entries
     where source_type = 'INVENTORY_COST_EVENT'
       and source_key = p_event_id::text;
@@ -2993,7 +3188,7 @@ begin
     'INVENTORY_COST',
     'Inventory add',
     null,
-    v_event.subtotal,
+    v_event.effective_expense_subtotal,
     'Auto-generated from an inventory upload/add event.',
     false,
     'INVENTORY_COST_EVENT',
@@ -3003,6 +3198,8 @@ begin
       'variant_id', v_event.variant_id,
       'product_id', v_event.product_id,
       'qty_added', v_event.qty_added,
+      'effective_expense_qty', v_event.effective_expense_qty,
+      'effective_removed_qty', v_event.effective_removed_qty,
       'unit_cost', v_event.unit_cost,
       'movement_type', v_event.movement_type,
       'timezone', 'Asia/Manila'
@@ -3126,74 +3323,37 @@ set search_path = public
 set row_security = off
 as $$
 declare
+  v_stock_movement_id uuid;
   v_event_id uuid;
-  v_inserted_count int := 0;
+  v_synced_count int := 0;
 begin
   if auth.uid() is not null and not public.is_staff() then
     raise exception 'Not authorized';
   end if;
 
-  for v_event_id in
-    with inserted as (
-      insert into public.inventory_cost_events (
-        id,
-        variant_id,
-        product_id,
-        qty_added,
-        unit_cost,
-        subtotal,
-        movement_type,
-        actor_user_id,
-        occurred_at,
-        entry_date,
-        meta
-      )
-      select
-        gen_random_uuid(),
-        m.variant_id,
-        m.product_id,
-        m.qty_delta,
-        greatest(coalesce(pv.cost, 0), 0),
-        m.qty_delta * greatest(coalesce(pv.cost, 0), 0),
-        m.movement_type,
-        m.actor_user_id,
-        m.recorded_at,
-        timezone('Asia/Manila', m.recorded_at)::date,
-        coalesce(m.meta, '{}'::jsonb) || jsonb_build_object(
-          'stock_movement_id', m.id,
-          'backfilled', true,
-          'cost_basis', 'current_variant_cost',
-          'timezone', 'Asia/Manila'
-        )
-      from public.variant_stock_movements m
-      join public.product_variants pv on pv.id = m.variant_id
-      where m.qty_delta > 0
-        and m.movement_type in ('initial_stock', 'restock', 'increase')
-        and (p_from is null or m.recorded_at >= p_from)
-        and (p_to is null or m.recorded_at <= p_to)
-        and not exists (
-          select 1
-          from public.inventory_cost_events e
-          where e.meta->>'stock_movement_id' = m.id::text
-        )
-      returning id
-    )
-    select id
-    from inserted
+  for v_stock_movement_id in
+    select m.id
+    from public.variant_stock_movements m
+    where m.qty_delta > 0
+      and m.movement_type in ('initial_stock', 'restock', 'increase')
+      and (p_from is null or m.recorded_at >= p_from)
+      and (p_to is null or m.recorded_at <= p_to)
   loop
-    v_inserted_count := v_inserted_count + 1;
-    perform public.fn_sync_inventory_cashflow_from_event(v_event_id);
+    v_event_id := public.fn_sync_inventory_cost_event_from_stock_movement(v_stock_movement_id);
+    if v_event_id is not null then
+      v_synced_count := v_synced_count + 1;
+    end if;
   end loop;
 
   return jsonb_build_object(
     'ok', true,
-    'inserted_events', v_inserted_count,
-    'cost_basis', 'current_variant_cost'
+    'synced_events', v_synced_count,
+    'source', 'variant_stock_movements'
   );
 end;
 $$;
 
-create or replace function public.fn_log_inventory_cost_event()
+create or replace function public.fn_sync_inventory_cost_event_from_movement_trigger()
 returns trigger
 language plpgsql
 security definer
@@ -3201,74 +3361,304 @@ set search_path = public
 set row_security = off
 as $$
 declare
-  v_event_id uuid := gen_random_uuid();
-  v_prev_qty int := 0;
-  v_new_qty int := coalesce(new.qty, 0);
-  v_qty_added int := 0;
-  v_unit_cost numeric := greatest(coalesce(new.cost, 0), 0);
-  v_occurred_at timestamptz;
+  v_event_id uuid;
   v_entry_date date;
-  v_movement_type text;
 begin
-  if tg_op = 'INSERT' then
-    v_qty_added := greatest(v_new_qty, 0);
-  else
-    v_prev_qty := coalesce(old.qty, 0);
-    v_qty_added := greatest(v_new_qty - v_prev_qty, 0);
-  end if;
+  perform public.fn_sync_inventory_cost_event_from_stock_movement(new.id);
 
-  if v_qty_added <= 0 then
-    return new;
-  end if;
+  for v_event_id in
+    select id
+    from public.inventory_cost_events
+    where variant_id = new.variant_id
+  loop
+    perform public.fn_sync_inventory_cashflow_from_event(v_event_id);
+  end loop;
 
-  v_occurred_at := coalesce(new.last_stock_added_at, new.last_qty_changed_at, now());
-  v_entry_date := timezone('Asia/Manila', v_occurred_at)::date;
-  v_movement_type := case
-    when tg_op = 'INSERT' then 'initial_stock'
-    when v_prev_qty <= 0 then 'restock'
-    else 'increase'
-  end;
-
-  insert into public.inventory_cost_events (
-    id,
-    variant_id,
-    product_id,
-    qty_added,
-    unit_cost,
-    subtotal,
-    movement_type,
-    actor_user_id,
-    occurred_at,
-    entry_date,
-    meta
-  )
-  values (
-    v_event_id,
-    new.id,
-    new.product_id,
-    v_qty_added,
-    v_unit_cost,
-    v_qty_added * v_unit_cost,
-    v_movement_type,
-    auth.uid(),
-    v_occurred_at,
-    v_entry_date,
-    jsonb_build_object(
-      'condition', new.condition,
-      'ship_class', new.ship_class
-    )
-  );
-
-  perform public.fn_sync_inventory_cashflow_from_event(v_event_id);
+  for v_entry_date in
+    select distinct entry_date
+    from public.inventory_cost_events
+    where variant_id = new.variant_id
+  loop
+    perform public.fn_sync_inventory_daily_cashflow(v_entry_date);
+  end loop;
 
   return new;
 end;
 $$;
 
 drop trigger if exists trg_product_variants_inventory_cost_event on public.product_variants;
-create trigger trg_product_variants_inventory_cost_event
-after insert or update of qty, cost on public.product_variants
-for each row execute procedure public.fn_log_inventory_cost_event();
+drop trigger if exists trg_variant_stock_movements_inventory_cost_event on public.variant_stock_movements;
+create trigger trg_variant_stock_movements_inventory_cost_event
+after insert on public.variant_stock_movements
+for each row execute procedure public.fn_sync_inventory_cost_event_from_movement_trigger();
+
+create or replace function public.fn_repair_inventory_cashflow_backlog()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_linked_count int := 0;
+  v_deleted_duplicates int := 0;
+  v_event_id uuid;
+  v_entry_date date;
+begin
+  with matched as (
+    select
+      e.id as event_id,
+      m.id as stock_movement_id,
+      row_number() over (
+        partition by e.id
+        order by m.recorded_at asc, m.id asc
+      ) as event_rank,
+      row_number() over (
+        partition by m.id
+        order by e.created_at asc, e.id asc
+      ) as movement_rank
+    from public.inventory_cost_events e
+    join public.variant_stock_movements m
+      on m.variant_id = e.variant_id
+     and m.product_id = e.product_id
+     and m.qty_delta = e.qty_added
+     and m.movement_type = e.movement_type
+     and m.recorded_at = e.occurred_at
+     and m.qty_delta > 0
+    where e.stock_movement_id is null
+      and e.movement_type in ('initial_stock', 'restock', 'increase')
+  ),
+  linked as (
+    update public.inventory_cost_events e
+    set
+      stock_movement_id = matched.stock_movement_id,
+      meta = coalesce(e.meta, '{}'::jsonb) || jsonb_build_object(
+        'stock_movement_id', matched.stock_movement_id
+      )
+    from matched
+    where matched.event_rank = 1
+      and matched.movement_rank = 1
+      and e.id = matched.event_id
+      and not exists (
+        select 1
+        from public.inventory_cost_events existing_event
+        where existing_event.stock_movement_id = matched.stock_movement_id
+          and existing_event.id <> e.id
+      )
+    returning e.id
+  )
+  select count(*)::int
+  into v_linked_count
+  from linked;
+
+  with ranked as (
+    select
+      id,
+      stock_movement_id,
+      row_number() over (
+        partition by stock_movement_id
+        order by created_at asc, id asc
+      ) as rn
+    from public.inventory_cost_events
+    where stock_movement_id is not null
+  ),
+  dupes as (
+    select id
+    from ranked
+    where rn > 1
+  ),
+  deleted_cashflow as (
+    delete from public.cashflow_entries
+    where source_type = 'INVENTORY_COST_EVENT'
+      and source_key in (select id::text from dupes)
+    returning id
+  ),
+  deleted_events as (
+    delete from public.inventory_cost_events
+    where id in (select id from dupes)
+    returning id
+  )
+  select count(*)::int
+  into v_deleted_duplicates
+  from deleted_events;
+
+  delete from public.cashflow_entries
+  where source_type = 'INVENTORY_COST_EVENT';
+
+  delete from public.cashflow_entries
+  where source_type = 'INVENTORY_DAILY_SUBTOTAL';
+
+  for v_event_id in
+    select id
+    from public.inventory_cost_events
+  loop
+    perform public.fn_sync_inventory_cashflow_from_event(v_event_id);
+  end loop;
+
+  for v_entry_date in
+    select distinct entry_date
+    from public.inventory_cost_events
+  loop
+    perform public.fn_sync_inventory_daily_cashflow(v_entry_date);
+  end loop;
+
+  return jsonb_build_object(
+    'ok', true,
+    'linked_events', v_linked_count,
+    'deleted_duplicates', v_deleted_duplicates
+  );
+end;
+$$;
+
+create or replace view public.inventory_cost_event_effective as
+with canonical_events as (
+  select *
+  from (
+    select
+      e.*,
+      row_number() over (
+        partition by coalesce(
+          e.stock_movement_id::text,
+          e.id::text
+        )
+        order by e.created_at asc, e.id asc
+      ) as canonical_rank
+    from public.inventory_cost_events e
+  ) ranked
+  where canonical_rank = 1
+),
+variant_totals as (
+  select
+    pv.id as variant_id,
+    greatest(coalesce(sum(case when m.qty_delta > 0 then m.qty_delta else 0 end), 0), 0)::int as total_added_qty,
+    greatest(coalesce(sum(case when m.movement_type = 'deduction' then -m.qty_delta else 0 end), 0), 0)::int as manual_removed_qty,
+    greatest(coalesce(sum(case when m.movement_type = 'sellout' then -m.qty_delta else 0 end), 0), 0)::int as sold_or_sellout_qty,
+    greatest(coalesce(pv.qty, 0), 0)::int as current_qty
+  from public.product_variants pv
+  left join public.variant_stock_movements m on m.variant_id = pv.id
+  group by pv.id, pv.qty
+),
+event_windows as (
+  select
+    e.*,
+    coalesce(vt.total_added_qty, e.qty_added)::int as variant_total_added_qty,
+    coalesce(vt.current_qty, 0)::int as current_qty,
+    coalesce(vt.manual_removed_qty, 0)::int as manual_removed_qty,
+    coalesce(vt.sold_or_sellout_qty, 0)::int as sold_or_sellout_qty,
+    coalesce(
+      sum(e.qty_added) over (
+        partition by e.variant_id
+        order by e.occurred_at asc, e.id asc
+        rows between unbounded preceding and 1 preceding
+      ),
+      0
+    )::int as prior_added_qty
+  from canonical_events e
+  left join variant_totals vt on vt.variant_id = e.variant_id
+)
+select
+  e.id,
+  e.variant_id,
+  e.product_id,
+  e.stock_movement_id,
+  e.qty_added,
+  e.unit_cost,
+  e.subtotal,
+  e.movement_type,
+  e.actor_user_id,
+  e.occurred_at,
+  e.entry_date,
+  e.created_at,
+  e.meta,
+  e.current_qty,
+  greatest(
+    least(
+      e.qty_added,
+      greatest(e.variant_total_added_qty - e.current_qty, 0) - e.prior_added_qty
+    ),
+    0
+  )::int as effective_consumed_qty,
+  (
+    e.qty_added - greatest(
+      least(
+        e.qty_added,
+        greatest(e.variant_total_added_qty - e.current_qty, 0) - e.prior_added_qty
+      ),
+      0
+    )
+  )::int as effective_remaining_qty,
+  e.manual_removed_qty,
+  e.sold_or_sellout_qty,
+  case
+    when e.stock_movement_id is not null then 'LINKED'
+    else 'LEGACY'
+  end as source_status,
+  case
+    when greatest(
+      least(
+        e.qty_added,
+        greatest(e.variant_total_added_qty - e.manual_removed_qty, 0) - e.prior_added_qty
+      ),
+      0
+    ) <= 0 then 'REMOVED'
+    when (
+      e.qty_added - greatest(
+        least(
+          e.qty_added,
+          greatest(e.variant_total_added_qty - e.current_qty, 0) - e.prior_added_qty
+        ),
+        0
+      )
+    ) <= 0 then 'SOLD'
+    when (
+      e.qty_added - greatest(
+        least(
+          e.qty_added,
+          greatest(e.variant_total_added_qty - e.current_qty, 0) - e.prior_added_qty
+        ),
+        0
+      )
+    ) > 0 then 'PARTIAL'
+    else 'ON_HAND'
+  end as lifecycle_status,
+  greatest(
+    least(
+      e.qty_added,
+      greatest(e.variant_total_added_qty - e.manual_removed_qty, 0) - e.prior_added_qty
+    ),
+    0
+  )::int as effective_expense_qty,
+  (
+    e.qty_added - greatest(
+      least(
+        e.qty_added,
+        greatest(e.variant_total_added_qty - e.manual_removed_qty, 0) - e.prior_added_qty
+      ),
+      0
+    )
+  )::int as effective_removed_qty,
+  (
+    greatest(
+      least(
+        e.qty_added,
+        greatest(e.variant_total_added_qty - e.manual_removed_qty, 0) - e.prior_added_qty
+      ),
+      0
+    ) * e.unit_cost
+  )::numeric as effective_expense_subtotal
+from event_windows e;
+
+create or replace view public.inventory_cashflow_daily_rollup as
+select
+  entry_date,
+  coalesce(sum(effective_expense_subtotal), 0)::numeric as amount,
+  count(*) filter (where effective_expense_qty > 0)::int as event_count,
+  coalesce(sum(effective_expense_qty), 0)::int as units_added,
+  coalesce(sum(effective_remaining_qty), 0)::int as on_hand_units,
+  coalesce(sum(effective_consumed_qty), 0)::int as consumed_units
+from public.inventory_cost_event_effective
+where effective_expense_qty > 0
+group by entry_date;
 
 create or replace function public.fn_sync_sales_cashflow_from_order()
 returns trigger
@@ -3316,6 +3706,7 @@ begin
   where source_type = 'INVENTORY_COST_EVENT';
 
   perform public.fn_backfill_inventory_cost_events_from_stock_movements(null, null);
+  perform public.fn_repair_inventory_cashflow_backlog();
 
   for v_event_id in
     select id

@@ -9,6 +9,8 @@ import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import { Textarea } from "@/components/ui/Textarea";
+import { ModalShell } from "@/components/ui/ModalShell";
 import { formatPHP } from "@/lib/money";
 import { useBuyerProducts } from "@/hooks/useBuyerProducts";
 import { useBuyerShopProducts } from "@/hooks/useBuyerShopProducts";
@@ -37,6 +39,7 @@ import {
   JNT_CAPACITY,
   LBC_CAPACITY,
   REGION_LABEL,
+  REGION_BRANCH_CITY_OPTIONS,
   type JntPouch,
   type LbcPackage,
   type Region,
@@ -48,9 +51,11 @@ import {
   recommendLbcPackage,
   shipCountsFromLines,
 } from "@/lib/shipping/logic";
+import { sanitizePhone } from "@/lib/phone";
 import { supabase } from "@/lib/supabase/browser";
 import { useProfile } from "@/hooks/useProfile";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { normalizeShippingDefaults } from "@/lib/shippingDefaults";
 import {
   resolveShopControls,
   SHOP_ADD_TO_CART_DISABLED_MESSAGE,
@@ -133,6 +138,24 @@ const ADMIN_SHIPPING_METHODS: AdminShippingMethod[] = [
   "LALAMOVE",
   "PICKUP",
 ];
+const FACEBOOK_CHECKOUT_URL =
+  "https://www.facebook.com/messages/t/108966858477162";
+const FACEBOOK_CHECKOUT_MOBILE_URL = "https://m.me/108966858477162";
+const FACEBOOK_CHECKOUT_STORAGE_KEY = "oddwheels:facebook-checkout";
+const FACEBOOK_LBC_BRANCH_CITY_DATALIST_ID =
+  "facebook-lbc-branch-city-options";
+const PICKUP_DAYS = [
+  { key: "MON", label: "Monday" },
+  { key: "TUE", label: "Tuesday" },
+  { key: "WED", label: "Wednesday" },
+  { key: "THU", label: "Thursday" },
+  { key: "FRI", label: "Friday" },
+  { key: "SAT", label: "Saturday" },
+  { key: "SUN", label: "Sunday" },
+] as const;
+const PICKUP_LOCATION = "RSquare Mall, Vito Cruz-Taft, Malate, Manila";
+const PICKUP_DIRECTORY =
+  "Along Taft Ave near LRT-1 Vito Cruz (P. Ocampo) Station / DLSU area";
 
 type AdminShippingMeta =
   | {
@@ -277,6 +300,39 @@ type CartInvoicePayload = {
   totalAmount: number;
 };
 
+type FacebookCheckoutFormState = {
+  customerName: string;
+  contactNumber: string;
+  shippingMethod: AdminShippingMethod;
+  shippingRegion: Region;
+  lbcBranchName: string;
+  lbcBranchCity: string;
+  lbcPackage: AdminSelectableLbcPackage;
+  jntPouch: JntPouch;
+  jntHouseStreetUnit: string;
+  jntBarangay: string;
+  jntCity: string;
+  jntProvince: string;
+  jntPostalCode: string;
+  lalamoveAddress: string;
+  pickupDay: string;
+  pickupSlot: string;
+  notes: string;
+};
+
+type FacebookCheckoutSnapshotPayload = {
+  customerName: string;
+  contactNumber: string;
+  shippingMethodLabel: string;
+  shippingLines: string[];
+  notes: string;
+  items: CartInvoiceItem[];
+  totalQty: number;
+  totalLines: number;
+  subtotalAmount: number;
+  generatedAt: Date;
+};
+
 type InvoicePdfRenderOptions = {
   includeImages: boolean;
   imageQuality: number;
@@ -320,6 +376,385 @@ function downloadBlobAsFile(blob: Blob, fileName: string) {
   anchor.click();
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+function getDefaultFacebookCheckoutForm(): FacebookCheckoutFormState {
+  return {
+    customerName: "",
+    contactNumber: "",
+    shippingMethod: "LBC",
+    shippingRegion: "METRO_MANILA",
+    lbcBranchName: "",
+    lbcBranchCity: "",
+    lbcPackage: "N_SAKTO",
+    jntPouch: "SMALL",
+    jntHouseStreetUnit: "",
+    jntBarangay: "",
+    jntCity: "",
+    jntProvince: "",
+    jntPostalCode: "",
+    lalamoveAddress: "",
+    pickupDay: "",
+    pickupSlot: "",
+    notes: "",
+  };
+}
+
+function formatPickupDayLabel(value: string) {
+  return PICKUP_DAYS.find((day) => day.key === value)?.label ?? value;
+}
+
+function formatFacebookCheckoutMethodLabel(value: AdminShippingMethod) {
+  if (value === "JNT") return "J&T";
+  if (value === "PICKUP") return "Store pickup";
+  return formatCourierLabel(value);
+}
+
+function hasAtLeastTwoWords(value: string) {
+  return value
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length >= 2;
+}
+
+function wrapCanvasText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return [""];
+  const words = normalized.split(" ");
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (ctx.measureText(next).width <= maxWidth || !current) {
+      current = next;
+      continue;
+    }
+    lines.push(current);
+    current = word;
+  }
+
+  if (current) lines.push(current);
+  return lines.length ? lines : [normalized];
+}
+
+async function buildFacebookCheckoutSnapshotBlob(
+  payload: FacebookCheckoutSnapshotPayload
+) {
+  const width = 1080;
+  const padding = 56;
+  const cardGap = 24;
+  const infoLineHeight = 34;
+  const itemImageSize = 96;
+  const itemNameWidth = 420;
+  const itemRowBaseHeight = 48;
+  const itemImageGap = 20;
+  const imageCache = new Map<string, HTMLImageElement | null>();
+
+  const measureCanvas = document.createElement("canvas");
+  const measureCtx = measureCanvas.getContext("2d");
+  if (!measureCtx) {
+    throw new Error("Snapshot renderer is unavailable in this browser.");
+  }
+
+  measureCtx.font = "700 30px Arial";
+  const itemRows = await Promise.all(
+    payload.items.map(async (item) => {
+      const lines = wrapCanvasText(measureCtx, item.name, itemNameWidth);
+      const note = item.notes?.trim() ? `Notes: ${item.notes.trim()}` : "";
+      measureCtx.font = "400 20px Arial";
+      const noteLines = note ? wrapCanvasText(measureCtx, note, itemNameWidth) : [];
+      const rowHeight = Math.max(
+        itemRowBaseHeight + lines.length * 32 + noteLines.length * 24,
+        124
+      );
+
+      let image: HTMLImageElement | null = null;
+      if (item.imageUrl) {
+        if (imageCache.has(item.imageUrl)) {
+          image = imageCache.get(item.imageUrl) ?? null;
+        } else {
+          try {
+            const response = await fetch(item.imageUrl);
+            if (response.ok) {
+              const dataUrl = await blobToDataUrl(await response.blob());
+              image = await new Promise<HTMLImageElement>((resolve, reject) => {
+                const el = new Image();
+                el.onload = () => resolve(el);
+                el.onerror = () => reject(new Error("Failed to load item image."));
+                el.src = dataUrl;
+              });
+            }
+          } catch {
+            image = null;
+          }
+          imageCache.set(item.imageUrl, image);
+        }
+      }
+
+      return {
+        ...item,
+        image,
+        titleLines: lines,
+        noteLines,
+        rowHeight,
+      };
+    })
+  );
+
+  const recipientLine = payload.shippingLines.find((line) =>
+    line.startsWith("Recipient:")
+  );
+  const recipientName = recipientLine
+    ? recipientLine.slice("Recipient:".length).trim()
+    : "";
+  const sameRecipient =
+    recipientName.length > 0 &&
+    recipientName.localeCompare(payload.customerName.trim(), undefined, {
+      sensitivity: "accent",
+    }) === 0;
+
+  const infoRows: string[] = [
+    sameRecipient
+      ? `Customer / Recipient: ${payload.customerName}`
+      : `Customer: ${payload.customerName}`,
+    `Contact: ${payload.contactNumber}`,
+    `Shipping: ${payload.shippingMethodLabel}`,
+  ];
+  infoRows.push(
+    ...payload.shippingLines.filter(
+      (line) => !(sameRecipient && line.startsWith("Recipient:"))
+    )
+  );
+  if (payload.notes.trim()) {
+    infoRows.push(`Notes: ${payload.notes.trim()}`);
+  }
+
+  measureCtx.font = "500 24px Arial";
+  const wrappedInfoRows = infoRows.flatMap((row) =>
+    wrapCanvasText(measureCtx, row, width - padding * 2 - 48)
+  );
+
+  const headerHeight = 178;
+  const infoHeight = 56 + wrappedInfoRows.length * infoLineHeight;
+  const itemsHeight =
+    78 + itemRows.reduce((sum, item) => sum + item.rowHeight + 14, 0);
+  const summaryHeight = 172;
+  const footerHeight = 72;
+  const height =
+    padding +
+    headerHeight +
+    cardGap +
+    infoHeight +
+    cardGap +
+    itemsHeight +
+    cardGap +
+    summaryHeight +
+    footerHeight +
+    padding;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("Snapshot renderer is unavailable in this browser.");
+  }
+
+  const gradient = ctx.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, "#09090b");
+  gradient.addColorStop(0.55, "#111116");
+  gradient.addColorStop(1, "#1d1108");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.fillStyle = "rgba(229, 120, 51, 0.16)";
+  ctx.beginPath();
+  ctx.arc(width - 120, 110, 170, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(110, height - 120, 150, 0, Math.PI * 2);
+  ctx.fill();
+
+  const cardX = padding;
+  const cardWidth = width - padding * 2;
+  let cursorY = padding;
+
+  ctx.fillStyle = "rgba(11, 11, 14, 0.86)";
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(cardX, cursorY, cardWidth, headerHeight, 30);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = "#f0c49a";
+  ctx.font = "700 22px Arial";
+  ctx.fillText("ODD WHEELS", cardX + 36, cursorY + 42);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "700 48px Arial";
+  ctx.fillText("Facebook Checkout", cardX + 36, cursorY + 98);
+  ctx.fillStyle = "rgba(255,255,255,0.68)";
+  ctx.font = "400 24px Arial";
+  ctx.fillText(
+    "Download this image and send it in Messenger with your order inquiry.",
+    cardX + 36,
+    cursorY + 136
+  );
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#f0c49a";
+  ctx.font = "600 22px Arial";
+  ctx.fillText(
+    payload.generatedAt.toLocaleDateString("en-PH", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    }),
+    cardX + cardWidth - 36,
+    cursorY + 42
+  );
+  ctx.textAlign = "left";
+  cursorY += headerHeight + cardGap;
+
+  ctx.fillStyle = "rgba(11, 11, 14, 0.9)";
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+  ctx.beginPath();
+  ctx.roundRect(cardX, cursorY, cardWidth, infoHeight, 26);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#f0c49a";
+  ctx.font = "700 24px Arial";
+  ctx.fillText("Shipping details", cardX + 28, cursorY + 40);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "500 24px Arial";
+  let infoY = cursorY + 84;
+  for (const row of wrappedInfoRows) {
+    ctx.fillText(row, cardX + 28, infoY);
+    infoY += infoLineHeight;
+  }
+  cursorY += infoHeight + cardGap;
+
+  ctx.fillStyle = "rgba(11, 11, 14, 0.9)";
+  ctx.beginPath();
+  ctx.roundRect(cardX, cursorY, cardWidth, itemsHeight, 26);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#f0c49a";
+  ctx.font = "700 24px Arial";
+  ctx.fillText("Selected items", cardX + 28, cursorY + 40);
+
+  const colItemX = cardX + 28;
+  const colQtyX = cardX + 760;
+  const colAmountX = cardX + cardWidth - 30;
+  let rowY = cursorY + 74;
+
+  for (const item of itemRows) {
+    ctx.fillStyle = "rgba(255,255,255,0.04)";
+    ctx.beginPath();
+    ctx.roundRect(colItemX, rowY, cardWidth - 56, item.rowHeight, 18);
+    ctx.fill();
+
+    const imageX = colItemX + 14;
+    const imageY = rowY + Math.max(14, (item.rowHeight - itemImageSize) / 2);
+    if (item.image) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(imageX, imageY, itemImageSize, itemImageSize, 14);
+      ctx.clip();
+      ctx.drawImage(item.image, imageX, imageY, itemImageSize, itemImageSize);
+      ctx.restore();
+    }
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "700 30px Arial";
+    const textX = imageX + itemImageSize + itemImageGap;
+    let textY = rowY + 38;
+    for (const line of item.titleLines) {
+      ctx.fillText(line, textX, textY);
+      textY += 32;
+    }
+
+    ctx.fillStyle = "rgba(255,255,255,0.70)";
+    ctx.font = "500 20px Arial";
+    const meta = [item.condition, item.noteLines.length ? null : item.notes]
+      .filter(Boolean)
+      .join("  •  ");
+    if (meta) {
+      ctx.fillText(meta, textX, textY + 4);
+      textY += 28;
+    }
+    if (item.noteLines.length) {
+      for (const noteLine of item.noteLines) {
+        ctx.fillText(noteLine, textX, textY + 4);
+        textY += 24;
+      }
+    }
+
+    ctx.fillStyle = "#f0c49a";
+    ctx.font = "700 28px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(String(item.qty), colQtyX, rowY + item.rowHeight / 2 + 10);
+    ctx.textAlign = "right";
+    ctx.fillText(formatPHP(item.amount), colAmountX, rowY + item.rowHeight / 2 + 10);
+    ctx.textAlign = "left";
+
+    rowY += item.rowHeight + 14;
+  }
+  cursorY += itemsHeight + cardGap;
+
+  ctx.fillStyle = "rgba(30, 18, 9, 0.95)";
+  ctx.beginPath();
+  ctx.roundRect(cardX, cursorY, cardWidth, summaryHeight, 26);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#f0c49a";
+  ctx.font = "700 24px Arial";
+  ctx.fillText("Summary", cardX + 28, cursorY + 40);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "500 24px Arial";
+  ctx.fillText(`Items selected: ${payload.totalLines}`, cardX + 28, cursorY + 82);
+  ctx.fillText(`Total quantity: ${payload.totalQty}`, cardX + 28, cursorY + 118);
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = "rgba(255,255,255,0.72)";
+  ctx.fillText("Selected subtotal", cardX + cardWidth - 30, cursorY + 76);
+  ctx.fillStyle = "#f0c49a";
+  ctx.font = "700 42px Arial";
+  ctx.fillText(
+    formatPHP(payload.subtotalAmount),
+    cardX + cardWidth - 30,
+    cursorY + 128
+  );
+  ctx.textAlign = "left";
+
+  ctx.fillStyle = "rgba(255,255,255,0.56)";
+  ctx.font = "500 20px Arial";
+  ctx.fillText(
+    "Shipping fee will be finalized in Facebook Messenger.",
+    cardX + 28,
+    cursorY + 154
+  );
+
+  ctx.fillStyle = "rgba(255,255,255,0.5)";
+  ctx.font = "500 18px Arial";
+  ctx.fillText(
+    "Attach this snapshot when you continue to Facebook checkout.",
+    cardX,
+    height - padding + 18
+  );
+
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, "image/png")
+  );
+  if (!blob) {
+    throw new Error("Failed to create order snapshot image.");
+  }
+  return blob;
 }
 
 function blobToDataUrl(blob: Blob) {
@@ -738,6 +1173,10 @@ function CartContent() {
   const isAdminUser = profile?.role === "admin";
   const isAdminMode = isAdminUser;
   const { settings } = useSettings();
+  const profileShippingDefaults = React.useMemo(
+    () => normalizeShippingDefaults(profile?.shipping_defaults ?? null),
+    [profile?.shipping_defaults]
+  );
   const shopControls = React.useMemo(
     () => resolveShopControls(settings),
     [settings]
@@ -773,7 +1212,67 @@ function CartContent() {
   const [sellingAsPos, setSellingAsPos] = React.useState(false);
   const [generatingInvoice, setGeneratingInvoice] = React.useState(false);
   const [clearingCart, setClearingCart] = React.useState(false);
+  const [facebookCheckoutOpen, setFacebookCheckoutOpen] = React.useState(false);
+  const [facebookCheckoutForm, setFacebookCheckoutForm] =
+    React.useState<FacebookCheckoutFormState>(() =>
+      getDefaultFacebookCheckoutForm()
+    );
+  const [downloadingFacebookSnapshot, setDownloadingFacebookSnapshot] =
+    React.useState(false);
+  const [openingFacebookMessenger, setOpeningFacebookMessenger] =
+    React.useState(false);
   const adminCustomerSuggestionListId = "admin-cart-customer-suggestions";
+  const pickupSchedule = React.useMemo(() => {
+    const schedule: Record<string, string[]> = {};
+    const raw = (settings?.pickup_schedule ?? null) as Record<
+      string,
+      unknown
+    > | null;
+
+    if (raw && typeof raw === "object") {
+      for (const day of PICKUP_DAYS) {
+        const slotsRaw = raw[day.key];
+        if (!Array.isArray(slotsRaw)) continue;
+        const cleaned = slotsRaw
+          .map((slot) => String(slot ?? "").trim())
+          .filter(Boolean);
+        if (cleaned.length) {
+          schedule[day.key] = cleaned;
+        }
+      }
+    }
+
+    if (!Object.keys(schedule).length) {
+      const fallback = String(settings?.pickup_schedule_text ?? "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (fallback.length) {
+        for (const day of PICKUP_DAYS) {
+          schedule[day.key] = fallback.slice();
+        }
+      }
+    }
+
+    return schedule;
+  }, [settings?.pickup_schedule, settings?.pickup_schedule_text]);
+  const pickupDayOptions = React.useMemo(
+    () =>
+      PICKUP_DAYS.filter((day) => (pickupSchedule[day.key] ?? []).length > 0),
+    [pickupSchedule]
+  );
+  const pickupSlotsForDay = React.useMemo(
+    () =>
+      facebookCheckoutForm.pickupDay
+        ? (pickupSchedule[facebookCheckoutForm.pickupDay] ?? [])
+        : [],
+    [facebookCheckoutForm.pickupDay, pickupSchedule]
+  );
+  const pickupUnavailable = Boolean(settings?.pickup_unavailable);
+  const facebookLbcBranchCitySuggestions = React.useMemo(() => {
+    const values = REGION_BRANCH_CITY_OPTIONS[facebookCheckoutForm.shippingRegion] ?? [];
+    return values.map((value) => String(value).trim()).filter(Boolean);
+  }, [facebookCheckoutForm.shippingRegion]);
 
   const selectedLines = React.useMemo(
     () => lines.filter((line) => selectedIds.includes(line.id)),
@@ -1082,6 +1581,193 @@ function CartContent() {
       setFbJntPouch(adminAvailableJntPouches[0]);
     }
   }, [adminAvailableJntPouches, fbJntPouch, fbShippingMethod]);
+  React.useEffect(() => {
+    if (!adminAvailableShippingMethods.length) return;
+    setFacebookCheckoutForm((prev) => {
+      if (adminAvailableShippingMethods.includes(prev.shippingMethod)) {
+        return prev;
+      }
+      return {
+        ...prev,
+        shippingMethod: adminAvailableShippingMethods[0],
+      };
+    });
+  }, [adminAvailableShippingMethods]);
+  React.useEffect(() => {
+    setFacebookCheckoutForm((prev) => {
+      if (prev.shippingMethod !== "LBC") return prev;
+      if (adminAvailableLbcPackages.length) {
+        const current = prev.lbcPackage;
+        if (adminAvailableLbcPackages.includes(current as LbcPackage)) {
+          return prev;
+        }
+        return {
+          ...prev,
+          lbcPackage: adminAvailableLbcPackages[0],
+        };
+      }
+      if (adminLbcFallbackWarning && prev.lbcPackage !== "MEDIUM_APPROVAL") {
+        return {
+          ...prev,
+          lbcPackage: "MEDIUM_APPROVAL",
+        };
+      }
+      return prev;
+    });
+  }, [adminAvailableLbcPackages, adminLbcFallbackWarning]);
+  React.useEffect(() => {
+    setFacebookCheckoutForm((prev) => {
+      if (prev.shippingMethod !== "JNT") return prev;
+      if (
+        adminAvailableJntPouches.length &&
+        !adminAvailableJntPouches.includes(prev.jntPouch)
+      ) {
+        return {
+          ...prev,
+          jntPouch: adminAvailableJntPouches[0],
+        };
+      }
+      return prev;
+    });
+  }, [adminAvailableJntPouches]);
+  React.useEffect(() => {
+    if (typeof window === "undefined" || isAdminMode) return;
+    const raw = window.localStorage.getItem(FACEBOOK_CHECKOUT_STORAGE_KEY);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as Partial<FacebookCheckoutFormState>;
+      setFacebookCheckoutForm((prev) => ({
+        ...prev,
+        customerName: String(parsed.customerName ?? prev.customerName).trim(),
+        contactNumber: sanitizePhone(
+          String(parsed.contactNumber ?? prev.contactNumber)
+        ),
+        shippingMethod: normalizeAdminShippingMethod(
+          String(parsed.shippingMethod ?? prev.shippingMethod)
+        ),
+        shippingRegion: normalizeAdminRegion(
+          String(parsed.shippingRegion ?? prev.shippingRegion)
+        ),
+        lbcBranchName: String(parsed.lbcBranchName ?? prev.lbcBranchName).trim(),
+        lbcBranchCity: String(parsed.lbcBranchCity ?? prev.lbcBranchCity).trim(),
+        lbcPackage: normalizeAdminLbcPackage(
+          String(parsed.lbcPackage ?? prev.lbcPackage)
+        ),
+        jntPouch: normalizeAdminJntPouch(String(parsed.jntPouch ?? prev.jntPouch)),
+        jntHouseStreetUnit: String(
+          parsed.jntHouseStreetUnit ?? prev.jntHouseStreetUnit
+        ).trim(),
+        jntBarangay: String(parsed.jntBarangay ?? prev.jntBarangay).trim(),
+        jntCity: String(parsed.jntCity ?? prev.jntCity).trim(),
+        jntProvince: String(parsed.jntProvince ?? prev.jntProvince).trim(),
+        jntPostalCode: String(parsed.jntPostalCode ?? prev.jntPostalCode).trim(),
+        lalamoveAddress: String(
+          parsed.lalamoveAddress ?? prev.lalamoveAddress
+        ).trim(),
+        pickupDay: String(parsed.pickupDay ?? prev.pickupDay).trim(),
+        pickupSlot: String(parsed.pickupSlot ?? prev.pickupSlot).trim(),
+        notes: String(parsed.notes ?? prev.notes).trim(),
+      }));
+    } catch {
+      // ignore bad local state
+    }
+  }, [isAdminMode]);
+  React.useEffect(() => {
+    if (isAdminMode) return;
+    setFacebookCheckoutForm((prev) => {
+      const fallbackName = prev.customerName.trim() || profile?.full_name?.trim() || "";
+      const fallbackContact =
+        prev.contactNumber.trim() || sanitizePhone(profile?.contact_number ?? "");
+      const next = {
+        ...prev,
+        customerName: fallbackName,
+        contactNumber: fallbackContact,
+        lbcBranchName:
+          prev.lbcBranchName.trim() || profileShippingDefaults.lbc.branch || "",
+        lbcBranchCity:
+          prev.lbcBranchCity.trim() || profileShippingDefaults.lbc.city || "",
+        jntHouseStreetUnit:
+          prev.jntHouseStreetUnit.trim() ||
+          profileShippingDefaults.jnt.house_street_unit ||
+          "",
+        jntBarangay:
+          prev.jntBarangay.trim() || profileShippingDefaults.jnt.barangay || "",
+        jntCity: prev.jntCity.trim() || profileShippingDefaults.jnt.city || "",
+        jntProvince:
+          prev.jntProvince.trim() || profileShippingDefaults.jnt.province || "",
+        jntPostalCode:
+          prev.jntPostalCode.trim() || profileShippingDefaults.jnt.postal_code || "",
+        lalamoveAddress:
+          prev.lalamoveAddress.trim() ||
+          profileShippingDefaults.lalamove.dropoff_address ||
+          "",
+        notes: prev.notes.trim(),
+      };
+      return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
+    });
+  }, [
+    isAdminMode,
+    profile?.full_name,
+    profile?.contact_number,
+    profileShippingDefaults,
+  ]);
+  React.useEffect(() => {
+    if (isAdminMode || typeof window === "undefined") return;
+    window.localStorage.setItem(
+      FACEBOOK_CHECKOUT_STORAGE_KEY,
+      JSON.stringify(facebookCheckoutForm)
+    );
+  }, [facebookCheckoutForm, isAdminMode]);
+  React.useEffect(() => {
+    setFacebookCheckoutForm((prev) => {
+      if (prev.shippingMethod !== "PICKUP") return prev;
+      if (pickupUnavailable) {
+        if (!prev.pickupDay && !prev.pickupSlot) return prev;
+        return {
+          ...prev,
+          pickupDay: "",
+          pickupSlot: "",
+        };
+      }
+      const firstDay = pickupDayOptions[0]?.key ?? "";
+      if (!firstDay) {
+        if (!prev.pickupDay && !prev.pickupSlot) return prev;
+        return {
+          ...prev,
+          pickupDay: "",
+          pickupSlot: "",
+        };
+      }
+      if (!prev.pickupDay || !(pickupSchedule[prev.pickupDay] ?? []).length) {
+        return {
+          ...prev,
+          pickupDay: firstDay,
+        };
+      }
+      return prev;
+    });
+  }, [pickupDayOptions, pickupSchedule, pickupUnavailable]);
+  React.useEffect(() => {
+    setFacebookCheckoutForm((prev) => {
+      if (prev.shippingMethod !== "PICKUP") return prev;
+      if (pickupUnavailable) return prev;
+      const slots = prev.pickupDay ? (pickupSchedule[prev.pickupDay] ?? []) : [];
+      if (!slots.length) {
+        if (!prev.pickupSlot) return prev;
+        return {
+          ...prev,
+          pickupSlot: "",
+        };
+      }
+      if (!prev.pickupSlot || !slots.includes(prev.pickupSlot)) {
+        return {
+          ...prev,
+          pickupSlot: slots[0],
+        };
+      }
+      return prev;
+    });
+  }, [pickupSchedule, pickupUnavailable]);
   const adminDiscountBase = parseNumberInput(fbDiscountValue);
   const adminDiscountAmount = roundMoney(
     fbDiscountType === "PERCENT"
@@ -1253,6 +1939,7 @@ function CartContent() {
     selectedLines.length === 0 ||
     (!isAdminMode && hasNonSealedSelected && !unsealedAck) ||
     (!isAdminMode && !shopControls.allowCheckout);
+  const facebookCheckoutDisabled = checkoutDisabled;
   const adminSoldDisabled =
     selectedLines.length === 0 ||
     !fbCustomerName.trim() ||
@@ -1327,6 +2014,218 @@ function CartContent() {
       .map((item) => map.get(item.id))
       .filter(Boolean) as ShopProduct[];
   }, [completeSet, shopProducts]);
+  const facebookEffectiveLbcPackage = React.useMemo<AdminSelectableLbcPackage | null>(() => {
+    if (adminAvailableLbcPackages.includes(facebookCheckoutForm.lbcPackage as LbcPackage)) {
+      return facebookCheckoutForm.lbcPackage;
+    }
+    if (adminAvailableLbcPackages.length) {
+      return adminAvailableLbcPackages[0];
+    }
+    if (adminLbcFallbackWarning) {
+      return "MEDIUM_APPROVAL";
+    }
+    return null;
+  }, [
+    adminAvailableLbcPackages,
+    adminLbcFallbackWarning,
+    facebookCheckoutForm.lbcPackage,
+  ]);
+  const facebookEffectiveJntPouch = React.useMemo<JntPouch | null>(() => {
+    if (adminAvailableJntPouches.includes(facebookCheckoutForm.jntPouch)) {
+      return facebookCheckoutForm.jntPouch;
+    }
+    return adminAvailableJntPouches[0] ?? null;
+  }, [adminAvailableJntPouches, facebookCheckoutForm.jntPouch]);
+  const facebookLbcPackageHint = React.useMemo(() => {
+    if (facebookCheckoutForm.shippingMethod !== "LBC") return undefined;
+    if (adminAvailableLbcPackages.length) {
+      return "Suggested from item capacity. Packages that cannot fit the selected cart are hidden.";
+    }
+    if (adminLbcFallbackWarning) {
+      return `${adminLbcFallbackWarning} Medium box is shown as the fallback option.`;
+    }
+    return undefined;
+  }, [
+    adminAvailableLbcPackages.length,
+    adminLbcFallbackWarning,
+    facebookCheckoutForm.shippingMethod,
+  ]);
+  const facebookJntPouchHint = React.useMemo(() => {
+    if (facebookCheckoutForm.shippingMethod !== "JNT") return undefined;
+    if (!adminAvailableJntPouches.length) return undefined;
+    return "Suggested from item capacity. Pouches that cannot fit the selected cart are hidden.";
+  }, [adminAvailableJntPouches.length, facebookCheckoutForm.shippingMethod]);
+
+  const facebookCheckoutErrors = React.useMemo(() => {
+    const errors: string[] = [];
+    if (!adminAvailableShippingMethods.length) {
+      errors.push("No courier is available for the selected cart items.");
+      return errors;
+    }
+    if (!adminAvailableShippingMethods.includes(facebookCheckoutForm.shippingMethod)) {
+      errors.push("Selected courier is not available for the current cart.");
+      return errors;
+    }
+    if (!facebookCheckoutForm.customerName.trim()) {
+      errors.push("Customer name is required.");
+    } else if (!hasAtLeastTwoWords(facebookCheckoutForm.customerName)) {
+      errors.push("Customer name must include at least first and last name.");
+    }
+    if (!facebookCheckoutForm.contactNumber.trim()) {
+      errors.push("Contact number is required.");
+    }
+    if (
+      facebookCheckoutForm.shippingMethod === "LBC" &&
+      !adminAvailableLbcPackages.length &&
+      !adminLbcFallbackWarning
+    ) {
+      errors.push("No valid LBC package fits the selected cart items.");
+    }
+    if (
+      facebookCheckoutForm.shippingMethod === "LBC" &&
+      !facebookCheckoutForm.lbcBranchName.trim()
+    ) {
+      errors.push("LBC branch name is required.");
+    }
+    if (
+      facebookCheckoutForm.shippingMethod === "LBC" &&
+      !facebookCheckoutForm.lbcBranchCity.trim()
+    ) {
+      errors.push("LBC branch city is required.");
+    }
+    if (
+      facebookCheckoutForm.shippingMethod === "JNT" &&
+      !adminAvailableJntPouches.length
+    ) {
+      errors.push("No valid J&T pouch fits the selected cart items.");
+    }
+    if (
+      facebookCheckoutForm.shippingMethod === "JNT" &&
+      !facebookCheckoutForm.jntHouseStreetUnit.trim()
+    ) {
+      errors.push("J&T house / street / unit is required.");
+    }
+    if (
+      facebookCheckoutForm.shippingMethod === "JNT" &&
+      !facebookCheckoutForm.jntBarangay.trim()
+    ) {
+      errors.push("J&T barangay is required.");
+    }
+    if (
+      facebookCheckoutForm.shippingMethod === "JNT" &&
+      !facebookCheckoutForm.jntCity.trim()
+    ) {
+      errors.push("J&T city is required.");
+    }
+    if (
+      facebookCheckoutForm.shippingMethod === "JNT" &&
+      !facebookCheckoutForm.jntProvince.trim()
+    ) {
+      errors.push("J&T province is required.");
+    }
+    if (
+      facebookCheckoutForm.shippingMethod === "LALAMOVE" &&
+      !facebookCheckoutForm.lalamoveAddress.trim()
+    ) {
+      errors.push("Lalamove drop-off address is required.");
+    }
+    if (facebookCheckoutForm.shippingMethod === "PICKUP" && pickupUnavailable) {
+      errors.push("Pickup is currently unavailable.");
+    }
+    if (
+      facebookCheckoutForm.shippingMethod === "PICKUP" &&
+      !pickupUnavailable &&
+      !facebookCheckoutForm.pickupDay.trim()
+    ) {
+      errors.push("Pickup day is required.");
+    }
+    if (
+      facebookCheckoutForm.shippingMethod === "PICKUP" &&
+      !pickupUnavailable &&
+      !facebookCheckoutForm.pickupSlot.trim()
+    ) {
+      errors.push("Pickup timeslot is required.");
+    }
+    return errors;
+  }, [
+    adminAvailableJntPouches.length,
+    adminAvailableLbcPackages.length,
+    adminAvailableShippingMethods,
+    adminLbcFallbackWarning,
+    facebookCheckoutForm,
+    pickupUnavailable,
+  ]);
+
+  const facebookCheckoutSummary = React.useMemo(() => {
+    const shippingMethodLabel = formatFacebookCheckoutMethodLabel(
+      facebookCheckoutForm.shippingMethod
+    );
+    const shippingLines: string[] = [];
+
+    if (facebookCheckoutForm.shippingMethod === "LBC") {
+      shippingLines.push(`Recipient: ${facebookCheckoutForm.customerName.trim() || "-"}`);
+      shippingLines.push(`Branch: ${facebookCheckoutForm.lbcBranchName.trim() || "-"}`);
+      shippingLines.push(`Branch city: ${facebookCheckoutForm.lbcBranchCity.trim() || "-"}`);
+      shippingLines.push(
+        `Region: ${formatAdminRegionLabel(facebookCheckoutForm.shippingRegion)}`
+      );
+      shippingLines.push(
+        `Package: ${formatLbcPackageLabel(
+          facebookEffectiveLbcPackage ?? facebookCheckoutForm.lbcPackage
+        )}`
+      );
+    } else if (facebookCheckoutForm.shippingMethod === "JNT") {
+      shippingLines.push(
+        `Address: ${facebookCheckoutForm.jntHouseStreetUnit.trim() || "-"}`
+      );
+      shippingLines.push(
+        `Barangay: ${facebookCheckoutForm.jntBarangay.trim() || "-"}`
+      );
+      shippingLines.push(
+        `City / Province: ${[
+          facebookCheckoutForm.jntCity.trim(),
+          facebookCheckoutForm.jntProvince.trim(),
+        ]
+          .filter(Boolean)
+          .join(", ") || "-"}`
+      );
+      if (facebookCheckoutForm.jntPostalCode.trim()) {
+        shippingLines.push(`Postal code: ${facebookCheckoutForm.jntPostalCode.trim()}`);
+      }
+      shippingLines.push(
+        `Region: ${formatAdminRegionLabel(facebookCheckoutForm.shippingRegion)}`
+      );
+      shippingLines.push(
+        `Package: ${formatJntPouchLabel(
+          facebookEffectiveJntPouch ?? facebookCheckoutForm.jntPouch
+        )}`
+      );
+    } else if (facebookCheckoutForm.shippingMethod === "LALAMOVE") {
+      shippingLines.push(
+        `Drop-off: ${facebookCheckoutForm.lalamoveAddress.trim() || "-"}`
+      );
+      shippingLines.push("Delivery fee is settled directly with Lalamove.");
+    } else {
+      shippingLines.push(`Location: ${PICKUP_LOCATION}`);
+      shippingLines.push(`Directory: ${PICKUP_DIRECTORY}`);
+      if (facebookCheckoutForm.pickupDay.trim()) {
+        shippingLines.push(
+          `Pickup day: ${formatPickupDayLabel(facebookCheckoutForm.pickupDay)}`
+        );
+      }
+      if (facebookCheckoutForm.pickupSlot.trim()) {
+        shippingLines.push(`Pickup slot: ${facebookCheckoutForm.pickupSlot.trim()}`);
+      }
+    }
+
+    return {
+      customerName: facebookCheckoutForm.customerName.trim(),
+      contactNumber: facebookCheckoutForm.contactNumber.trim(),
+      shippingMethodLabel,
+      shippingLines,
+      notes: facebookCheckoutForm.notes.trim(),
+    };
+  }, [facebookCheckoutForm, facebookEffectiveJntPouch, facebookEffectiveLbcPackage]);
 
   React.useEffect(() => {
     setSelectedIds((prev) => {
@@ -1489,6 +2388,103 @@ function CartContent() {
         message: e?.message ?? "Failed to add to cart",
         intent: "error",
       });
+    }
+  }
+
+  async function onDownloadFacebookSnapshot() {
+    if (facebookCheckoutDisabled) return;
+    if (facebookCheckoutErrors.length > 0) {
+      toast({
+        intent: "error",
+        title: "Missing information",
+        message: facebookCheckoutErrors[0],
+      });
+      return false;
+    }
+
+    setDownloadingFacebookSnapshot(true);
+    try {
+      const blob = await buildFacebookCheckoutSnapshotBlob({
+        customerName: facebookCheckoutSummary.customerName,
+        contactNumber: facebookCheckoutSummary.contactNumber,
+        shippingMethodLabel: facebookCheckoutSummary.shippingMethodLabel,
+        shippingLines: facebookCheckoutSummary.shippingLines,
+        notes: facebookCheckoutSummary.notes,
+        items: selectedInvoiceItems,
+        totalQty: selectedLines.reduce(
+          (sum, line) => sum + Math.max(1, Number(line.qty ?? 0)),
+          0
+        ),
+        totalLines: selectedLines.length,
+        subtotalAmount: selectedSubtotal,
+        generatedAt: new Date(),
+      });
+      const fileDate = new Date().toISOString().slice(0, 10);
+      const fileName = `facebook-checkout-${sanitizeFileName(
+        facebookCheckoutSummary.customerName
+      )}-${fileDate}.png`;
+      downloadBlobAsFile(blob, fileName);
+      toast({
+        intent: "success",
+        title: "Snapshot downloaded",
+        message: "Attach the image when you message Odd Wheels on Facebook.",
+      });
+      return true;
+    } catch (error: any) {
+      console.error(error);
+      toast({
+        intent: "error",
+        title: "Download failed",
+        message: error?.message ?? "Unable to create the order snapshot image.",
+      });
+      return false;
+    } finally {
+      setDownloadingFacebookSnapshot(false);
+    }
+  }
+
+  async function onDownloadSnapshotAndOpenMessenger() {
+    if (facebookCheckoutDisabled) return;
+    if (facebookCheckoutErrors.length > 0) {
+      toast({
+        intent: "error",
+        title: "Missing information",
+        message: facebookCheckoutErrors[0],
+      });
+      return;
+    }
+
+    const isMobileMessengerLaunch =
+      /Android|iPhone|iPad|iPod/i.test(window.navigator.userAgent);
+    const messengerWindow = isMobileMessengerLaunch
+      ? null
+      : window.open(FACEBOOK_CHECKOUT_URL, "_blank", "noopener,noreferrer");
+    setOpeningFacebookMessenger(true);
+    try {
+      const downloaded = await onDownloadFacebookSnapshot();
+      if (!downloaded) return;
+
+      if (isMobileMessengerLaunch) {
+        window.location.assign(FACEBOOK_CHECKOUT_MOBILE_URL);
+        return;
+      }
+
+      if (!messengerWindow) {
+        toast({
+          intent: "error",
+          title: "Messenger popup blocked",
+          message: "Please allow popups for this site, then try again.",
+        });
+        return;
+      }
+      messengerWindow.focus();
+      toast({
+        intent: "success",
+        title: "Continue in Messenger",
+        message: "Your snapshot was downloaded. Attach it in Facebook Messenger.",
+      });
+    } finally {
+      setOpeningFacebookMessenger(false);
     }
   }
 
@@ -2518,12 +3514,26 @@ function CartContent() {
                 {sellingAsPos ? "Selling..." : "Sold"}
               </Button>
             </div>
-          ) : checkoutDisabled ? (
-            <Button disabled>Proceed to checkout</Button>
           ) : (
-            <Link href={checkoutHref}>
-              <Button>Proceed to checkout</Button>
-            </Link>
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[320px]">
+              <Button
+                variant="secondary"
+                onClick={() => setFacebookCheckoutOpen(true)}
+                disabled={facebookCheckoutDisabled}
+                className="w-full"
+              >
+                Checkout via Facebook
+              </Button>
+              {checkoutDisabled ? (
+                <Button disabled className="w-full">
+                  Proceed to checkout
+                </Button>
+              ) : (
+                <Link href={checkoutHref} className="w-full">
+                  <Button className="w-full">Proceed to checkout</Button>
+                </Link>
+              )}
+            </div>
           )}
         </CardBody>
       </Card>
@@ -2764,6 +3774,442 @@ function CartContent() {
             </div>,
           )
         : null}
+
+      {!isAdminMode ? (
+        <ModalShell
+          open={facebookCheckoutOpen}
+          onClose={() => setFacebookCheckoutOpen(false)}
+          title="Checkout via Facebook"
+          description="Fill in your shipping details, download a snapshot of your selected order, then continue in Messenger."
+          width="lg"
+          footer={
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <Button
+                variant="secondary"
+                className="w-full sm:w-auto"
+                onClick={() => {
+                  const isMobileMessengerLaunch =
+                    /Android|iPhone|iPad|iPod/i.test(window.navigator.userAgent);
+                  if (isMobileMessengerLaunch) {
+                    window.location.assign(FACEBOOK_CHECKOUT_MOBILE_URL);
+                    return;
+                  }
+                  window.open(
+                    FACEBOOK_CHECKOUT_URL,
+                    "_blank",
+                    "noopener,noreferrer",
+                  );
+                }}
+              >
+                Open Facebook Messenger
+              </Button>
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                <Button
+                  variant="ghost"
+                  onClick={() => setFacebookCheckoutOpen(false)}
+                  className="w-full sm:w-auto"
+                >
+                  Close
+                </Button>
+                <Button
+                  onClick={() => void onDownloadSnapshotAndOpenMessenger()}
+                  disabled={
+                    facebookCheckoutDisabled ||
+                    downloadingFacebookSnapshot ||
+                    openingFacebookMessenger
+                  }
+                  className="w-full sm:w-auto"
+                >
+                  {downloadingFacebookSnapshot || openingFacebookMessenger
+                    ? "Preparing Messenger checkout..."
+                    : "Download snapshot and message"}
+                </Button>
+              </div>
+            </div>
+          }
+        >
+          <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+            <div className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Input
+                  label="Customer Name"
+                  value={facebookCheckoutForm.customerName}
+                  onChange={(event) =>
+                    setFacebookCheckoutForm((prev) => ({
+                      ...prev,
+                      customerName: event.target.value,
+                    }))
+                  }
+                  placeholder="Full name"
+                />
+                <Input
+                  label="Contact Number"
+                  value={facebookCheckoutForm.contactNumber}
+                  onChange={(event) =>
+                    setFacebookCheckoutForm((prev) => ({
+                      ...prev,
+                      contactNumber: sanitizePhone(event.target.value),
+                    }))
+                  }
+                  placeholder="09xxxxxxxxx"
+                />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Select
+                  label="Shipping Courier"
+                  value={facebookCheckoutForm.shippingMethod}
+                  onChange={(event) =>
+                    setFacebookCheckoutForm((prev) => ({
+                      ...prev,
+                      shippingMethod: normalizeAdminShippingMethod(event.target.value),
+                    }))
+                  }
+                >
+                  {adminCourierOptions.map((method) => (
+                    <option key={method} value={method}>
+                      {formatFacebookCheckoutMethodLabel(method)}
+                    </option>
+                  ))}
+                </Select>
+
+                {facebookCheckoutForm.shippingMethod === "LBC" ||
+                facebookCheckoutForm.shippingMethod === "JNT" ? (
+                  <Select
+                    label="Shipping Region"
+                    value={facebookCheckoutForm.shippingRegion}
+                    onChange={(event) =>
+                      setFacebookCheckoutForm((prev) => ({
+                        ...prev,
+                        shippingRegion: normalizeAdminRegion(event.target.value),
+                      }))
+                    }
+                  >
+                    <option value="METRO_MANILA">NCR / Metro Manila</option>
+                    <option value="LUZON">Luzon</option>
+                    <option value="VISAYAS">Visayas</option>
+                    <option value="MINDANAO">Mindanao</option>
+                  </Select>
+                ) : (
+                  <Input
+                    label="Shipping Region"
+                    value={
+                      facebookCheckoutForm.shippingMethod === "PICKUP"
+                        ? "Not required for pickup"
+                        : "Not required"
+                    }
+                    disabled
+                  />
+                )}
+              </div>
+
+              {facebookCheckoutForm.shippingMethod === "LBC" ? (
+                <div className="space-y-4">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Input
+                      label="LBC Branch Name"
+                      value={facebookCheckoutForm.lbcBranchName}
+                      onChange={(event) =>
+                        setFacebookCheckoutForm((prev) => ({
+                          ...prev,
+                          lbcBranchName: event.target.value,
+                        }))
+                      }
+                    />
+                    <Input
+                      label="Branch City"
+                      value={facebookCheckoutForm.lbcBranchCity}
+                      onChange={(event) =>
+                        setFacebookCheckoutForm((prev) => ({
+                          ...prev,
+                          lbcBranchCity: event.target.value,
+                        }))
+                      }
+                      list={FACEBOOK_LBC_BRANCH_CITY_DATALIST_ID}
+                      hint={
+                        facebookLbcBranchCitySuggestions.length
+                          ? `Suggested cities for ${formatAdminRegionLabel(
+                              facebookCheckoutForm.shippingRegion
+                            )} branch rates.`
+                          : undefined
+                      }
+                    />
+                    <datalist id={FACEBOOK_LBC_BRANCH_CITY_DATALIST_ID}>
+                      {facebookLbcBranchCitySuggestions.map((city) => (
+                        <option key={`${facebookCheckoutForm.shippingRegion}-${city}`} value={city} />
+                      ))}
+                    </datalist>
+                  </div>
+                  <Select
+                    label="LBC Package"
+                    value={facebookCheckoutForm.lbcPackage}
+                    onChange={(event) =>
+                      setFacebookCheckoutForm((prev) => ({
+                        ...prev,
+                        lbcPackage: normalizeAdminLbcPackage(event.target.value),
+                      }))
+                    }
+                    disabled={!adminLbcPackageOptions.length}
+                    hint={facebookLbcPackageHint}
+                  >
+                    {adminLbcPackageOptions.length ? (
+                      adminLbcPackageOptions.map((pack) => (
+                        <option key={pack} value={pack}>
+                          {formatLbcPackageLabel(pack)}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">No valid LBC package</option>
+                    )}
+                  </Select>
+                </div>
+              ) : null}
+
+              {facebookCheckoutForm.shippingMethod === "JNT" ? (
+                <div className="space-y-4">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Input
+                      label="House / Street / Unit"
+                      value={facebookCheckoutForm.jntHouseStreetUnit}
+                      onChange={(event) =>
+                        setFacebookCheckoutForm((prev) => ({
+                          ...prev,
+                          jntHouseStreetUnit: event.target.value,
+                        }))
+                      }
+                    />
+                    <Input
+                      label="Barangay"
+                      value={facebookCheckoutForm.jntBarangay}
+                      onChange={(event) =>
+                        setFacebookCheckoutForm((prev) => ({
+                          ...prev,
+                          jntBarangay: event.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <Input
+                      label="City"
+                      value={facebookCheckoutForm.jntCity}
+                      onChange={(event) =>
+                        setFacebookCheckoutForm((prev) => ({
+                          ...prev,
+                          jntCity: event.target.value,
+                        }))
+                      }
+                    />
+                    <Input
+                      label="Province"
+                      value={facebookCheckoutForm.jntProvince}
+                      onChange={(event) =>
+                        setFacebookCheckoutForm((prev) => ({
+                          ...prev,
+                          jntProvince: event.target.value,
+                        }))
+                      }
+                    />
+                    <Input
+                      label="Postal Code"
+                      value={facebookCheckoutForm.jntPostalCode}
+                      onChange={(event) =>
+                        setFacebookCheckoutForm((prev) => ({
+                          ...prev,
+                          jntPostalCode: event.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <Select
+                    label="J&T Pouch"
+                    value={facebookCheckoutForm.jntPouch}
+                    onChange={(event) =>
+                      setFacebookCheckoutForm((prev) => ({
+                        ...prev,
+                        jntPouch: normalizeAdminJntPouch(event.target.value),
+                      }))
+                    }
+                    disabled={!adminAvailableJntPouches.length}
+                    hint={facebookJntPouchHint}
+                  >
+                    {adminAvailableJntPouches.length ? (
+                      adminAvailableJntPouches.map((pouch) => (
+                        <option key={pouch} value={pouch}>
+                          {formatJntPouchLabel(pouch)}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">No valid J&T pouch</option>
+                    )}
+                  </Select>
+                </div>
+              ) : null}
+
+              {facebookCheckoutForm.shippingMethod === "LALAMOVE" ? (
+                <Textarea
+                  label="Lalamove Drop-off Address / Landmark"
+                  value={facebookCheckoutForm.lalamoveAddress}
+                  onChange={(event) =>
+                    setFacebookCheckoutForm((prev) => ({
+                      ...prev,
+                      lalamoveAddress: event.target.value,
+                    }))
+                  }
+                  placeholder="Complete address, landmark, and delivery notes"
+                  hint="Lalamove delivery fee will be coordinated in Messenger."
+                />
+              ) : null}
+
+              {facebookCheckoutForm.shippingMethod === "PICKUP" ? (
+                <div className="space-y-4">
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                    <div className="text-sm font-medium text-white">Pickup location</div>
+                    <div className="mt-1 text-sm text-white/70">{PICKUP_LOCATION}</div>
+                    <div className="mt-1 text-xs text-white/50">
+                      Directory: {PICKUP_DIRECTORY}
+                    </div>
+                  </div>
+                  {pickupUnavailable ? (
+                    <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                      Pickup is currently unavailable.
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Select
+                        label="Pickup Day"
+                        value={facebookCheckoutForm.pickupDay}
+                        onChange={(event) =>
+                          setFacebookCheckoutForm((prev) => ({
+                            ...prev,
+                            pickupDay: event.target.value,
+                          }))
+                        }
+                        disabled={!pickupDayOptions.length}
+                      >
+                        <option value="">Select a day</option>
+                        {pickupDayOptions.map((day) => (
+                          <option key={day.key} value={day.key}>
+                            {day.label}
+                          </option>
+                        ))}
+                      </Select>
+                      <Select
+                        label="Pickup Timeslot"
+                        value={facebookCheckoutForm.pickupSlot}
+                        onChange={(event) =>
+                          setFacebookCheckoutForm((prev) => ({
+                            ...prev,
+                            pickupSlot: event.target.value,
+                          }))
+                        }
+                        disabled={
+                          !facebookCheckoutForm.pickupDay || !pickupSlotsForDay.length
+                        }
+                      >
+                        <option value="">Select a timeslot</option>
+                        {pickupSlotsForDay.map((slot) => (
+                          <option key={slot} value={slot}>
+                            {slot}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              <Textarea
+                label="Order Notes"
+                value={facebookCheckoutForm.notes}
+                onChange={(event) =>
+                  setFacebookCheckoutForm((prev) => ({
+                    ...prev,
+                    notes: event.target.value,
+                  }))
+                }
+                placeholder="Optional notes for your Facebook checkout"
+              />
+
+              {facebookCheckoutErrors.length ? (
+                <div className="rounded-2xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                  {facebookCheckoutErrors[0]}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-sky-400/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
+                  Download the snapshot first, then attach it in Messenger so
+                  the team can review your selected items and shipping details.
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] p-4">
+                <div className="text-xs font-medium uppercase tracking-[0.18em] text-white/45">
+                  Snapshot Preview
+                </div>
+                <div className="mt-2 text-lg font-semibold text-white">
+                  {facebookCheckoutSummary.customerName || "Your order"}
+                </div>
+                <div className="mt-1 text-sm text-white/65">
+                  {facebookCheckoutSummary.shippingMethodLabel}
+                </div>
+                <div className="mt-2 space-y-1 text-xs text-white/55">
+                  {facebookCheckoutSummary.shippingLines.length ? (
+                    facebookCheckoutSummary.shippingLines.slice(0, 4).map((line, index) => (
+                      <div key={`${line}-${index}`}>{line}</div>
+                    ))
+                  ) : (
+                    <div>Courier details will appear here.</div>
+                  )}
+                </div>
+                <div className="mt-4 space-y-3">
+                  {selectedInvoiceItems.map((item, index) => (
+                    <div
+                      key={`${item.name}-${index}`}
+                      className="rounded-2xl border border-white/8 bg-black/20 px-3 py-3"
+                    >
+                      <div className="text-sm font-medium text-white">
+                        {item.name}
+                      </div>
+                      <div className="mt-1 flex items-center justify-between text-xs text-white/55">
+                        <span>Qty {item.qty}</span>
+                        <span>{formatPHP(item.amount)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] p-4">
+                <div className="flex items-center justify-between text-sm text-white/60">
+                  <span>Selected lines</span>
+                  <span>{selectedLines.length}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between text-sm text-white/60">
+                  <span>Total quantity</span>
+                  <span>
+                    {selectedLines.reduce(
+                      (sum, line) => sum + Math.max(1, Number(line.qty ?? 0)),
+                      0
+                    )}
+                  </span>
+                </div>
+                <div className="mt-4 border-t border-white/10 pt-4">
+                  <div className="text-sm text-white/60">Selected subtotal</div>
+                  <div className="text-2xl font-semibold text-price">
+                    {formatPHP(selectedSubtotal)}
+                  </div>
+                  <div className="mt-2 text-xs text-white/45">
+                    Final shipping fee and payment instructions will be confirmed
+                    in Facebook Messenger.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </ModalShell>
+      ) : null}
     </main>
   );
 }

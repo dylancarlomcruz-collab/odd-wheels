@@ -18,6 +18,7 @@ import {
   normalizeSearchTerm,
 } from "@/lib/search";
 import {
+  compareProductRarityTags,
   PRODUCT_SPECIAL_TAG_OPTIONS,
   getProductSpecialTagStyle,
   type ProductSpecialTag,
@@ -398,7 +399,7 @@ export default function ShopPageClient() {
         key: "sort",
         selector: "[data-tour='shop-sort']",
         title: "Sort",
-        body: "Sort by relevance, newest, popularity, or price.",
+        body: "Sort by relevance, newest, rarity, or price.",
       },
       {
         key: "brands",
@@ -1183,6 +1184,12 @@ export default function ShopPageClient() {
 
     if (sortBy === "popular") {
       list.sort((a, b) => {
+        const rarityDiff = compareProductRarityTags(
+          a.special_tags,
+          b.special_tags
+        );
+        if (rarityDiff !== 0) return rarityDiff;
+
         const aScore = getPopularSortScore(a);
         const bScore = getPopularSortScore(b);
         if (bScore !== aScore) return bScore - aScore;

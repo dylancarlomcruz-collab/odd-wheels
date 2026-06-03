@@ -33,9 +33,20 @@ export function fitsCapacity(counts: ShipCounts, capacity: Record<ShipClass, num
           TARMAC_ACRYLIC: 0,
         }
       : counts;
-  return (Object.keys(normalized) as ShipClass[]).every(
-    (k) => normalized[k] <= capacity[k]
-  );
+  let fillUsage = 0;
+
+  for (const shipClass of Object.keys(normalized) as ShipClass[]) {
+    const count = normalized[shipClass];
+    if (count <= 0) continue;
+
+    const classCapacity = capacity[shipClass];
+    if (classCapacity <= 0) return false;
+
+    fillUsage += count / classCapacity;
+    if (fillUsage > 1.000001) return false;
+  }
+
+  return true;
 }
 
 export function recommendJntPouch(counts: ShipCounts): { ok: true; pouch: JntPouch } | { ok: false; reason: string } {

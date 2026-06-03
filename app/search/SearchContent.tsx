@@ -14,6 +14,7 @@ import { useSearchProducts } from "@/hooks/useSearchProducts";
 import { formatConditionLabel } from "@/lib/conditions";
 import { resolveEffectivePrice } from "@/lib/pricing";
 import {
+  compareProductRarityTags,
   PRODUCT_SPECIAL_TAG_OPTIONS,
   type ProductSpecialTag,
 } from "@/lib/productTags";
@@ -429,9 +430,14 @@ export default function SearchContent() {
     } else if (filters.sortBy === "price_high") {
       list.sort((a, b) => minEffective(b) - minEffective(a));
     } else if (filters.sortBy === "popular") {
-      list.sort(
-        (a, b) => (b.popularityScore ?? 0) - (a.popularityScore ?? 0)
-      );
+      list.sort((a, b) => {
+        const rarityDiff = compareProductRarityTags(
+          a.special_tags,
+          b.special_tags
+        );
+        if (rarityDiff !== 0) return rarityDiff;
+        return (b.popularityScore ?? 0) - (a.popularityScore ?? 0);
+      });
     } else if (filters.sortBy === "best_value") {
       list.sort((a, b) => {
         const aValue =
@@ -900,7 +906,7 @@ export default function SearchContent() {
                         <option value="newest">Newest</option>
                         <option value="price_low">Price: Low to High</option>
                         <option value="price_high">Price: High to Low</option>
-                        <option value="popular">Most Popular</option>
+                        <option value="popular">Rarity</option>
                         <option value="best_value">Best Value</option>
                       </Select>
 

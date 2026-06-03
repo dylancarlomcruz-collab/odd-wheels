@@ -594,7 +594,7 @@ export async function GET(request: Request) {
           {[
             { label: "RELEVANCE", active: true },
             { label: "NEWEST", active: false },
-            { label: "MOST POPULAR", active: false },
+            { label: "RARITY", active: false },
             { label: "PRICE UP DOWN", active: false },
           ].map((tab) => (
             <div

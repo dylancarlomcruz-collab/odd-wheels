@@ -45,8 +45,9 @@ export const LBC_RATES: Record<LbcPackage, Record<Region, number>> = {
   SMALL_BOX: { METRO_MANILA: 114, LUZON: 155, VISAYAS: 165, MINDANAO: 165 },
 };
 
-// Capacity rules: maximum pieces per class for each package.
-// Interpretation: you can ship up to the max count for that class.
+// Capacity rules: maximum pieces per class for each package when the package
+// contains only that class. Mixed carts use these values proportionally as a
+// shared fill budget.
 export const JNT_CAPACITY: Record<JntPouch, Record<ShipClass, number>> = {
   SMALL: {
     MINI_GT: 2,

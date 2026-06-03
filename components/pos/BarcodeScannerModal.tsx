@@ -53,11 +53,25 @@ export function BarcodeScannerModal({
     const reader = new BrowserMultiFormatReader();
     let active = true;
     let previewTimer: ReturnType<typeof setTimeout> | null = null;
+    const stopScanning = () => {
+      active = false;
+      if (previewTimer) {
+        clearTimeout(previewTimer);
+        previewTimer = null;
+      }
+      controlsRef.current?.stop();
+      controlsRef.current = null;
+      const video = videoRef.current;
+      if (video?.srcObject instanceof MediaStream) {
+        video.srcObject.getTracks().forEach((track) => track.stop());
+        video.srcObject = null;
+      }
+    };
 
     const start = async () => {
       try {
         const video = videoRef.current;
-        if (!video) return;
+        if (!video || !active) return;
 
         video.setAttribute("playsinline", "true");
         video.setAttribute("webkit-playsinline", "true");
@@ -82,8 +96,10 @@ export function BarcodeScannerModal({
           (result) => {
             if (!active || !result || handledRef.current) return;
             handledRef.current = true;
-            controlsRef.current?.stop();
-            onScan(result.getText());
+            const scannedValue = result.getText();
+            stopScanning();
+            onClose();
+            onScan(scannedValue);
           }
         );
       } catch (err) {
@@ -102,15 +118,10 @@ export function BarcodeScannerModal({
     start();
 
     return () => {
-      active = false;
-      if (previewTimer) {
-        clearTimeout(previewTimer);
-      }
-      controlsRef.current?.stop();
-      controlsRef.current = null;
+      stopScanning();
       document.body.style.overflow = originalOverflow;
     };
-  }, [open, onScan, retryKey]);
+  }, [open, onClose, onScan, retryKey]);
 
   if (!open) return null;
 

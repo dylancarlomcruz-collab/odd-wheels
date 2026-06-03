@@ -111,6 +111,26 @@ type InventoryCostEvent = {
   entry_date: string;
   created_at: string;
   meta: Record<string, unknown> | null;
+  stock_movement_id?: string | null;
+  current_qty?: number | null;
+  effective_expense_qty?: number | null;
+  effective_removed_qty?: number | null;
+  effective_expense_subtotal?: number | null;
+  effective_consumed_qty?: number | null;
+  effective_remaining_qty?: number | null;
+  lifecycle_status?: string | null;
+  manual_removed_qty?: number | null;
+  sold_or_sellout_qty?: number | null;
+  source_status?: string | null;
+};
+
+type InventoryCashflowDailyRollup = {
+  entry_date: string;
+  amount: number;
+  event_count: number;
+  units_added: number;
+  on_hand_units: number;
+  consumed_units: number;
 };
 
 type InventoryProduct = {
@@ -127,6 +147,7 @@ type InventoryVariant = {
   condition: string | null;
   price: number | null;
   cost: number | null;
+  qty: number | null;
 };
 
 type InventoryEventFormState = {
@@ -208,6 +229,8 @@ const MISSING_SCHEMA_COLUMN_PATTERN =
   /Could not find the '([^']+)' column of '([^']+)' in the schema cache/i;
 const MISSING_SQL_COLUMN_PATTERN =
   /column\s+(?:(?<table>[a-zA-Z0-9_]+)\.)?(?<column>[a-zA-Z0-9_]+)\s+does not exist/i;
+const MISSING_RELATION_PATTERN =
+  /relation\s+"?(?<relation>[a-zA-Z0-9_.-]+)"?\s+does not exist/i;
 
 const ORDER_DETAIL_COLUMNS = [
   "id",
@@ -266,6 +289,12 @@ function getErrorMessage(error: unknown, fallback: string) {
   }
 
   return fallback;
+}
+
+function isMissingRelation(error: unknown, relation: string) {
+  const message = String((error as { message?: string } | null)?.message ?? "");
+  const match = message.match(MISSING_RELATION_PATTERN);
+  return match?.groups?.relation === relation;
 }
 
 function peso(n: number) {
@@ -510,7 +539,96 @@ function isAutomaticEntry(entry: CashflowEntry) {
   );
 }
 
-function normalizeCashflowEntries(rawEntries: CashflowEntry[]) {
+function getInventoryEventDedupKey(event: InventoryCostEvent) {
+  const stockMovementId = String(event.stock_movement_id ?? "").trim();
+  if (stockMovementId) {
+    return `stock-movement:${stockMovementId}`;
+  }
+
+  return `inventory-event:${event.id}`;
+}
+
+function shouldPreferInventoryEventRecord(
+  current: InventoryCostEvent,
+  existing: InventoryCostEvent,
+) {
+  const currentHasMovement = Boolean(String(current.stock_movement_id ?? "").trim());
+  const existingHasMovement = Boolean(String(existing.stock_movement_id ?? "").trim());
+  if (currentHasMovement !== existingHasMovement) {
+    return currentHasMovement;
+  }
+
+  const currentSource = String(current.source_status ?? "").trim().toUpperCase();
+  const existingSource = String(existing.source_status ?? "").trim().toUpperCase();
+  if (currentSource !== existingSource) {
+    if (currentSource === "CANONICAL") return true;
+    if (existingSource === "CANONICAL") return false;
+  }
+
+  const existingTs = new Date(existing.created_at).getTime();
+  const currentTs = new Date(current.created_at).getTime();
+  return Number.isFinite(currentTs) && (!Number.isFinite(existingTs) || currentTs < existingTs);
+}
+
+function normalizeInventoryCostEvents(rawEvents: InventoryCostEvent[]) {
+  const deduped = new Map<string, InventoryCostEvent>();
+
+  for (const event of rawEvents) {
+    const normalized: InventoryCostEvent = {
+      ...event,
+      qty_added: Number(event.qty_added ?? 0),
+      unit_cost: Number(event.unit_cost ?? 0),
+      subtotal: Number(event.subtotal ?? 0),
+      effective_expense_qty:
+        event.effective_expense_qty == null
+          ? null
+          : Number(event.effective_expense_qty),
+      effective_removed_qty:
+        event.effective_removed_qty == null
+          ? null
+          : Number(event.effective_removed_qty),
+      effective_expense_subtotal:
+        event.effective_expense_subtotal == null
+          ? null
+          : Number(event.effective_expense_subtotal),
+      current_qty:
+        event.current_qty == null ? null : Number(event.current_qty),
+      effective_consumed_qty:
+        event.effective_consumed_qty == null
+          ? null
+          : Number(event.effective_consumed_qty),
+      effective_remaining_qty:
+        event.effective_remaining_qty == null
+          ? null
+          : Number(event.effective_remaining_qty),
+      manual_removed_qty:
+        event.manual_removed_qty == null ? null : Number(event.manual_removed_qty),
+      sold_or_sellout_qty:
+        event.sold_or_sellout_qty == null ? null : Number(event.sold_or_sellout_qty),
+    };
+    const key = getInventoryEventDedupKey(normalized);
+    const existing = deduped.get(key);
+    if (!existing) {
+      deduped.set(key, normalized);
+      continue;
+    }
+
+    if (shouldPreferInventoryEventRecord(normalized, existing)) {
+      deduped.set(key, normalized);
+    }
+  }
+
+  return Array.from(deduped.values()).sort(
+    (a, b) =>
+      new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime() ||
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  ).filter((event) => (event.effective_expense_qty ?? event.qty_added) > 0);
+}
+
+function normalizeCashflowEntries(
+  rawEntries: CashflowEntry[],
+  inventoryRollupsByDate: Map<string, InventoryCashflowDailyRollup> = new Map(),
+) {
   const entries = rawEntries.map((entry) => ({
     ...entry,
     amount: Number(entry.amount ?? 0),
@@ -538,14 +656,29 @@ function normalizeCashflowEntries(rawEntries: CashflowEntry[]) {
     );
 
     if (existingSubtotal) {
+      const rollup = inventoryRollupsByDate.get(entryDate);
       combinedInventoryEntries.set(entryDate, {
         ...existingSubtotal,
+        amount: rollup?.amount ?? existingSubtotal.amount,
         title: "Inventory subtotal",
-        notes: existingSubtotal.notes || "Auto-updated from same-day inventory additions.",
+        notes:
+          existingSubtotal.notes ||
+          "Auto-updated from same-day inventory additions.",
+        source_meta: rollup
+          ? {
+              ...(existingSubtotal.source_meta ?? {}),
+              event_count: rollup.event_count,
+              units_added: rollup.units_added,
+              on_hand_units: rollup.on_hand_units,
+              consumed_units: rollup.consumed_units,
+              rollup_source: "inventory_cost_event_effective",
+            }
+          : existingSubtotal.source_meta,
       });
       continue;
     }
 
+    const rollup = inventoryRollupsByDate.get(entryDate);
     const latestEntry = sameDayInventoryEntries.reduce((latest, current) =>
       new Date(current.created_at).getTime() > new Date(latest.created_at).getTime() ? current : latest
     );
@@ -553,10 +686,22 @@ function normalizeCashflowEntries(rawEntries: CashflowEntry[]) {
       ...latestEntry,
       id: `inventory-daily-${entryDate}`,
       title: "Inventory subtotal",
-      amount: sameDayInventoryEntries.reduce((sum, entry) => sum + entry.amount, 0),
+      amount:
+        rollup?.amount ??
+        sameDayInventoryEntries.reduce((sum, entry) => sum + entry.amount, 0),
       notes: "Auto-updated from same-day inventory additions.",
       source_type: "INVENTORY_DAILY_SUBTOTAL",
       source_key: entryDate,
+      source_meta: rollup
+        ? {
+            ...(latestEntry.source_meta ?? {}),
+            event_count: rollup.event_count,
+            units_added: rollup.units_added,
+            on_hand_units: rollup.on_hand_units,
+            consumed_units: rollup.consumed_units,
+            rollup_source: "inventory_cost_event_effective",
+          }
+        : latestEntry.source_meta,
     });
   }
 
@@ -589,6 +734,23 @@ function getInventoryEventFormState(event: InventoryCostEvent): InventoryEventFo
     unit_cost: String(event.unit_cost),
     movement_type: event.movement_type,
   };
+}
+
+function formatInventoryLifecycle(status: string | null | undefined) {
+  switch (status) {
+    case "ON_HAND":
+      return "on hand";
+    case "PARTIAL":
+      return "partially on hand";
+    case "SOLD":
+      return "sold";
+    case "REMOVED":
+      return "manually reduced";
+    case "CONSUMED":
+      return "sold or manually reduced";
+    default:
+      return null;
+  }
 }
 
 export default function AdminCashflowPage() {
@@ -666,7 +828,39 @@ export default function AdminCashflowPage() {
       return;
     }
 
-    setEntries(normalizeCashflowEntries((data as CashflowEntry[] | null) ?? []));
+    let inventoryRollupsByDate = new Map<string, InventoryCashflowDailyRollup>();
+    let rollupQuery = supabase
+      .from("inventory_cashflow_daily_rollup")
+      .select("entry_date, amount, event_count, units_added, on_hand_units, consumed_units");
+
+    if (fromDate) rollupQuery = rollupQuery.gte("entry_date", fromDate);
+    if (toDate) rollupQuery = rollupQuery.lte("entry_date", toDate);
+
+    const { data: rollupData, error: rollupError } = await rollupQuery;
+    if (!rollupError) {
+      inventoryRollupsByDate = new Map(
+        ((rollupData as InventoryCashflowDailyRollup[] | null) ?? []).map((row) => [
+          row.entry_date,
+          {
+            entry_date: row.entry_date,
+            amount: Number(row.amount ?? 0),
+            event_count: Number(row.event_count ?? 0),
+            units_added: Number(row.units_added ?? 0),
+            on_hand_units: Number(row.on_hand_units ?? 0),
+            consumed_units: Number(row.consumed_units ?? 0),
+          },
+        ])
+      );
+    } else if (!isMissingRelation(rollupError, "inventory_cashflow_daily_rollup")) {
+      setError(rollupError.message || "Failed to load inventory rollups.");
+    }
+
+    setEntries(
+      normalizeCashflowEntries(
+        (data as CashflowEntry[] | null) ?? [],
+        inventoryRollupsByDate
+      )
+    );
     setLoading(false);
   }, [categoryFilter, flowFilter, fromDate, toDate]);
 
@@ -1063,7 +1257,7 @@ export default function AdminCashflowPage() {
         entry.source_type === "INVENTORY_DAILY_SUBTOTAL"
       ) {
         let query = supabase
-          .from("inventory_cost_events")
+          .from("inventory_cost_event_effective")
           .select("*")
           .order("occurred_at", { ascending: false });
 
@@ -1073,15 +1267,33 @@ export default function AdminCashflowPage() {
           query = query.eq("entry_date", entry.entry_date);
         }
 
-        const { data: eventData, error: eventError } = await query;
-        if (eventError) throw eventError;
+        let events: InventoryCostEvent[] = [];
+        const { data: effectiveEventData, error: effectiveEventError } = await query;
 
-        const events = ((eventData as InventoryCostEvent[] | null) ?? []).map((event) => ({
-          ...event,
-          qty_added: Number(event.qty_added ?? 0),
-          unit_cost: Number(event.unit_cost ?? 0),
-          subtotal: Number(event.subtotal ?? 0),
-        }));
+        if (!effectiveEventError) {
+          events = normalizeInventoryCostEvents(
+            (effectiveEventData as InventoryCostEvent[] | null) ?? []
+          );
+        } else if (isMissingRelation(effectiveEventError, "inventory_cost_event_effective")) {
+          let fallbackQuery = supabase
+            .from("inventory_cost_events")
+            .select("*")
+            .order("occurred_at", { ascending: false });
+
+          if (entry.source_type === "INVENTORY_COST_EVENT" && entry.source_key) {
+            fallbackQuery = fallbackQuery.eq("id", entry.source_key);
+          } else {
+            fallbackQuery = fallbackQuery.eq("entry_date", entry.entry_date);
+          }
+
+          const { data: rawEventData, error: rawEventError } = await fallbackQuery;
+          if (rawEventError) throw rawEventError;
+          events = normalizeInventoryCostEvents(
+            (rawEventData as InventoryCostEvent[] | null) ?? []
+          );
+        } else {
+          throw effectiveEventError;
+        }
 
         setDetailInventoryEvents(events);
 
@@ -1098,7 +1310,7 @@ export default function AdminCashflowPage() {
           variantIds.length
             ? supabase
                 .from("product_variants")
-                .select("id, condition, price, cost")
+                .select("id, condition, price, cost, qty")
                 .in("id", variantIds)
             : Promise.resolve({ data: [], error: null }),
         ]);
@@ -1119,6 +1331,7 @@ export default function AdminCashflowPage() {
               ...variant,
               price: variant.price == null ? null : Number(variant.price),
               cost: variant.cost == null ? null : Number(variant.cost),
+              qty: variant.qty == null ? null : Number(variant.qty),
             },
           ]))
         );
@@ -1356,16 +1569,6 @@ export default function AdminCashflowPage() {
     }
 
     const subtotal = qtyAdded * unitCost;
-    const sourceMeta = {
-      inventory_cost_event_id: event.id,
-      variant_id: event.variant_id,
-      product_id: event.product_id,
-      qty_added: qtyAdded,
-      unit_cost: unitCost,
-      movement_type: inventoryEventForm.movement_type,
-      timezone: "Asia/Manila",
-      ...(event.meta ?? {}),
-    };
 
     setDetailSaving(true);
     setDetailsError(null);
@@ -1380,27 +1583,13 @@ export default function AdminCashflowPage() {
       movement_type: inventoryEventForm.movement_type,
     };
 
-    const [{ error: eventError }, { error: cashflowError }] = await Promise.all([
-      supabase.from("inventory_cost_events").update(updatePayload).eq("id", event.id),
-      supabase
-        .from("cashflow_entries")
-        .update({
-          entry_date: inventoryEventForm.entry_date,
-          amount: subtotal,
-          category: "INVENTORY_COST",
-          flow_type: "EXPENSE",
-          title: "Inventory add",
-          notes: "Auto-generated from an inventory upload/add event.",
-          source_meta: sourceMeta,
-        })
-        .eq("source_type", "INVENTORY_COST_EVENT")
-        .eq("source_key", event.id),
-    ]);
+    const { error: eventError } = await supabase
+      .from("inventory_cost_events")
+      .update(updatePayload)
+      .eq("id", event.id);
 
-    if (eventError || cashflowError) {
-      setDetailsError(
-        eventError?.message || cashflowError?.message || "Failed to update inventory detail."
-      );
+    if (eventError) {
+      setDetailsError(eventError.message || "Failed to update inventory detail.");
       setDetailSaving(false);
       return;
     }
@@ -3113,6 +3302,10 @@ export default function AdminCashflowPage() {
                   detailInventoryEvents.map((event) => {
                     const product = detailProducts[event.product_id];
                     const variant = detailVariants[event.variant_id];
+                    const lifecycleLabel = formatInventoryLifecycle(event.lifecycle_status);
+                    const displayQty = event.effective_expense_qty ?? event.qty_added;
+                    const displaySubtotal =
+                      event.effective_expense_subtotal ?? event.subtotal;
                     const title =
                       product?.title ||
                       `${product?.brand ?? ""} ${product?.model ?? ""}`.trim() ||
@@ -3134,12 +3327,25 @@ export default function AdminCashflowPage() {
                               {" • "}
                               {formatDateTime(event.occurred_at)}
                             </div>
+                            {lifecycleLabel ? (
+                              <div className="mt-1 text-[11px] text-white/42">
+                                {lifecycleLabel}
+                                {event.effective_remaining_qty != null
+                                  ? ` • ${event.effective_remaining_qty}/${displayQty} still in stock`
+                                  : ""}
+                                {event.lifecycle_status === "REMOVED" &&
+                                (event.effective_removed_qty ?? event.manual_removed_qty) != null
+                                  ? ` • ${event.effective_removed_qty ?? event.manual_removed_qty} reduced manually`
+                                  : ""}
+                                {variant?.qty != null ? ` • current variant stock ${variant.qty}` : ""}
+                              </div>
+                            ) : null}
                           </div>
                           <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                             <div className="text-right">
-                              <div className="text-sm font-medium text-white">{peso(event.subtotal)}</div>
+                              <div className="text-sm font-medium text-white">{peso(displaySubtotal)}</div>
                               <div className="text-xs text-white/50">
-                                {event.qty_added} x {peso(event.unit_cost)}
+                                {displayQty} x {peso(event.unit_cost)}
                               </div>
                             </div>
                             <Button

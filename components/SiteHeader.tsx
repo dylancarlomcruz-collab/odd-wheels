@@ -71,7 +71,7 @@ const NOTICE_SUPPRESSED_STORAGE_KEY = "oddwheels:suppressed-notice";
 const SHOP_SORT_OPTIONS: Array<{ value: "relevance" | "newest" | "popular"; label: string }> = [
   { value: "relevance", label: "Relevance" },
   { value: "newest", label: "Newest" },
-  { value: "popular", label: "Most Popular" },
+  { value: "popular", label: "Rarity" },
 ];
 export function SiteHeader() {
   const { user } = useAuth();

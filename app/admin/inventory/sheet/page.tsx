@@ -86,7 +86,10 @@ type CardGroupMode =
   | "rarity_tag"
   | "none";
 
-type GridPageGroupMode = "download_category" | "rarity_tag";
+type GridPageGroupMode =
+  | "download_category"
+  | "rarity_tag"
+  | "rarity_and_new_arrivals";
 
 const PAGE_SIZE = 200;
 const EXPORT_PAGE_SIZE = 1000;
@@ -731,6 +734,26 @@ function buildExportRowsForDownload(rows: SheetRow[]): ExportRow[] {
   return result;
 }
 
+function buildExportSummaryMap(rows: SheetRow[]) {
+  const summaries = buildExportRowsForDownload(rows);
+  const map = new Map<string, ExportRow>();
+  for (const summary of summaries) {
+    const productId = String(summary.product?.id ?? "").trim();
+    if (!productId) continue;
+    map.set(productId, summary);
+  }
+  return map;
+}
+
+function getExportSummaryForRow(
+  row: SheetRow,
+  summaryMap?: Map<string, ExportRow> | null
+) {
+  const productId = String(row.product?.id ?? "").trim();
+  if (!productId || !summaryMap) return null;
+  return summaryMap.get(productId) ?? null;
+}
+
 function formatExportPrice(row: ExportRow) {
   const min = row.price_min;
   const max = row.price_max;
@@ -740,6 +763,17 @@ function formatExportPrice(row: ExportRow) {
   }
   const price = min ?? max;
   return price === null ? "-" : formatPHP(price);
+}
+
+function formatSheetRowExportPrice(
+  row: SheetRow,
+  summaryMap?: Map<string, ExportRow> | null
+) {
+  const summary = getExportSummaryForRow(row, summaryMap);
+  if (summary) return formatExportPrice(summary);
+  return row.price === null || row.price === undefined
+    ? "-"
+    : formatPHP(Number(row.price));
 }
 
 function formatExportCondition(row: ExportRow) {
@@ -757,6 +791,10 @@ function getRowProductTagLabels(row: { product: SheetRow["product"] }) {
 
 function getRowRarityCategories(row: { product: SheetRow["product"] }) {
   return getRowProductTagLabels(row);
+}
+
+function getPrimaryRowRarityCategory(row: { product: SheetRow["product"] }) {
+  return getRowRarityCategories(row)[0] ?? null;
 }
 
 function formatRowProductTags(row: { product: SheetRow["product"] }) {
@@ -1817,7 +1855,8 @@ function getNoisePattern(ctx: CanvasRenderingContext2D) {
 function renderCardCanvas(
   ctx: CanvasRenderingContext2D,
   row: SheetRow,
-  image: CanvasImageSource | null
+  image: CanvasImageSource | null,
+  options?: { summaryMap?: Map<string, ExportRow> | null }
 ) {
   const size = CARD_EXPORT_SIZE;
   const primaryImageSpec = getPrimaryImageSpec(row);
@@ -1995,10 +2034,7 @@ function renderCardCanvas(
   ctx.fillText(condition, pillX + pillPaddingX, pillY + pillHeight / 2);
   ctx.restore();
 
-  const priceLabel =
-    row.price === null || row.price === undefined
-      ? "-"
-      : formatPHP(Number(row.price));
+  const priceLabel = formatSheetRowExportPrice(row, options?.summaryMap);
   ctx.save();
   ctx.font = '800 60px "Arial Black", Impact, sans-serif';
   ctx.fillStyle = "rgba(255,198,106,0.98)";
@@ -2858,6 +2894,7 @@ export default function InventorySheetPage() {
         "Photo URL",
       ];
       const lines = [headers.join(",")];
+      const summaryMap = buildExportSummaryMap(exportRows);
       for (const row of exportRows) {
         const photoUrl = row.product?.image_urls?.[0] ?? "";
         const inferred = inferVehicleMakeModel(row);
@@ -2868,7 +2905,7 @@ export default function InventorySheetPage() {
           formatRowProductTags(row),
           formatCondition(row.condition),
           Number(row.qty ?? 0),
-          Number(row.price ?? 0),
+          formatSheetRowExportPrice(row, summaryMap),
           photoUrl,
         ];
         lines.push(values.map(escapeCsv).join(","));
@@ -2958,6 +2995,7 @@ export default function InventorySheetPage() {
         "Photo URL",
       ];
       const lines = [headers.join(",")];
+      const summaryMap = buildExportSummaryMap(exportRows);
 
       let addedPhotos = 0;
       let skippedPhotos = 0;
@@ -2994,7 +3032,7 @@ export default function InventorySheetPage() {
           formatRowProductTags(row),
           formatCondition(row.condition),
           Number(row.qty ?? 0),
-          Number(row.price ?? 0),
+          formatSheetRowExportPrice(row, summaryMap),
           photoFile,
           photoUrl,
         ];
@@ -3236,6 +3274,7 @@ export default function InventorySheetPage() {
       const grouped = groupRows(exportRows);
       const orderedRows = grouped.flatMap((group) => group.rows);
       const cardRows = mergeSealedUnsealedRows(orderedRows);
+      const summaryMap = buildExportSummaryMap(exportRows);
       const assignments = buildCardExportAssignments(cardRows, effectiveMode);
       const skippedNoRarity =
         effectiveMode === "rarity_tag" ? cardRows.length - assignments.length : 0;
@@ -3282,7 +3321,7 @@ export default function InventorySheetPage() {
         const image = imageUrl ? await loadImageBitmap(imageUrl) : null;
         if (!imageUrl || !image) missingImage += 1;
 
-        renderCardCanvas(ctx, row, image);
+        renderCardCanvas(ctx, row, image, { summaryMap });
         const blob = await canvasToBlob(canvas, "image/png");
         const safeName = fileSafe(formatExportFileName(row), 140) || "item";
         const condition = fileSafe(formatCompactCondition(row.condition));
@@ -3355,11 +3394,15 @@ export default function InventorySheetPage() {
     setError(null);
 
     try {
-      const sampleRow =
-        selectedRows[0] ??
-        applyCategoryFilter(rows, categoryFilter)[0] ??
-        applyCategoryFilter(await fetchAllRows(), categoryFilter)[0];
+      const sampleSourceRows =
+        selectedRows.length
+          ? selectedRows
+          : applyCategoryFilter(rows, categoryFilter).length
+            ? applyCategoryFilter(rows, categoryFilter)
+            : applyCategoryFilter(await fetchAllRows(), categoryFilter);
+      const sampleRow = sampleSourceRows[0];
       if (!sampleRow) throw new Error("No products available to preview.");
+      const summaryMap = buildExportSummaryMap(sampleSourceRows);
 
       const imageUrl = sampleRow.product?.image_urls?.[0] ?? "";
       const image = imageUrl ? await loadImageBitmap(imageUrl) : null;
@@ -3370,7 +3413,7 @@ export default function InventorySheetPage() {
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error("Canvas not available.");
 
-      renderCardCanvas(ctx, sampleRow, image);
+      renderCardCanvas(ctx, sampleRow, image, { summaryMap });
       const blob = await canvasToBlob(canvas, "image/png");
       const dataUrl = await blobToDataUrl(blob);
 
@@ -3752,7 +3795,14 @@ export default function InventorySheetPage() {
       value === "Truescales" || value.startsWith("Truescales ");
     const expanded = source.flatMap((row) => {
       if (mode === "rarity_tag") {
-        return getRowRarityCategories(row).map((group) => ({ group, row }));
+        const primaryRarity = getPrimaryRowRarityCategory(row);
+        return primaryRarity ? [{ group: primaryRarity, row }] : [];
+      }
+      if (mode === "rarity_and_new_arrivals") {
+        const primaryRarity = getPrimaryRowRarityCategory(row);
+        if (primaryRarity) return [{ group: primaryRarity, row }];
+        if (isNewArrivalRow(row)) return [{ group: NEW_ARRIVAL_CATEGORY, row }];
+        return [];
       }
       if (categoryFilter && categoryFilter !== ALL_CATEGORY) {
         if (!rowHasDownloadCategory(row, categoryFilter)) return [];
@@ -3764,19 +3814,27 @@ export default function InventorySheetPage() {
       const catA = a.group || "Others";
       const catB = b.group || "Others";
       const orderA =
-        mode === "rarity_tag"
+        mode === "rarity_tag" || mode === "rarity_and_new_arrivals"
           ? PRODUCT_SPECIAL_TAG_OPTIONS.findIndex(
               (option) => getProductSpecialTagLabel(option.key) === catA
             )
           : DOWNLOAD_CATEGORY_ORDER.indexOf(catA);
       const orderB =
-        mode === "rarity_tag"
+        mode === "rarity_tag" || mode === "rarity_and_new_arrivals"
           ? PRODUCT_SPECIAL_TAG_OPTIONS.findIndex(
               (option) => getProductSpecialTagLabel(option.key) === catB
             )
           : DOWNLOAD_CATEGORY_ORDER.indexOf(catB);
-      if (orderA !== orderB) {
-        return (orderA === -1 ? 999 : orderA) - (orderB === -1 ? 999 : orderB);
+      const normalizedOrderA =
+        mode === "rarity_and_new_arrivals" && catA === NEW_ARRIVAL_CATEGORY
+          ? -1
+          : orderA;
+      const normalizedOrderB =
+        mode === "rarity_and_new_arrivals" && catB === NEW_ARRIVAL_CATEGORY
+          ? -1
+          : orderB;
+      if (normalizedOrderA !== normalizedOrderB) {
+        return (normalizedOrderA === -1 ? 999 : normalizedOrderA) - (normalizedOrderB === -1 ? 999 : normalizedOrderB);
       }
       if (isTrueScaleGroup(catA) && isTrueScaleGroup(catB)) {
         const modelA = vehicleSortKey(formatVehicleDisplayModel(a.row));
@@ -4324,7 +4382,9 @@ export default function InventorySheetPage() {
         setExportMsg(
           mode === "rarity_tag"
             ? "No rows with rarity tags available for 4-up export."
-            : "No rows available for 4-up export."
+            : mode === "rarity_and_new_arrivals"
+              ? "No rows with rarity tags or new arrivals available for 4-up export."
+              : "No rows available for 4-up export."
         );
         return;
       }
@@ -4351,9 +4411,13 @@ export default function InventorySheetPage() {
         downloadName: singleFolder
           ? mode === "rarity_tag"
             ? "inventory-4up-pages-rarity-flat.zip"
+            : mode === "rarity_and_new_arrivals"
+              ? "inventory-4up-pages-rarity-new-arrivals-flat.zip"
             : "inventory-4up-pages-flat.zip"
           : mode === "rarity_tag"
             ? "inventory-4up-pages-rarity.zip"
+            : mode === "rarity_and_new_arrivals"
+              ? "inventory-4up-pages-rarity-new-arrivals.zip"
             : "inventory-9up-pages.zip",
         singleFolder,
       };
@@ -4382,6 +4446,13 @@ export default function InventorySheetPage() {
 
   async function downloadEightUpZipRarity() {
     await startEightUpZipDownload({ singleFolder: false, mode: "rarity_tag" });
+  }
+
+  async function downloadEightUpZipRarityAndNewArrivals() {
+    await startEightUpZipDownload({
+      singleFolder: false,
+      mode: "rarity_and_new_arrivals",
+    });
   }
 
   async function downloadEightUpZipSingleFolder() {
@@ -4620,6 +4691,24 @@ export default function InventorySheetPage() {
                   : hasPendingZipResume
                     ? `Resume 4-up ZIP (${pendingZipPagesCount})`
                     : "Download 4-up ZIP (Rarity)"}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  if (hasPendingZipResume) {
+                    setShowZipRetryModal(true);
+                    return;
+                  }
+                  void downloadEightUpZipRarityAndNewArrivals();
+                }}
+                disabled={exportingEightUpZip}
+              >
+                {exportingEightUpZip
+                  ? "Preparing..."
+                  : hasPendingZipResume
+                    ? `Resume 4-up ZIP (${pendingZipPagesCount})`
+                    : "Download 4-up ZIP (Rarity + New)"}
               </Button>
               <Button
                 variant="secondary"

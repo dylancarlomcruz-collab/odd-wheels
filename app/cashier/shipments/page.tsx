@@ -370,8 +370,14 @@ function getItemPrice(it: any): number {
 
 function getVariantUnitPrice(variant: any): number {
   const price = Number(variant?.price ?? 0);
-  const salePrice = Number(variant?.sale_price);
-  if (Number.isFinite(salePrice) && salePrice >= 0) return salePrice;
+  const rawSalePrice = variant?.sale_price;
+  const salePrice =
+    rawSalePrice === null || typeof rawSalePrice === "undefined"
+      ? null
+      : Number(rawSalePrice);
+  if (salePrice !== null && Number.isFinite(salePrice) && salePrice > 0) {
+    return salePrice;
+  }
 
   const discountPercent = Number(variant?.discount_percent ?? 0);
   if (Number.isFinite(discountPercent) && discountPercent > 0) {
@@ -2244,6 +2250,10 @@ export default function CashierShipmentsPage() {
 
     setAddingOrderItemId(match.variantId);
     try {
+      if (!Number.isFinite(match.unitPrice) || match.unitPrice <= 0) {
+        throw new Error("This inventory item has no valid selling price.");
+      }
+
       const { data: variantRow, error: variantError } = await supabase
         .from("product_variants")
         .select("id,qty")
@@ -2285,6 +2295,8 @@ export default function CashierShipmentsPage() {
           .from("order_items")
           .update({
             qty: nextQty,
+            unit_price: existingUnitPrice,
+            price_each: existingUnitPrice,
             line_total: nextLineTotal,
           })
           .eq("id", existingItem.id);

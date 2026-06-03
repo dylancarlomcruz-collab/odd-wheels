@@ -10,6 +10,14 @@ export const PRODUCT_SPECIAL_TAG_OPTIONS = [
 export type ProductSpecialTag =
   (typeof PRODUCT_SPECIAL_TAG_OPTIONS)[number]["key"];
 
+export const PRODUCT_RARITY_SORT_ORDER = [
+  "chase",
+  "limited_edition",
+  "exclusive",
+  "rare",
+  "discontinued",
+] as const satisfies readonly ProductSpecialTag[];
+
 export type ProductSpecialTagStyle = {
   displayClassName: string;
   pickerClassName: string;
@@ -107,6 +115,9 @@ const PRODUCT_SPECIAL_TAG_ALIAS_MAP = new Map<string, ProductSpecialTag>([
   ["discontinued", "discontinued"],
   ["discontinue", "discontinued"],
 ]);
+const PRODUCT_RARITY_SORT_RANK = new Map<ProductSpecialTag, number>(
+  PRODUCT_RARITY_SORT_ORDER.map((tag, index) => [tag, index] as const)
+);
 const NEW_RELEASE_WINDOW_MS = 1000 * 60 * 60 * 24 * 30;
 
 function normalizeTagValue(value: string | null | undefined) {
@@ -161,6 +172,39 @@ export function getProductSpecialTagLabel(tag: ProductSpecialTag) {
 
 export function getProductSpecialTagStyle(tag: ProductSpecialTag) {
   return PRODUCT_SPECIAL_TAG_STYLES[tag];
+}
+
+export function getProductRaritySortTags(
+  values: ReadonlyArray<string | null | undefined> | null | undefined
+) {
+  const tags = normalizeProductSpecialTags(values);
+  return PRODUCT_RARITY_SORT_ORDER.filter((tag) => tags.includes(tag));
+}
+
+export function compareProductRarityTags(
+  aValues: ReadonlyArray<string | null | undefined> | null | undefined,
+  bValues: ReadonlyArray<string | null | undefined> | null | undefined
+) {
+  const aTags = getProductRaritySortTags(aValues);
+  const bTags = getProductRaritySortTags(bValues);
+
+  if (aTags.length !== bTags.length) {
+    return bTags.length - aTags.length;
+  }
+
+  const maxLength = Math.max(aTags.length, bTags.length);
+  for (let index = 0; index < maxLength; index += 1) {
+    const aRank = PRODUCT_RARITY_SORT_RANK.get(aTags[index] as ProductSpecialTag);
+    const bRank = PRODUCT_RARITY_SORT_RANK.get(bTags[index] as ProductSpecialTag);
+    if (aRank == null && bRank == null) continue;
+    if (aRank == null) return 1;
+    if (bRank == null) return -1;
+    if (aRank !== bRank) {
+      return aRank - bRank;
+    }
+  }
+
+  return 0;
 }
 
 export function inferProductSpecialTags(input: {

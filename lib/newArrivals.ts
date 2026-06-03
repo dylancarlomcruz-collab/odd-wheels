@@ -1,4 +1,4 @@
-export const NEW_ARRIVAL_WINDOW_DAYS = 5;
+export const NEW_ARRIVAL_WINDOW_DAYS = 8;
 export const NEW_ARRIVAL_WINDOW_MS =
   NEW_ARRIVAL_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
