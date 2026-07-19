@@ -137,6 +137,7 @@ type ShipClass =
   | "MINI_GT"
   | "SMALL_BOX_FIGURE"
   | "KAIDO"
+  | "BBR"
   | "POPRACE"
   | "TARMAC_BOX"
   | "ACRYLIC_TRUE_SCALE"
@@ -309,6 +310,7 @@ const BULK_SHIP_CLASS_FILTER_OPTIONS: Array<{ value: ShipClass; label: string }>
   { value: "MINI_GT", label: "Mini GT" },
   { value: "SMALL_BOX_FIGURE", label: "Small Box Figure" },
   { value: "KAIDO", label: "Kaido" },
+  { value: "BBR", label: "BBR" },
   { value: "POPRACE", label: "Pop Race" },
   { value: "TARMAC_BOX", label: "Tarmac Box" },
   { value: "ACRYLIC_TRUE_SCALE", label: "Acrylic True Scale" },
@@ -329,6 +331,7 @@ const DEFAULT_COST_BY_SHIP_CLASS: Partial<Record<ShipClass, string>> = {
   TARMAC_ACRYLIC: "700",
   MINI_GT: "450",
   SMALL_BOX_FIGURE: "450",
+  BBR: "500",
   POPRACE: "500",
   TARMAC_BOX: "500",
   KAIDO: "500",
@@ -1096,6 +1099,7 @@ function VariantDraftPanel({
           <option value="MINI_GT">Mini GT</option>
           <option value="SMALL_BOX_FIGURE">Small Box Figure</option>
           <option value="KAIDO">Kaido</option>
+          <option value="BBR">BBR</option>
           <option value="POPRACE">Pop Race</option>
           <option value="TARMAC_BOX">Tarmac Box</option>
           <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
@@ -7178,6 +7182,7 @@ export default function AdminInventoryPage() {
                         <option value="MINI_GT">MINI_GT</option>
                         <option value="SMALL_BOX_FIGURE">SMALL_BOX_FIGURE</option>
                         <option value="KAIDO">KAIDO</option>
+                        <option value="BBR">BBR</option>
                         <option value="POPRACE">POPRACE</option>
                         <option value="TARMAC_BOX">TARMAC_BOX</option>
                         <option value="ACRYLIC_TRUE_SCALE">
@@ -7353,6 +7358,7 @@ export default function AdminInventoryPage() {
                 <option value="MINI_GT">Mini GT</option>
                 <option value="SMALL_BOX_FIGURE">Small Box Figure</option>
                 <option value="KAIDO">Kaido</option>
+                <option value="BBR">BBR</option>
                 <option value="POPRACE">Pop Race</option>
                 <option value="TARMAC_BOX">Tarmac Box</option>
                 <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
@@ -7603,6 +7609,7 @@ export default function AdminInventoryPage() {
                 <option value="MINI_GT">Mini GT</option>
                 <option value="SMALL_BOX_FIGURE">Small Box Figure</option>
                 <option value="KAIDO">Kaido</option>
+                <option value="BBR">BBR</option>
                 <option value="POPRACE">Pop Race</option>
                 <option value="TARMAC_BOX">Tarmac Box</option>
                 <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>
@@ -8396,6 +8403,7 @@ export default function AdminInventoryPage() {
                     <option value="MINI_GT">Mini GT</option>
                     <option value="SMALL_BOX_FIGURE">Small Box Figure</option>
                     <option value="KAIDO">Kaido</option>
+                    <option value="BBR">BBR</option>
                     <option value="POPRACE">Pop Race</option>
                     <option value="TARMAC_BOX">Tarmac Box</option>
                     <option value="ACRYLIC_TRUE_SCALE">Acrylic True-Scale</option>

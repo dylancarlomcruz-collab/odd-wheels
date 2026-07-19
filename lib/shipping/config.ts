@@ -7,6 +7,7 @@ export type ShipClass =
   | "MINI_GT"
   | "SMALL_BOX_FIGURE"
   | "KAIDO"
+  | "BBR"
   | "POPRACE"
   | "TARMAC_BOX"
   | "ACRYLIC_TRUE_SCALE"
@@ -53,6 +54,7 @@ export const JNT_CAPACITY: Record<JntPouch, Record<ShipClass, number>> = {
     MINI_GT: 2,
     SMALL_BOX_FIGURE: 2,
     KAIDO: 2,
+    BBR: 2,
     POPRACE: 2,
     TARMAC_BOX: 2,
     ACRYLIC_TRUE_SCALE: 1,
@@ -71,6 +73,7 @@ export const JNT_CAPACITY: Record<JntPouch, Record<ShipClass, number>> = {
     MINI_GT: 8,
     SMALL_BOX_FIGURE: 8,
     KAIDO: 8,
+    BBR: 8,
     POPRACE: 8,
     TARMAC_BOX: 8,
     ACRYLIC_TRUE_SCALE: 4,
@@ -92,6 +95,7 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     MINI_GT: 2,
     SMALL_BOX_FIGURE: 2,
     KAIDO: 1,
+    BBR: 1,
     POPRACE: 1,
     TARMAC_BOX: 1,
     ACRYLIC_TRUE_SCALE: 1,
@@ -110,6 +114,7 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     MINI_GT: 9,
     SMALL_BOX_FIGURE: 9,
     KAIDO: 4,
+    BBR: 4,
     POPRACE: 4,
     TARMAC_BOX: 4,
     ACRYLIC_TRUE_SCALE: 4,
@@ -128,6 +133,7 @@ export const LBC_CAPACITY: Record<LbcPackage, Record<ShipClass, number>> = {
     MINI_GT: Math.floor(9 * 3.5),
     SMALL_BOX_FIGURE: Math.floor(9 * 3.5),
     KAIDO: Math.floor(4 * 3.5),
+    BBR: Math.floor(4 * 3.5),
     POPRACE: Math.floor(4 * 3.5),
     TARMAC_BOX: Math.floor(4 * 3.5),
     ACRYLIC_TRUE_SCALE: Math.floor(4 * 3.5),

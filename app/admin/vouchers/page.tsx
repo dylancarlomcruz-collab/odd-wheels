@@ -58,6 +58,7 @@ const SHIP_CLASS_OPTIONS: ShipClass[] = [
   "MINI_GT",
   "SMALL_BOX_FIGURE",
   "KAIDO",
+  "BBR",
   "POPRACE",
   "TARMAC_BOX",
   "ACRYLIC_TRUE_SCALE",
@@ -82,6 +83,8 @@ const COURIER_OPTIONS: Array<{ value: Courier; label: string }> = [
 
 function formatShipClassLabel(value: string) {
   switch (value) {
+    case "BBR":
+      return "BBR";
     case "ACRYLIC_TRUE_SCALE":
       return "Acrylic True-Scale";
     case "TARMAC_BOX":

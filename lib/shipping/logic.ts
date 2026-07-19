@@ -7,6 +7,7 @@ export function emptyShipCounts(): ShipCounts {
     MINI_GT: 0,
     SMALL_BOX_FIGURE: 0,
     KAIDO: 0,
+    BBR: 0,
     POPRACE: 0,
     TARMAC_BOX: 0,
     ACRYLIC_TRUE_SCALE: 0,

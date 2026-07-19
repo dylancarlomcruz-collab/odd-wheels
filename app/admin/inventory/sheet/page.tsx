@@ -123,6 +123,7 @@ const BOXED_TRUESCALE_BRANDS = new Set(
   [
     "Mini GT",
     "Kaido House",
+    "BBR",
     "Pop Race",
     "Tarmac",
     "Tarmac Works",
@@ -137,7 +138,7 @@ const BOXED_TRUESCALE_ACRYLIC_OVERRIDES = new Set(
   )
 );
 const TRUESCALE_NO_MARKET_SPLIT_BRANDS = new Set(
-  ["Kaido House", "Pop Race"].map((brand) =>
+  ["Kaido House", "BBR", "Pop Race"].map((brand) =>
     brand.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
   )
 );
@@ -447,6 +448,7 @@ function isInStockRow(row: SheetRow) {
 const FALLBACK_DIECAST_BRANDS = [
   "Mini GT",
   "Kaido House",
+  "BBR",
   "Inno64",
   "Tarmac",
   "Tarmac Works",

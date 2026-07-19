@@ -3,6 +3,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
+import { Download, MessageCircle } from "lucide-react";
 import { useCart, type CartLine } from "@/hooks/useCart";
 import ProductCard, { type ShopProduct } from "@/components/ProductCard";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
@@ -56,11 +57,13 @@ import { supabase } from "@/lib/supabase/browser";
 import { useProfile } from "@/hooks/useProfile";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { normalizeShippingDefaults } from "@/lib/shippingDefaults";
+import { saveGuestOrderAccess } from "@/lib/guestOrderAccess";
 import {
   resolveShopControls,
   SHOP_ADD_TO_CART_DISABLED_MESSAGE,
   SHOP_CHECKOUT_DISABLED_MESSAGE,
 } from "@/lib/shopControls";
+import { createOrderFromCart } from "@/lib/orders";
 
 function normalizeValue(value: string | null | undefined) {
   const normalized = String(value ?? "").trim().toUpperCase();
@@ -140,7 +143,6 @@ const ADMIN_SHIPPING_METHODS: AdminShippingMethod[] = [
 ];
 const FACEBOOK_CHECKOUT_URL =
   "https://www.facebook.com/messages/t/108966858477162";
-const FACEBOOK_CHECKOUT_MOBILE_URL = "https://m.me/108966858477162";
 const FACEBOOK_CHECKOUT_STORAGE_KEY = "oddwheels:facebook-checkout";
 const FACEBOOK_LBC_BRANCH_CITY_DATALIST_ID =
   "facebook-lbc-branch-city-options";
@@ -333,6 +335,11 @@ type FacebookCheckoutSnapshotPayload = {
   generatedAt: Date;
 };
 
+type FacebookSnapshotResult = {
+  blob: Blob;
+  fileName: string;
+};
+
 type InvoicePdfRenderOptions = {
   includeImages: boolean;
   imageQuality: number;
@@ -352,6 +359,11 @@ const CART_INVOICE_RENDER_STAGES: InvoicePdfRenderOptions[] = [
 function sanitizeFileName(value: string) {
   const cleaned = value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "").trim();
   return cleaned || "customer";
+}
+
+function getFacebookSnapshotFileName(customerName: string) {
+  const fileDate = new Date().toISOString().slice(0, 10);
+  return `facebook-checkout-${sanitizeFileName(customerName)}-${fileDate}.png`;
 }
 
 function pdfMoney(value: number) {
@@ -1165,6 +1177,14 @@ function resolveOrderId(data: any): string | null {
   return null;
 }
 
+function resolveGuestOrderAccessToken(data: any): string | null {
+  if (!data || typeof data !== "object") return null;
+  const token = String(
+    data.guest_access_token ?? data.order?.guest_access_token ?? ""
+  ).trim();
+  return token || null;
+}
+
 function CartContent() {
   const { lines, loading, updateQty, updateProtector, remove, add, reload, isLoggedIn } =
     useCart();
@@ -1219,6 +1239,12 @@ function CartContent() {
     );
   const [downloadingFacebookSnapshot, setDownloadingFacebookSnapshot] =
     React.useState(false);
+  const [facebookSnapshotPreviewUrl, setFacebookSnapshotPreviewUrl] =
+    React.useState<string | null>(null);
+  const [facebookSnapshotFileName, setFacebookSnapshotFileName] =
+    React.useState<string | null>(null);
+  const facebookSnapshotGenerationRef = React.useRef(0);
+  const [creatingFacebookOrder, setCreatingFacebookOrder] = React.useState(false);
   const [openingFacebookMessenger, setOpeningFacebookMessenger] =
     React.useState(false);
   const adminCustomerSuggestionListId = "admin-cart-customer-suggestions";
@@ -1256,6 +1282,20 @@ function CartContent() {
 
     return schedule;
   }, [settings?.pickup_schedule, settings?.pickup_schedule_text]);
+  const clearFacebookSnapshot = React.useCallback(() => {
+    setFacebookSnapshotPreviewUrl((previousUrl) => {
+      if (previousUrl) {
+        URL.revokeObjectURL(previousUrl);
+      }
+      return null;
+    });
+    setFacebookSnapshotFileName(null);
+  }, []);
+  React.useEffect(() => {
+    return () => {
+      clearFacebookSnapshot();
+    };
+  }, [clearFacebookSnapshot]);
   const pickupDayOptions = React.useMemo(
     () =>
       PICKUP_DAYS.filter((day) => (pickupSchedule[day.key] ?? []).length > 0),
@@ -2391,17 +2431,28 @@ function CartContent() {
     }
   }
 
-  async function onDownloadFacebookSnapshot() {
-    if (facebookCheckoutDisabled) return;
+  function closeFacebookCheckoutModal() {
+    setFacebookCheckoutOpen(false);
+    clearFacebookSnapshot();
+  }
+
+  const buildFacebookSnapshot = React.useCallback(async (
+    options: { silent?: boolean } = {}
+  ): Promise<FacebookSnapshotResult | null> => {
+    const { silent = false } = options;
+    if (facebookCheckoutDisabled) return null;
     if (facebookCheckoutErrors.length > 0) {
-      toast({
-        intent: "error",
-        title: "Missing information",
-        message: facebookCheckoutErrors[0],
-      });
-      return false;
+      if (!silent) {
+        toast({
+          intent: "error",
+          title: "Missing information",
+          message: facebookCheckoutErrors[0],
+        });
+      }
+      return null;
     }
 
+    const generationId = ++facebookSnapshotGenerationRef.current;
     setDownloadingFacebookSnapshot(true);
     try {
       const blob = await buildFacebookCheckoutSnapshotBlob({
@@ -2419,31 +2470,260 @@ function CartContent() {
         subtotalAmount: selectedSubtotal,
         generatedAt: new Date(),
       });
-      const fileDate = new Date().toISOString().slice(0, 10);
-      const fileName = `facebook-checkout-${sanitizeFileName(
+      const fileName = getFacebookSnapshotFileName(
         facebookCheckoutSummary.customerName
-      )}-${fileDate}.png`;
-      downloadBlobAsFile(blob, fileName);
+      );
+
+      if (generationId === facebookSnapshotGenerationRef.current) {
+        setFacebookSnapshotPreviewUrl((previousUrl) => {
+          if (previousUrl) {
+            URL.revokeObjectURL(previousUrl);
+          }
+          return URL.createObjectURL(blob);
+        });
+        setFacebookSnapshotFileName(fileName);
+      }
+
+      if (!silent) {
+        toast({
+          intent: "success",
+          title: "Snapshot ready",
+          message: "The preview is updated. Download it or attach it in Messenger.",
+        });
+      }
+      return { blob, fileName };
+    } catch (error: any) {
+      console.error(error);
+      if (!silent) {
+        toast({
+          intent: "error",
+          title: "Snapshot failed",
+          message: error?.message ?? "Unable to create the order snapshot image.",
+        });
+      }
+      return null;
+    } finally {
+      if (generationId === facebookSnapshotGenerationRef.current) {
+        setDownloadingFacebookSnapshot(false);
+      }
+    }
+  }, [
+    facebookCheckoutDisabled,
+    facebookCheckoutErrors,
+    facebookCheckoutSummary,
+    selectedInvoiceItems,
+    selectedLines,
+    selectedSubtotal,
+  ]);
+
+  React.useEffect(() => {
+    if (!facebookCheckoutOpen) return;
+    if (facebookCheckoutDisabled || facebookCheckoutErrors.length > 0) {
+      clearFacebookSnapshot();
+      setDownloadingFacebookSnapshot(false);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void buildFacebookSnapshot({ silent: true });
+    }, 220);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    buildFacebookSnapshot,
+    clearFacebookSnapshot,
+    facebookCheckoutDisabled,
+    facebookCheckoutErrors,
+    facebookCheckoutOpen,
+  ]);
+
+  async function onDownloadFacebookSnapshot() {
+    if (facebookCheckoutDisabled) return;
+    const snapshot = await buildFacebookSnapshot({ silent: true });
+    if (!snapshot) return;
+    downloadBlobAsFile(snapshot.blob, snapshot.fileName);
+    toast({
+      intent: "success",
+      title: "Snapshot downloaded",
+      message: "Your Facebook checkout snapshot has been saved.",
+    });
+  }
+
+  async function onCreateFacebookOrder() {
+    if (facebookCheckoutDisabled || creatingFacebookOrder) return;
+    if (facebookCheckoutErrors.length > 0) {
+      toast({
+        intent: "error",
+        title: "Missing information",
+        message: facebookCheckoutErrors[0],
+      });
+      return;
+    }
+
+    setCreatingFacebookOrder(true);
+    try {
+      const snapshot = await buildFacebookSnapshot({ silent: true });
+      const trimmedName = facebookCheckoutSummary.customerName.trim();
+      const trimmedContact = facebookCheckoutSummary.contactNumber.trim();
+      const trimmedNotes = facebookCheckoutSummary.notes.trim();
+      const shippingMethod = facebookCheckoutForm.shippingMethod;
+      let shippingDetails: Record<string, any>;
+
+      if (shippingMethod === "JNT") {
+        const houseStreetUnit = facebookCheckoutForm.jntHouseStreetUnit.trim();
+        const barangay = facebookCheckoutForm.jntBarangay.trim();
+        const city = facebookCheckoutForm.jntCity.trim();
+        const province = facebookCheckoutForm.jntProvince.trim();
+        const postalCode = facebookCheckoutForm.jntPostalCode.trim();
+        const fullAddress = [
+          houseStreetUnit,
+          barangay ? `Brgy ${barangay}` : "",
+          city,
+          province,
+          postalCode,
+        ]
+          .map((part) => part.trim())
+          .filter(Boolean)
+          .join(", ");
+
+        shippingDetails = {
+          source: "facebook_checkout",
+          method: "JNT",
+          receiver_name: trimmedName,
+          receiver_phone: trimmedContact,
+          phone: trimmedContact,
+          contact: trimmedContact,
+          house_street_unit: houseStreetUnit,
+          barangay,
+          city,
+          province,
+          postal_code: postalCode || null,
+          brgy: barangay,
+          address_line: [houseStreetUnit, barangay].filter(Boolean).join(", "),
+          full_address: fullAddress || null,
+          region: facebookCheckoutForm.shippingRegion,
+          package: facebookEffectiveJntPouch ?? facebookCheckoutForm.jntPouch,
+          notes: trimmedNotes || null,
+          snapshot_file_name: snapshot?.fileName ?? null,
+        };
+      } else if (shippingMethod === "LBC") {
+        shippingDetails = {
+          source: "facebook_checkout",
+          method: "LBC",
+          receiver_name: trimmedName,
+          receiver_phone: trimmedContact,
+          phone: trimmedContact,
+          contact: trimmedContact,
+          branch_name: facebookCheckoutForm.lbcBranchName.trim(),
+          branch_city: facebookCheckoutForm.lbcBranchCity.trim(),
+          region: facebookCheckoutForm.shippingRegion,
+          package: facebookEffectiveLbcPackage ?? facebookCheckoutForm.lbcPackage,
+          notes: trimmedNotes || null,
+          snapshot_file_name: snapshot?.fileName ?? null,
+        };
+      } else if (shippingMethod === "PICKUP") {
+        shippingDetails = {
+          source: "facebook_checkout",
+          method: "PICKUP",
+          receiver_name: trimmedName,
+          receiver_phone: trimmedContact,
+          phone: trimmedContact,
+          contact: trimmedContact,
+          pickup_location: PICKUP_LOCATION,
+          pickup_directory: PICKUP_DIRECTORY,
+          pickup_day: facebookCheckoutForm.pickupDay.trim(),
+          pickup_slot: facebookCheckoutForm.pickupSlot.trim(),
+          notes: trimmedNotes || null,
+          snapshot_file_name: snapshot?.fileName ?? null,
+        };
+      } else {
+        shippingDetails = {
+          source: "facebook_checkout",
+          method: "LALAMOVE",
+          receiver_name: trimmedName,
+          receiver_phone: trimmedContact,
+          phone: trimmedContact,
+          contact: trimmedContact,
+          region: facebookCheckoutForm.shippingRegion,
+          dropoff_address: facebookCheckoutForm.lalamoveAddress.trim(),
+          notes: trimmedNotes || null,
+          snapshot_file_name: snapshot?.fileName ?? null,
+        };
+      }
+
+      const order = await createOrderFromCart(
+        {
+          payment_method: "GCASH",
+          shipping_method: shippingMethod,
+          shipping_region:
+            shippingMethod === "PICKUP" ? null : facebookCheckoutForm.shippingRegion,
+          shipping_details: shippingDetails,
+          channel: "WEB",
+          create_as_pending_approval: true,
+          fees: {
+            shipping_fee: 0,
+            cop_fee: 0,
+            lalamove_fee: 0,
+            priority_fee: 0,
+            insurance_fee: 0,
+          },
+          shipping_discount: 0,
+          discount_total: 0,
+          priority_requested: false,
+          insurance_selected: false,
+          insurance_fee_user: 0,
+        },
+        selectedLines,
+        { guest: !isLoggedIn }
+      );
+
+      if (snapshot) {
+        downloadBlobAsFile(snapshot.blob, snapshot.fileName);
+      }
+
       toast({
         intent: "success",
-        title: "Snapshot downloaded",
-        message: "Attach the image when you message Odd Wheels on Facebook.",
+        title: "Order submitted",
+        message: "Your order is now pending admin approval.",
       });
-      return true;
+
+      closeFacebookCheckoutModal();
+      if (!isLoggedIn) {
+        for (const line of selectedLines) {
+          await remove(line.id);
+        }
+      }
+      await reload();
+
+      const orderId = resolveOrderId(order);
+      const guestAccessToken = resolveGuestOrderAccessToken(order);
+      if (!isLoggedIn && orderId && guestAccessToken) {
+        saveGuestOrderAccess(orderId, guestAccessToken);
+      }
+      if (typeof window !== "undefined") {
+        if (isLoggedIn) {
+          window.location.assign(orderId ? `/orders/${orderId}` : "/orders");
+        } else if (orderId && guestAccessToken) {
+          window.location.assign(
+            `/orders/${orderId}?access=${encodeURIComponent(guestAccessToken)}`
+          );
+        }
+      }
     } catch (error: any) {
       console.error(error);
       toast({
         intent: "error",
-        title: "Download failed",
-        message: error?.message ?? "Unable to create the order snapshot image.",
+        title: "Submit order failed",
+        message: error?.message ?? "Unable to submit the order.",
       });
-      return false;
     } finally {
-      setDownloadingFacebookSnapshot(false);
+      setCreatingFacebookOrder(false);
     }
   }
 
-  async function onDownloadSnapshotAndOpenMessenger() {
+  async function onOpenFacebookMessenger() {
     if (facebookCheckoutDisabled) return;
     if (facebookCheckoutErrors.length > 0) {
       toast({
@@ -2454,34 +2734,42 @@ function CartContent() {
       return;
     }
 
-    const isMobileMessengerLaunch =
-      /Android|iPhone|iPad|iPod/i.test(window.navigator.userAgent);
-    const messengerWindow = isMobileMessengerLaunch
-      ? null
-      : window.open(FACEBOOK_CHECKOUT_URL, "_blank", "noopener,noreferrer");
-    setOpeningFacebookMessenger(true);
-    try {
-      const downloaded = await onDownloadFacebookSnapshot();
-      if (!downloaded) return;
+    const messengerWindow = window.open("", "_blank");
+    if (!messengerWindow) {
+      toast({
+        intent: "error",
+        title: "Messenger popup blocked",
+        message: "Please allow popups for this site, then try again.",
+      });
+      return;
+    }
 
-      if (isMobileMessengerLaunch) {
-        window.location.assign(FACEBOOK_CHECKOUT_MOBILE_URL);
-        return;
-      }
+    messengerWindow.opener = null;
+    messengerWindow.document.title = "Opening Messenger...";
+    messengerWindow.document.body.innerHTML =
+      '<div style="font-family: system-ui, sans-serif; padding: 24px; color: #111;">Opening Odd Wheels Messenger chat...</div>';
 
-      if (!messengerWindow) {
+    if (!facebookSnapshotPreviewUrl) {
+      const snapshot = await buildFacebookSnapshot({ silent: true });
+      if (!snapshot) {
+        messengerWindow.close();
         toast({
           intent: "error",
-          title: "Messenger popup blocked",
-          message: "Please allow popups for this site, then try again.",
+          title: "Snapshot unavailable",
+          message: "Complete the details first so the order snapshot can be created.",
         });
         return;
       }
+    }
+
+    setOpeningFacebookMessenger(true);
+    try {
+      messengerWindow.location.href = FACEBOOK_CHECKOUT_URL;
       messengerWindow.focus();
       toast({
         intent: "success",
         title: "Continue in Messenger",
-        message: "Your snapshot was downloaded. Attach it in Facebook Messenger.",
+        message: "Attach the downloaded snapshot or preview image in Messenger and send it to Odd Wheels.",
       });
     } finally {
       setOpeningFacebookMessenger(false);
@@ -3778,51 +4066,84 @@ function CartContent() {
       {!isAdminMode ? (
         <ModalShell
           open={facebookCheckoutOpen}
-          onClose={() => setFacebookCheckoutOpen(false)}
+          onClose={closeFacebookCheckoutModal}
           title="Checkout via Facebook"
-          description="Fill in your shipping details, download a snapshot of your selected order, then continue in Messenger."
+          description="Fill in your shipping details, then submit the order so it appears in admin for approval. You can still download the snapshot or continue in Messenger."
           width="lg"
           footer={
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <Button
-                variant="secondary"
-                className="w-full sm:w-auto"
-                onClick={() => {
-                  const isMobileMessengerLaunch =
-                    /Android|iPhone|iPad|iPod/i.test(window.navigator.userAgent);
-                  if (isMobileMessengerLaunch) {
-                    window.location.assign(FACEBOOK_CHECKOUT_MOBILE_URL);
-                    return;
+            <div className="grid gap-2 sm:flex sm:items-center sm:justify-between sm:gap-3">
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-row">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={
+                    facebookCheckoutDisabled ||
+                    downloadingFacebookSnapshot ||
+                    creatingFacebookOrder ||
+                    openingFacebookMessenger ||
+                    !facebookSnapshotPreviewUrl
                   }
-                  window.open(
-                    FACEBOOK_CHECKOUT_URL,
-                    "_blank",
-                    "noopener,noreferrer",
-                  );
-                }}
-              >
-                Open Facebook Messenger
-              </Button>
-              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                  className="min-w-0"
+                  onClick={() => void onOpenFacebookMessenger()}
+                  aria-label="Message Odd Wheels in Facebook Messenger"
+                >
+                  {openingFacebookMessenger ? (
+                    "Opening..."
+                  ) : (
+                    <>
+                      <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                      <span className="sm:hidden">Messenger</span>
+                      <span className="hidden sm:inline">Message Odd Wheels</span>
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void onDownloadFacebookSnapshot()}
+                  disabled={
+                    facebookCheckoutDisabled ||
+                    downloadingFacebookSnapshot ||
+                    creatingFacebookOrder ||
+                    openingFacebookMessenger
+                  }
+                  className="min-w-0"
+                  aria-label="Download checkout snapshot"
+                >
+                  {downloadingFacebookSnapshot
+                    ? "Preparing..."
+                    : (
+                      <>
+                        <Download className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        <span className="sm:hidden">Snapshot</span>
+                        <span className="hidden sm:inline">Download snapshot</span>
+                      </>
+                    )}
+                </Button>
+              </div>
+              <div className="grid gap-2 sm:flex sm:w-auto sm:flex-row">
                 <Button
                   variant="ghost"
-                  onClick={() => setFacebookCheckoutOpen(false)}
-                  className="w-full sm:w-auto"
+                  size="sm"
+                  onClick={closeFacebookCheckoutModal}
+                  disabled={creatingFacebookOrder}
+                  className="hidden sm:inline-flex"
                 >
                   Close
                 </Button>
                 <Button
-                  onClick={() => void onDownloadSnapshotAndOpenMessenger()}
+                  onClick={() => void onCreateFacebookOrder()}
                   disabled={
                     facebookCheckoutDisabled ||
                     downloadingFacebookSnapshot ||
+                    creatingFacebookOrder ||
                     openingFacebookMessenger
                   }
                   className="w-full sm:w-auto"
                 >
-                  {downloadingFacebookSnapshot || openingFacebookMessenger
-                    ? "Preparing Messenger checkout..."
-                    : "Download snapshot and message"}
+                  {creatingFacebookOrder
+                    ? "Submitting order..."
+                    : "Submit Order"}
                 </Button>
               </div>
             </div>
@@ -4137,75 +4458,53 @@ function CartContent() {
                 </div>
               ) : (
                 <div className="rounded-2xl border border-sky-400/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
-                  Download the snapshot first, then attach it in Messenger so
-                  the team can review your selected items and shipping details.
+                  Fill in the required details and the preview will build automatically.
+                  You can then download it or attach it in Messenger.
                 </div>
               )}
             </div>
 
             <div className="space-y-4">
               <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] p-4">
-                <div className="text-xs font-medium uppercase tracking-[0.18em] text-white/45">
-                  Snapshot Preview
-                </div>
-                <div className="mt-2 text-lg font-semibold text-white">
-                  {facebookCheckoutSummary.customerName || "Your order"}
-                </div>
-                <div className="mt-1 text-sm text-white/65">
-                  {facebookCheckoutSummary.shippingMethodLabel}
-                </div>
-                <div className="mt-2 space-y-1 text-xs text-white/55">
-                  {facebookCheckoutSummary.shippingLines.length ? (
-                    facebookCheckoutSummary.shippingLines.slice(0, 4).map((line, index) => (
-                      <div key={`${line}-${index}`}>{line}</div>
-                    ))
-                  ) : (
-                    <div>Courier details will appear here.</div>
-                  )}
-                </div>
-                <div className="mt-4 space-y-3">
-                  {selectedInvoiceItems.map((item, index) => (
-                    <div
-                      key={`${item.name}-${index}`}
-                      className="rounded-2xl border border-white/8 bg-black/20 px-3 py-3"
-                    >
-                      <div className="text-sm font-medium text-white">
-                        {item.name}
-                      </div>
-                      <div className="mt-1 flex items-center justify-between text-xs text-white/55">
-                        <span>Qty {item.qty}</span>
-                        <span>{formatPHP(item.amount)}</span>
-                      </div>
+                {facebookSnapshotPreviewUrl || downloadingFacebookSnapshot ? (
+                  <>
+                    <div className="text-xs font-medium uppercase tracking-[0.18em] text-white/45">
+                      Snapshot Preview
                     </div>
-                  ))}
-                </div>
+                    <div className="mt-2 text-lg font-semibold text-white">
+                      {facebookCheckoutSummary.customerName || "Your order"}
+                    </div>
+                    <div className="mt-1 text-sm text-white/65">
+                      {facebookCheckoutSummary.shippingMethodLabel}
+                    </div>
+                    <div className="mt-4 overflow-hidden rounded-[1.25rem] border border-white/10 bg-black/30">
+                      {facebookSnapshotPreviewUrl ? (
+                        <img
+                          src={facebookSnapshotPreviewUrl}
+                          alt="Facebook checkout snapshot preview"
+                          className="block h-auto w-full"
+                        />
+                      ) : (
+                        <div className="flex min-h-[18rem] items-center justify-center px-6 py-10 text-center text-sm text-white/50">
+                          Preparing your checkout snapshot preview...
+                        </div>
+                      )}
+                    </div>
+                    {facebookSnapshotPreviewUrl ? (
+                      <div className="mt-3 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-xs text-emerald-100">
+                        Download this snapshot or attach the preview image in Messenger.
+                        {facebookSnapshotFileName ? ` File: ${facebookSnapshotFileName}` : ""}
+                      </div>
+                    ) : null}
+                    <div className="mt-2 space-y-1 text-xs text-white/55">
+                      {facebookCheckoutSummary.shippingLines.slice(0, 4).map((line, index) => (
+                        <div key={`${line}-${index}`}>{line}</div>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
               </div>
 
-              <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] p-4">
-                <div className="flex items-center justify-between text-sm text-white/60">
-                  <span>Selected lines</span>
-                  <span>{selectedLines.length}</span>
-                </div>
-                <div className="mt-2 flex items-center justify-between text-sm text-white/60">
-                  <span>Total quantity</span>
-                  <span>
-                    {selectedLines.reduce(
-                      (sum, line) => sum + Math.max(1, Number(line.qty ?? 0)),
-                      0
-                    )}
-                  </span>
-                </div>
-                <div className="mt-4 border-t border-white/10 pt-4">
-                  <div className="text-sm text-white/60">Selected subtotal</div>
-                  <div className="text-2xl font-semibold text-price">
-                    {formatPHP(selectedSubtotal)}
-                  </div>
-                  <div className="mt-2 text-xs text-white/45">
-                    Final shipping fee and payment instructions will be confirmed
-                    in Facebook Messenger.
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         </ModalShell>

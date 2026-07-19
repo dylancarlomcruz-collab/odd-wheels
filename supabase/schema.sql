@@ -298,7 +298,7 @@ create table if not exists public.product_variants (
   discount_percent numeric,
   qty int not null default 0 check (qty >= 0),
   release_at timestamptz,
-  ship_class text default 'MINI_GT' check (ship_class in ('MINI_GT','SMALL_BOX_FIGURE','KAIDO','POPRACE','TARMAC_BOX','ACRYLIC_TRUE_SCALE','TARMAC_ACRYLIC','TRUCKS','BLISTER','TOMICA','TOMICA_LIMITED_VINTAGE_NEO','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE','FIGURES_DIORAMA')),
+  ship_class text default 'MINI_GT' check (ship_class in ('MINI_GT','SMALL_BOX_FIGURE','KAIDO','BBR','POPRACE','TARMAC_BOX','ACRYLIC_TRUE_SCALE','TARMAC_ACRYLIC','TRUCKS','BLISTER','TOMICA','TOMICA_LIMITED_VINTAGE_NEO','HOT_WHEELS_MAINLINE','HOT_WHEELS_PREMIUM','LOOSE_NO_BOX','LALAMOVE','FIGURES_DIORAMA')),
   allowed_couriers text[],
   allowed_lbc_packages text[],
   allowed_jnt_pouches text[],
@@ -324,6 +324,7 @@ alter table public.product_variants
       'MINI_GT',
       'SMALL_BOX_FIGURE',
       'KAIDO',
+      'BBR',
       'POPRACE',
       'TARMAC_BOX',
       'ACRYLIC_TRUE_SCALE',
@@ -463,7 +464,7 @@ create index if not exists idx_sales_customers_last_order_at
 -- 9) Orders
 create table if not exists public.orders (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete restrict,
+  user_id uuid references auth.users(id) on delete restrict,
   sales_customer_id uuid references public.sales_customers(id) on delete set null,
   customer_name text,
   customer_phone text,
@@ -620,6 +621,9 @@ alter table public.orders
   alter column priority_level set not null,
   alter column inventory_deducted set not null,
   alter column payment_hold set not null;
+
+alter table public.orders
+  alter column user_id drop not null;
 
 -- 10) Audit logs (optional)
 create table if not exists public.audit_logs (

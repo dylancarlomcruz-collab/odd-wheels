@@ -54,6 +54,11 @@ import { fetchAuthedJson } from "@/lib/api/client";
 import { supabase } from "@/lib/supabase/browser";
 import { useShopSort } from "@/hooks/useShopSort";
 import {
+  GUEST_ORDER_ACCESS_EVENT,
+  guestOrderHref,
+  readGuestOrderAccess,
+} from "@/lib/guestOrderAccess";
+import {
   getSearchHistory,
   normalizeSearchTerm,
   rememberSearchTerm,
@@ -105,6 +110,9 @@ export function SiteHeader() {
   const [bugError, setBugError] = React.useState<string | null>(null);
   const [bugSent, setBugSent] = React.useState(false);
   const [bugSending, setBugSending] = React.useState(false);
+  const [guestOrderAccess, setGuestOrderAccess] = React.useState<ReturnType<
+    typeof readGuestOrderAccess
+  >>(null);
   const headerRef = React.useRef<HTMLElement | null>(null);
   const searchRefs = React.useRef<{ desktop: HTMLDivElement | null; mobile: HTMLDivElement | null }>({
     desktop: null,
@@ -130,9 +138,17 @@ export function SiteHeader() {
     staffCounts.pendingApproval +
     staffCounts.sellTradePending +
     staffCounts.pendingShipping;
-  const menuBadgeCount = isStaff ? staffTotal : orderCount;
+  const guestOrderLink = React.useMemo(
+    () => (!user && !isStaff ? guestOrderHref(guestOrderAccess) : null),
+    [guestOrderAccess, isStaff, user]
+  );
+  const customerOrdersHref = user ? "/orders" : guestOrderLink;
+  const customerOrdersCount = user ? orderCount : guestOrderLink ? 1 : 0;
+  const customerOrdersCountLabel =
+    customerOrdersCount > 99 ? "99+" : String(customerOrdersCount);
+  const menuBadgeCount = isStaff ? staffTotal : customerOrdersCount;
   const menuBadgeLabel = menuBadgeCount > 99 ? "99+" : String(menuBadgeCount);
-  const showCustomerOrders = Boolean(user) && !isStaff;
+  const showCustomerOrders = Boolean(customerOrdersHref) && !isStaff;
   const showShopSort = pathname === "/";
   const showCustomerNoticeIcon = !isStaff;
   const noticeCount = showCustomerNoticeIcon ? notices.length : 0;
@@ -147,6 +163,20 @@ export function SiteHeader() {
 
   React.useEffect(() => {
     setMenuPortalReady(true);
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const syncGuestOrderAccess = () => {
+      setGuestOrderAccess(readGuestOrderAccess());
+    };
+    syncGuestOrderAccess();
+    window.addEventListener("storage", syncGuestOrderAccess);
+    window.addEventListener(GUEST_ORDER_ACCESS_EVENT, syncGuestOrderAccess);
+    return () => {
+      window.removeEventListener("storage", syncGuestOrderAccess);
+      window.removeEventListener(GUEST_ORDER_ACCESS_EVENT, syncGuestOrderAccess);
+    };
   }, []);
 
   React.useEffect(() => {
@@ -368,7 +398,7 @@ export function SiteHeader() {
     { key: "announcements", href: "/announcements", label: "Announcements", icon: StickyNote, show: true },
     { key: "shipped-orders", href: "/shipped-orders", label: "Shipped Orders", icon: Truck, show: true },
     { key: "sell-trade", href: "/sell-trade", label: "Sell/Trade", icon: ArrowLeftRight, show: true },
-    { key: "orders", href: "/orders", label: "Orders", icon: ClipboardList, show: Boolean(user) },
+    { key: "orders", href: customerOrdersHref ?? "/orders", label: "Orders", icon: ClipboardList, show: Boolean(customerOrdersHref) },
       { key: "account", href: "/account", label: "Account", icon: Settings, show: Boolean(user) },
       {
         key: "tier-vouchers",
@@ -722,17 +752,21 @@ export function SiteHeader() {
           ) : null}
 
           {showCustomerOrders ? (
-            <Link href="/orders">
+            <Link href={customerOrdersHref ?? "/orders"}>
               <Button
                 variant="ghost"
                 size="sm"
-                aria-label={orderCount ? `Orders (${orderCountLabel})` : "Orders"}
+                aria-label={
+                  customerOrdersCount
+                    ? `Orders (${customerOrdersCountLabel})`
+                    : "Orders"
+                }
                 className="relative"
               >
                 <ClipboardList className="h-4 w-4" />
-                {orderCount > 0 ? (
+                {customerOrdersCount > 0 ? (
                   <span className="absolute -top-1 -right-1 min-w-[18px] rounded-full border border-bg-900/80 bg-accent-500 px-1 text-[10px] font-semibold leading-4 text-white">
-                    {orderCountLabel}
+                    {customerOrdersCountLabel}
                   </span>
                 ) : null}
               </Button>
@@ -1165,9 +1199,9 @@ export function SiteHeader() {
                             <Icon className="h-4 w-4" />
                             {item.label}
                           </span>
-                          {item.key === "orders" && orderCount > 0 ? (
+                          {item.key === "orders" && customerOrdersCount > 0 ? (
                             <Badge className="px-2 py-0.5 text-xs">
-                              {orderCountLabel}
+                              {customerOrdersCountLabel}
                             </Badge>
                           ) : null}
                         </Link>

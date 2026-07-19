@@ -324,9 +324,6 @@ export default function ShopPageClient() {
   );
   const [showAllBrands, setShowAllBrands] = React.useState(false);
   const [brandColumns, setBrandColumns] = React.useState(BRAND_COLUMN_DEFAULT);
-  const [expandedSections, setExpandedSections] = React.useState<
-    Record<string, boolean>
-  >({});
   const [clickMap, setClickMap] = React.useState<Record<string, number>>({});
   const [addMap, setAddMap] = React.useState<Record<string, number>>({});
   const [cartMap, setCartMap] = React.useState<Record<string, number>>({});
@@ -1544,43 +1541,17 @@ export default function ShopPageClient() {
       const { list, updatedSet } = dedupeList(sortedFiltered, shownProductIds);
       shownProductIds = updatedSet;
       if (list.length) sections.push({ key: "search", title: "Search results", items: list });
-      pushSection("also-like", "You may also like", takeN(sortedProducts, 12));
       return sections;
     }
 
     pushSectionNoDedupe("all", "All items", sortedFiltered);
-    pushSection("trending", "Trending", trendingNow);
-    pushSection("new-arrivals", "New arrivals", newArrivals);
-    pushSection("for-you", "For you", forYou);
-    pushSection("because", "Because you searched", becauseYouSearched);
-    pushSection("almost", "Almost sold out", almostSoldOut);
-    pushSection("back", "Back in stock", backInStock);
     return sections;
   }, [
     selectedBrands,
     hasSearch,
     sortedFiltered,
-    sortedProducts,
-    trendingNow,
-    newArrivals,
-    forYou,
-    becauseYouSearched,
-    almostSoldOut,
-    backInStock,
   ]);
 
-  const feedItemCount = React.useMemo(
-    () => feedSections.reduce((sum, section) => sum + section.items.length, 0),
-    [feedSections]
-  );
-  const allowSuggestions =
-    sortBy === "relevance" &&
-    selectedCategories.length === 0 &&
-    selectedConditions.length === 0 &&
-    selectedRarities.length === 0 &&
-    !minPriceFilter.trim() &&
-    !maxPriceFilter.trim() &&
-    selectedBrands.length === 0;
   const mainSection = React.useMemo(() => {
     return (
       feedSections.find((section) => section.key === "all") ??
@@ -1588,13 +1559,7 @@ export default function ShopPageClient() {
       null
     );
   }, [feedSections]);
-  const suggestionSections = React.useMemo(
-    () =>
-      feedSections.filter(
-        (section) => section.key !== "all" && section.key !== "search"
-      ),
-    [feedSections]
-  );
+  const feedItemCount = mainSection?.items.length ?? 0;
   const totalMainItems = mainSection?.items.length ?? 0;
   const visibleMainItems = mainSection
     ? mainSection.items.slice(0, visibleCount)
@@ -1611,7 +1576,6 @@ export default function ShopPageClient() {
         (product.image_urls?.length ? product.image_urls : [product.image_url]) ?? []
       ),
       extra: {
-        suggestionSections: suggestionSections.length,
         searchQuery: searchQuery || "",
         pageSize,
       },
@@ -1620,7 +1584,6 @@ export default function ShopPageClient() {
     normalizedViewMode,
     pageSize,
     searchQuery,
-    suggestionSections.length,
     totalMainItems,
     visibleMainItems,
   ]);
@@ -2190,73 +2153,7 @@ export default function ShopPageClient() {
             </div>
             {(() => {
               const nodes: React.ReactNode[] = [];
-              const suggestionQueue =
-                allowSuggestions && !hasSearch ? suggestionSections.slice() : [];
-              const insertAfter = [8, 20, 32, 44];
-              const resolvedInsertAfter = insertAfter.length
-                ? insertAfter
-                : [8];
-              const shouldInsert = (index: number) =>
-                resolvedInsertAfter.includes(index + 1) && suggestionQueue.length;
-              const renderSectionBlock = (
-                section: (typeof suggestionSections)[number]
-              ) => {
-                const cap = LIMITED_SECTION_COUNTS[section.key] ?? 4;
-                const expanded = Boolean(expandedSections[section.key]);
-                const items = expanded ? section.items : section.items.slice(0, cap);
-                nodes.push(
-                  <div
-                    key={`section-${section.key}`}
-                    className="col-span-full mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div className="text-xs font-semibold uppercase tracking-wide text-white/60">
-                      {section.title}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-white/30">
-                      <span>{section.items.length} items</span>
-                      {section.items.length > cap ? (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setExpandedSections((prev) => ({
-                              ...prev,
-                              [section.key]: !prev[section.key],
-                            }))
-                          }
-                          className="rounded-full border border-white/10 bg-bg-950/40 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/70 hover:bg-bg-950/60"
-                        >
-                          {expanded ? "Show less" : "Show more"}
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                );
-                items.forEach((p) => {
-                  nodes.push(
-                    <ProductCard
-                      key={`${section.key}-${p.key}`}
-                      product={p}
-                      showPrices={shopControls.showPrices}
-                      canAddToCart={shopControls.allowAddToCart}
-                      wideView={isQuadView}
-                      mobileVariant={isSingleView ? "diecast" : undefined}
-                      showCardPageActions={false}
-                      primaryActionLabel="Add"
-                      onAddToCart={(opt) => onAdd(p, opt)}
-                      onImageClick={
-                        isAdminUser
-                          ? (item, imageUrl) => openAdminEditor(item, imageUrl)
-                          : undefined
-                      }
-                      onRelatedAddToCart={(item, opt) => onAdd(item, opt)}
-                      onProductClick={(item) => recordProductClick(item.key)}
-                      socialProof={buildSocialProof(p)}
-                      relatedPool={sortedProducts}
-                    />
-                  );
-                });
-              };
-              visibleMainItems.forEach((p, index) => {
+              visibleMainItems.forEach((p) => {
                 nodes.push(
                 <ProductCard
                   key={`all-${p.key}`}
@@ -2279,23 +2176,7 @@ export default function ShopPageClient() {
                   relatedPool={sortedProducts}
                 />
                 );
-                if (shouldInsert(index)) {
-                  const section = suggestionQueue.shift();
-                  if (section) renderSectionBlock(section);
-                }
               });
-              const allMainVisible =
-                visibleMainItems.length >= mainSection.items.length;
-              if (allMainVisible) {
-                while (suggestionQueue.length) {
-                  renderSectionBlock(suggestionQueue.shift()!);
-                }
-                if (hasSearch && suggestionSections.length) {
-                  suggestionSections.forEach((section) => {
-                    renderSectionBlock(section);
-                  });
-                }
-              }
               return nodes;
             })()}
           </>

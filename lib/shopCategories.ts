@@ -16,6 +16,7 @@ const BOXED_TRUESCALES_BRANDS = new Set([
   "minigt",
   "kaidohouse",
   "kaido",
+  "bbr",
   "bmc",
   "bmcreations",
   "poprace",

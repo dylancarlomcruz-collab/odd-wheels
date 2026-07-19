@@ -105,6 +105,7 @@ const SHIP_CLASS_OPTIONS = [
   "MINI_GT",
   "SMALL_BOX_FIGURE",
   "KAIDO",
+  "BBR",
   "POPRACE",
   "TARMAC_BOX",
   "ACRYLIC_TRUE_SCALE",
@@ -158,6 +159,8 @@ function sortVariants(variants: AdminVariant[]) {
 
 function formatShipClassLabel(value: string) {
   switch (value) {
+    case "BBR":
+      return "BBR";
     case "ACRYLIC_TRUE_SCALE":
       return "Acrylic True-Scale";
     case "TARMAC_BOX":

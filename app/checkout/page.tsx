@@ -2381,7 +2381,6 @@ function CheckoutContent() {
 
       const order = await createOrderFromCart(
         {
-          userId: user.id,
           payment_method: paymentMethod,
           shipping_method: shippingMethod,
           shipping_region:
@@ -2400,7 +2399,7 @@ function CheckoutContent() {
             shippingMethod !== "LALAMOVE" && insuranceSelected,
           insurance_fee_user: shippingMethod !== "LALAMOVE" ? insuranceFee : 0,
         },
-        selectedLines,
+        selectedLines
       );
 
       if (nextDefaults) {

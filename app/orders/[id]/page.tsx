@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { RequireAuth } from "@/components/auth/RequireAuth";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useOrder } from "@/hooks/useOrders";
@@ -24,6 +24,7 @@ import {
   normalizeShippingStatus,
 } from "@/lib/orderBadges";
 import { isPlatinumTier } from "@/lib/tier";
+import { saveGuestOrderAccess } from "@/lib/guestOrderAccess";
 
 type PaymentMethod = {
   id: string;
@@ -294,12 +295,17 @@ async function uploadReceipt(file: File, orderId: string) {
   return json.publicUrl as string;
 }
 
-function OrderDetailContent() {
+function OrderDetailContent({
+  guestAccessToken = null,
+}: {
+  guestAccessToken?: string | null;
+}) {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const { user } = useAuth();
   const id = params.id;
-  const { order, items, loading } = useOrder(id);
+  const isGuestView = Boolean(guestAccessToken);
+  const { order, items, loading } = useOrder(id, { guestAccessToken });
 
   const [tick, setTick] = React.useState(0);
   const [uploading, setUploading] = React.useState(false);
@@ -353,6 +359,11 @@ function OrderDetailContent() {
     });
   }, [items]);
 
+  React.useEffect(() => {
+    if (!isGuestView || !order?.id || !guestAccessToken) return;
+    saveGuestOrderAccess(String(order.id), String(guestAccessToken));
+  }, [guestAccessToken, isGuestView, order?.id]);
+
   // refresh countdown every second when awaiting payment and not on hold
   React.useEffect(() => {
     if (!order) return;
@@ -371,6 +382,7 @@ function OrderDetailContent() {
     const status = String(order?.status ?? "");
     const shouldFetch =
       !!order &&
+      !!user &&
       order.payment_status !== "PAID" &&
       ["AWAITING_PAYMENT", "PAYMENT_SUBMITTED", "PAYMENT_REVIEW"].includes(status);
 
@@ -444,6 +456,7 @@ function OrderDetailContent() {
     const status = String(order?.status ?? "");
     const shouldFetch =
       !!order &&
+      !!user &&
       order.payment_status !== "PAID" &&
       ["PENDING_PAYMENT", "PENDING_APPROVAL", "AWAITING_PAYMENT"].includes(
         status
@@ -574,20 +587,22 @@ function OrderDetailContent() {
     );
   const canChangePaymentMethod = React.useMemo(() => {
     if (!order) return false;
+    if (isGuestView) return false;
     if (order.payment_status === "PAID") return false;
     const status = String(order.status ?? "");
     return ["PENDING_PAYMENT", "PENDING_APPROVAL", "AWAITING_PAYMENT"].includes(
       status
     );
-  }, [order]);
+  }, [isGuestView, order]);
   const canUploadReceipt = React.useMemo(() => {
     if (!order) return false;
+    if (isGuestView) return false;
     if (order.payment_status === "PAID") return false;
     const status = String(order.status ?? "");
     return ["AWAITING_PAYMENT", "PAYMENT_SUBMITTED", "PAYMENT_REVIEW"].includes(
       status
     );
-  }, [order]);
+  }, [isGuestView, order]);
   const methodCode = String(order?.payment_method ?? "").trim().toUpperCase();
   const fallbackMessage = paymentMethodError
     ? paymentMethodError
@@ -610,6 +625,7 @@ function OrderDetailContent() {
     const status = String(order?.status ?? "");
     return Boolean(
       order &&
+        !isGuestView &&
         order.payment_status !== "PAID" &&
         [
           "PENDING_PAYMENT",
@@ -619,7 +635,7 @@ function OrderDetailContent() {
           "PAYMENT_REVIEW",
         ].includes(status)
     );
-  }, [order]);
+  }, [isGuestView, order]);
   const shippingSections = React.useMemo(
     () => buildShippingSections(order, shippingDetails),
     [order, shippingDetails]
@@ -720,7 +736,7 @@ function OrderDetailContent() {
   }
 
   async function onReorderRemaining() {
-    if (!order) return;
+    if (!order || isGuestView) return;
     setReorderMsg(null);
     setReorderLoading(true);
     try {
@@ -1130,7 +1146,8 @@ function OrderDetailContent() {
               ) : null}
 
               {order.status === "CANCELLED" &&
-              cancelledReason === "PAYMENT_TIMEOUT" ? (
+              cancelledReason === "PAYMENT_TIMEOUT" &&
+              !isGuestView ? (
                 <div className="panel p-3 space-y-2">
                   <div className="font-semibold text-white/80">Next steps</div>
                   <Button onClick={onReorderRemaining} disabled={reorderLoading}>
@@ -1442,7 +1459,7 @@ function OrderDetailContent() {
                   No shipping details available.
                 </div>
               )}
-              {shippingStatus === "SHIPPED" ? (
+              {shippingStatus === "SHIPPED" && !isGuestView ? (
                 <Button onClick={onConfirmReceived} disabled={confirming}>
                   Confirm received
                 </Button>
@@ -1523,6 +1540,13 @@ function DetailItem({ label, value }: { label: string; value: React.ReactNode })
 }
 
 export default function OrderDetailPage() {
+  const searchParams = useSearchParams();
+  const guestAccessToken = searchParams.get("access");
+
+  if (guestAccessToken) {
+    return <OrderDetailContent guestAccessToken={guestAccessToken} />;
+  }
+
   return (
     <RequireAuth>
       <OrderDetailContent />

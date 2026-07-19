@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUserRequest } from "@/lib/api/auth";
 import { insertSingleRowWithSchemaFallback } from "@/lib/supabase/insertWithSchemaFallback";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 import { resolveEffectivePrice } from "@/lib/pricing";
 import { protectorUnitFee } from "@/lib/addons";
 import { sendAdminOrderEventNotification } from "@/lib/push/server";
@@ -10,12 +11,18 @@ import {
 } from "@/lib/shopControls";
 
 const PAYMENT_WINDOW_MS = 12 * 60 * 60 * 1000;
+const GUEST_ORDER_ACCESS_TOKEN_KEY = "guest_access_token";
+const GUEST_ORDER_ACCESS_CREATED_AT_KEY = "guest_access_created_at";
+const GUEST_VARIANT_SELECT =
+  "id,condition,issue_notes,public_notes,price,sale_price,discount_percent,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,product:products(id,title,brand,model,image_urls)";
 
 type CreateOrderInput = {
   payment_method: string;
   shipping_method: "LBC" | "JNT" | "LALAMOVE" | "PICKUP" | "INTERNATIONAL";
   shipping_region: string | null;
   shipping_details: any;
+  channel?: string;
+  create_as_pending_approval?: boolean;
   voucher_id?: string | null;
   shipping_discount?: number;
   discount_total?: number;
@@ -31,9 +38,88 @@ type CreateOrderInput = {
   insurance_fee_user: number;
 };
 
+type GuestOrderItemInput = {
+  variant_id: string;
+  qty: number;
+  protector_selected?: boolean;
+};
+
 function pickStr(v: any) {
   const s = String(v ?? "").trim();
   return s.length ? s : null;
+}
+
+function getBearerToken(req: Request) {
+  const auth = req.headers.get("authorization") ?? "";
+  if (!auth.startsWith("Bearer ")) return "";
+  return auth.slice("Bearer ".length).trim();
+}
+
+function normalizeGuestItems(input: unknown): GuestOrderItemInput[] {
+  if (!Array.isArray(input)) return [];
+
+  const map = new Map<string, GuestOrderItemInput>();
+  for (const item of input) {
+    const variantId = String((item as any)?.variant_id ?? "").trim();
+    const qty = Math.max(1, Math.trunc(Number((item as any)?.qty ?? 0) || 0));
+    if (!variantId || qty <= 0) continue;
+
+    const existing = map.get(variantId);
+    if (existing) {
+      existing.qty += qty;
+      existing.protector_selected =
+        Boolean(existing.protector_selected) ||
+        Boolean((item as any)?.protector_selected);
+      continue;
+    }
+
+    map.set(variantId, {
+      variant_id: variantId,
+      qty,
+      protector_selected: Boolean((item as any)?.protector_selected),
+    });
+  }
+
+  return Array.from(map.values());
+}
+
+async function buildGuestSelectedLines(
+  sb: ReturnType<typeof supabaseAdmin>,
+  items: GuestOrderItemInput[]
+) {
+  const variantIds = Array.from(
+    new Set(items.map((item) => item.variant_id).filter(Boolean))
+  );
+  if (!variantIds.length) return [];
+
+  const { data, error } = await sb
+    .from("product_variants")
+    .select(GUEST_VARIANT_SELECT)
+    .in("id", variantIds);
+
+  if (error) throw error;
+
+  const variantMap = new Map<string, any>();
+  for (const row of (data as any[]) ?? []) {
+    if (!row?.id || !row?.product?.id) continue;
+    variantMap.set(String(row.id), row);
+  }
+
+  return items
+    .map((item) => {
+      const variant = variantMap.get(item.variant_id);
+      if (!variant) return null;
+
+      return {
+        id: item.variant_id,
+        user_id: "guest",
+        variant_id: item.variant_id,
+        qty: item.qty,
+        protector_selected: Boolean(item.protector_selected),
+        variant,
+      };
+    })
+    .filter((line): line is any => Boolean(line?.variant?.id && line?.variant?.product?.id));
 }
 
 function normalizeCustomerName(sd: any) {
@@ -188,10 +274,17 @@ async function reserveInventoryForOrder(
 
 export async function POST(req: Request) {
   try {
-    const authResult = await requireUserRequest(req);
-    if ("error" in authResult) return authResult.error;
+    const token = getBearerToken(req);
+    let sb = supabaseAdmin();
+    let userId: string | null = null;
 
-    const { sb, userId } = authResult;
+    if (token) {
+      const authResult = await requireUserRequest(req);
+      if ("error" in authResult) return authResult.error;
+      sb = authResult.sb;
+      userId = authResult.userId;
+    }
+
     const body = await req.json().catch(() => null);
     const input = (body?.input ?? null) as CreateOrderInput | null;
     const lineIds = Array.isArray(body?.lineIds)
@@ -203,11 +296,29 @@ export async function POST(req: Request) {
           )
         )
       : [];
+    const guestItems = normalizeGuestItems(body?.guestItems);
+    const isGuestCheckout = !userId;
+    const guestCheckoutSource = String(
+      (input?.shipping_details as any)?.source ?? ""
+    )
+      .trim()
+      .toLowerCase();
+    const guestCheckoutAllowed =
+      isGuestCheckout &&
+      guestCheckoutSource === "facebook_checkout" &&
+      Boolean(input?.create_as_pending_approval);
 
-    if (!input || !lineIds.length) {
+    if (!input || (!lineIds.length && !guestItems.length)) {
       return NextResponse.json(
         { ok: false, error: "Cart lines and checkout details are required." },
         { status: 400 }
+      );
+    }
+
+    if (isGuestCheckout && !guestCheckoutAllowed) {
+      return NextResponse.json(
+        { ok: false, error: "Please sign in to place this order." },
+        { status: 401 }
       );
     }
 
@@ -226,26 +337,37 @@ export async function POST(req: Request) {
       );
     }
 
-    const { data: cartRows, error: cartError } = await sb
-      .from("cart_items")
-      .select(
-        "id,user_id,variant_id,qty,protector_selected,variant:product_variants(id,condition,issue_notes,public_notes,price,sale_price,discount_percent,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,product:products(id,title,brand,model,image_urls))"
-      )
-      .eq("user_id", userId)
-      .in("id", lineIds);
+    let selectedLines: any[] = [];
+    if (isGuestCheckout) {
+      selectedLines = await buildGuestSelectedLines(sb, guestItems);
+    } else {
+      const { data: cartRows, error: cartError } = await sb
+        .from("cart_items")
+        .select(
+          "id,user_id,variant_id,qty,protector_selected,variant:product_variants(id,condition,issue_notes,public_notes,price,sale_price,discount_percent,qty,ship_class,allowed_couriers,allowed_lbc_packages,allowed_jnt_pouches,product:products(id,title,brand,model,image_urls))"
+        )
+        .eq("user_id", userId)
+        .in("id", lineIds);
 
-    if (cartError) throw cartError;
+      if (cartError) throw cartError;
 
-    const selectedLines = ((cartRows as any[]) ?? []).filter(
-      (row) => row?.variant?.id && row?.variant?.product?.id
-    );
+      selectedLines = ((cartRows as any[]) ?? []).filter(
+        (row) => row?.variant?.id && row?.variant?.product?.id
+      );
+    }
+
     if (!selectedLines.length) {
       return NextResponse.json(
-        { ok: false, error: "Selected cart items were not found." },
+        {
+          ok: false,
+          error: isGuestCheckout
+            ? "Selected guest cart items were not found."
+            : "Selected cart items were not found.",
+        },
         { status: 404 }
       );
     }
-    if (selectedLines.length !== lineIds.length) {
+    if (!isGuestCheckout && selectedLines.length !== lineIds.length) {
       return NextResponse.json(
         {
           ok: false,
@@ -304,7 +426,23 @@ export async function POST(req: Request) {
       shippingDiscount;
 
     const sd = input.shipping_details ?? {};
-    const paymentDeadline = new Date(Date.now() + PAYMENT_WINDOW_MS).toISOString();
+    const createAsPendingApproval = Boolean(input.create_as_pending_approval);
+    const paymentDeadline = createAsPendingApproval
+      ? null
+      : new Date(Date.now() + PAYMENT_WINDOW_MS).toISOString();
+    const shippingDetails =
+      isGuestCheckout && sd && typeof sd === "object"
+        ? {
+            ...sd,
+            guest_checkout: true,
+            ...(guestCheckoutAllowed
+              ? {
+                  [GUEST_ORDER_ACCESS_TOKEN_KEY]: crypto.randomUUID(),
+                  [GUEST_ORDER_ACCESS_CREATED_AT_KEY]: new Date().toISOString(),
+                }
+              : {}),
+          }
+        : sd;
     const insertRow: any = {
       user_id: userId,
       customer_id: null,
@@ -314,15 +452,17 @@ export async function POST(req: Request) {
       address: normalizeAddress(sd),
       shipping_method: input.shipping_method,
       shipping_region: input.shipping_region,
-      shipping_details: sd,
+      shipping_details: shippingDetails,
       payment_method: input.payment_method,
       payment_status: "UNPAID",
-      status: "AWAITING_PAYMENT",
-      order_status: "AWAITING_PAYMENT",
+      status: createAsPendingApproval ? "PENDING_APPROVAL" : "AWAITING_PAYMENT",
+      order_status: createAsPendingApproval
+        ? "PENDING_APPROVAL"
+        : "AWAITING_PAYMENT",
       fulfillment_status: "PENDING",
       carrier: carrierFromShippingMethod(input.shipping_method),
       tracking_number: null,
-      channel: "WEB",
+      channel: String(input.channel ?? "WEB").trim() || "WEB",
       subtotal,
       shipping_fee: Number(input.fees.shipping_fee ?? 0),
       discount: 0,
@@ -337,7 +477,7 @@ export async function POST(req: Request) {
       insurance_selected: Boolean(input.insurance_selected),
       insurance_fee: Number(input.fees.insurance_fee ?? 0),
       payment_hold: false,
-      inventory_deducted: true,
+      inventory_deducted: !createAsPendingApproval,
       reserved_expires_at: paymentDeadline,
       payment_deadline: paymentDeadline,
       expires_at: paymentDeadline,
@@ -419,19 +559,23 @@ export async function POST(req: Request) {
       if (result.error) throw result.error;
     }
 
-    try {
-      await reserveInventoryForOrder(sb, selectedLines);
-    } catch (error) {
-      await sb.from("orders").delete().eq("id", String((order as any).id));
-      throw error;
+    if (!createAsPendingApproval) {
+      try {
+        await reserveInventoryForOrder(sb, selectedLines);
+      } catch (error) {
+        await sb.from("orders").delete().eq("id", String((order as any).id));
+        throw error;
+      }
     }
 
-    const { error: clearError } = await sb
-      .from("cart_items")
-      .delete()
-      .eq("user_id", userId)
-      .in("id", lineIds);
-    if (clearError) throw clearError;
+    if (!isGuestCheckout && userId) {
+      const { error: clearError } = await sb
+        .from("cart_items")
+        .delete()
+        .eq("user_id", userId)
+        .in("id", lineIds);
+      if (clearError) throw clearError;
+    }
 
     try {
       await sendAdminOrderEventNotification(String((order as any).id), "order_created");
@@ -439,7 +583,22 @@ export async function POST(req: Request) {
       console.error("Admin push notification failed:", err);
     }
 
-    return NextResponse.json({ ok: true, order }, { status: 200 });
+    const guestAccessToken =
+      guestCheckoutAllowed &&
+      shippingDetails &&
+      typeof shippingDetails === "object"
+        ? String((shippingDetails as Record<string, unknown>)[GUEST_ORDER_ACCESS_TOKEN_KEY] ?? "")
+        : "";
+
+    return NextResponse.json(
+      {
+        ok: true,
+        order: guestAccessToken
+          ? { ...(order as any), guest_access_token: guestAccessToken }
+          : order,
+      },
+      { status: 200 }
+    );
   } catch (e: any) {
     return NextResponse.json(
       { ok: false, error: e?.message ?? "Failed to place order." },

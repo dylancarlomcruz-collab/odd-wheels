@@ -8,3 +8,253 @@
 
  ✓ Starting...
  ✓ Ready in 3.4s
+ ○ Compiling /cart ...
+ ✓ Compiled /cart in 4.1s (1521 modules)
+ GET /cart 200 in 4677ms
+ ○ Compiling /manifest.webmanifest ...
+ ✓ Compiled /api/cart in 1502ms (828 modules)
+ ✓ Compiled (901 modules)
+ GET /manifest.webmanifest 200 in 2133ms
+ GET /api/account/profile 200 in 2168ms
+ GET /api/cart 200 in 2175ms
+ GET /api/account/orders/count 200 in 2221ms
+ GET /api/account/profile 200 in 359ms
+ GET /api/cart 200 in 450ms
+ GET /api/cart 200 in 369ms
+ GET /api/cart 200 in 344ms
+ ✓ Compiled /api/staff/nav-counts in 326ms (903 modules)
+ GET /api/staff/nav-counts 200 in 1632ms
+ GET /api/staff/nav-counts 200 in 6455ms
+ GET /api/staff/nav-counts 200 in 723ms
+ ○ Compiling /api/cart ...
+ ✓ Compiled /api/cart in 4.7s (1614 modules)
+ ✓ Compiled /manifest.webmanifest in 152ms (899 modules)
+ GET /manifest.webmanifest 200 in 245ms
+ GET /api/cart 200 in 1647ms
+ GET /api/cart 200 in 523ms
+ GET /api/staff/nav-counts 200 in 742ms
+ GET /api/staff/nav-counts 200 in 800ms
+ GET /api/staff/nav-counts 200 in 1050ms
+ GET /api/staff/nav-counts 200 in 1141ms
+ ✓ Compiled in 1542ms (1611 modules)
+ ✓ Compiled /api/cart in 162ms (868 modules)
+ GET /api/cart 200 in 1781ms
+ GET /api/cart 200 in 747ms
+ GET /api/staff/nav-counts 200 in 838ms
+ GET /api/staff/nav-counts 200 in 1489ms
+ GET /api/staff/nav-counts 200 in 1874ms
+ GET /api/staff/nav-counts 200 in 2371ms
+ ✓ Compiled /api/cart in 2s (1611 modules)
+ ✓ Compiled in 1ms (868 modules)
+ GET /api/cart 200 in 2009ms
+ GET /api/cart 200 in 484ms
+ GET /api/staff/nav-counts 200 in 1692ms
+ GET /api/staff/nav-counts 200 in 1228ms
+ GET /api/staff/nav-counts 200 in 1418ms
+ GET /api/staff/nav-counts 200 in 745ms
+ GET /api/staff/nav-counts 200 in 932ms
+ GET /cart 200 in 320ms
+ ○ Compiling /manifest.webmanifest ...
+ ✓ Compiled /manifest.webmanifest in 922ms (896 modules)
+ GET /manifest.webmanifest 200 in 1060ms
+ ✓ Compiled /api/account/profile in 345ms (898 modules)
+ ✓ Compiled /api/cart in 243ms (900 modules)
+ ✓ Compiled (903 modules)
+ GET /api/account/profile 200 in 1333ms
+ GET /api/account/orders/count 200 in 1103ms
+ GET /api/cart 200 in 1088ms
+ GET /api/account/profile 200 in 378ms
+ GET /api/cart 200 in 453ms
+ GET /api/cart 200 in 389ms
+ GET /api/cart 200 in 401ms
+ GET /api/staff/nav-counts 200 in 779ms
+ GET /api/staff/nav-counts 200 in 1139ms
+ GET /api/staff/nav-counts 200 in 867ms
+ GET /api/staff/nav-counts 200 in 1958ms
+ GET /api/staff/nav-counts 200 in 938ms
+ GET /api/staff/nav-counts 200 in 989ms
+ ✓ Compiled in 1993ms (1611 modules)
+ ✓ Compiled /manifest.webmanifest in 226ms (868 modules)
+ ✓ Compiled (901 modules)
+ GET /manifest.webmanifest 200 in 494ms
+ GET /api/account/profile 200 in 1154ms
+ GET /api/cart 200 in 1220ms
+ GET /api/account/profile 200 in 335ms
+ GET /api/cart 200 in 351ms
+ GET /api/cart 200 in 374ms
+ GET /api/cart 200 in 336ms
+ ✓ Compiled in 1190ms (1647 modules)
+ ✓ Compiled in 1ms (901 modules)
+ ✓ Compiled in 1ms (901 modules)
+ ✓ Compiled in 1ms (901 modules)
+ GET /api/cart 200 in 1309ms
+ GET /api/cart 200 in 360ms
+ ✓ Compiled in 1154ms (1647 modules)
+ GET /api/cart 200 in 451ms
+ GET /api/cart 200 in 404ms
+ GET /api/staff/nav-counts 200 in 1100ms
+ GET /api/staff/nav-counts 200 in 891ms
+ GET /api/staff/nav-counts 200 in 1015ms
+ GET /api/staff/nav-counts 200 in 1632ms
+ GET /api/staff/nav-counts 200 in 1592ms
+ GET /cart 200 in 260ms
+ GET /manifest.webmanifest 200 in 69ms
+ ○ Compiling /api/cart ...
+ ✓ Compiled /api/cart in 619ms (900 modules)
+ GET /api/account/profile 200 in 704ms
+ ✓ Compiled in 0ms (903 modules)
+ ✓ Compiled in 1ms (903 modules)
+ ✓ Compiled in 1ms (903 modules)
+ GET /api/account/orders/count 200 in 1674ms
+ GET /api/account/profile 200 in 1185ms
+ GET /api/cart 200 in 1949ms
+ GET /api/cart 200 in 542ms
+ GET /api/cart 200 in 333ms
+ GET /api/cart 200 in 314ms
+ GET /api/staff/nav-counts 200 in 646ms
+ GET /api/staff/nav-counts 200 in 1712ms
+ GET /api/staff/nav-counts 200 in 683ms
+ GET /api/staff/nav-counts 200 in 776ms
+ GET /api/staff/nav-counts 200 in 720ms
+ GET /api/staff/nav-counts 200 in 824ms
+ GET /api/staff/nav-counts 200 in 789ms
+ GET /api/staff/nav-counts 200 in 676ms
+ ○ Compiling /api/cart ...
+ ✓ Compiled /api/cart in 2.3s (1611 modules)
+ ✓ Compiled in 0ms (868 modules)
+ ✓ Compiled /manifest.webmanifest in 144ms (899 modules)
+ GET /manifest.webmanifest 200 in 247ms
+ GET /api/cart 200 in 2127ms
+ GET /api/cart 200 in 448ms
+ GET /api/staff/nav-counts 200 in 888ms
+ ✓ Compiled in 1357ms (1645 modules)
+ ✓ Compiled in 1ms (899 modules)
+ ✓ Compiled in 1ms (899 modules)
+ ✓ Compiled in 1ms (899 modules)
+ GET /api/cart 200 in 1192ms
+ GET /api/cart 200 in 389ms
+ ✓ Compiled in 1257ms (1645 modules)
+ GET /api/cart 200 in 503ms
+ GET /api/cart 200 in 445ms
+ ✓ Compiled in 1143ms (1645 modules)
+ ✓ Compiled in 0ms (899 modules)
+ ✓ Compiled in 1ms (899 modules)
+ ✓ Compiled in 1ms (899 modules)
+ GET /api/cart 200 in 1120ms
+ GET /api/cart 200 in 380ms
+ ✓ Compiled in 1047ms (1645 modules)
+ GET /api/cart 200 in 568ms
+ GET /api/cart 200 in 440ms
+ GET /api/staff/nav-counts 200 in 675ms
+ GET /api/staff/nav-counts 200 in 1105ms
+ POST /api/cart 200 in 954ms
+ GET /api/cart 200 in 403ms
+ GET /api/cart 200 in 344ms
+ GET /api/staff/nav-counts 200 in 780ms
+ GET /api/staff/nav-counts 200 in 1607ms
+ GET /api/staff/nav-counts 200 in 905ms
+ GET /cart 200 in 238ms
+ GET /manifest.webmanifest 200 in 91ms
+ ○ Compiling /api/cart ...
+ ✓ Compiled /api/cart in 642ms (898 modules)
+ ✓ Compiled (903 modules)
+ GET /api/account/orders/count 200 in 1728ms
+ GET /api/account/profile 200 in 1738ms
+ GET /api/cart 200 in 1737ms
+ GET /api/cart 200 in 416ms
+ GET /api/account/profile 200 in 470ms
+ GET /api/cart 200 in 388ms
+ GET /api/cart 200 in 393ms
+ GET /cart 200 in 225ms
+ GET /manifest.webmanifest 200 in 78ms
+ GET /api/account/profile 200 in 1605ms
+ GET /api/account/orders/count 200 in 1611ms
+ GET /api/cart 200 in 1625ms
+ GET /api/account/profile 200 in 371ms
+ GET /api/cart 200 in 399ms
+ GET /api/cart 200 in 416ms
+ GET /api/cart 200 in 387ms
+ GET /api/staff/nav-counts 200 in 903ms
+ ✓ Compiled in 1259ms (1649 modules)
+ GET /manifest.webmanifest 200 in 24ms
+ GET /api/cart 200 in 626ms
+ GET /api/cart 200 in 413ms
+ GET /api/staff/nav-counts 200 in 1317ms
+ GET /cart 200 in 171ms
+ GET /manifest.webmanifest 200 in 56ms
+ GET /api/account/orders/count 200 in 527ms
+ GET /api/cart 200 in 854ms
+ GET /api/account/profile 200 in 1007ms
+ GET /api/cart 200 in 339ms
+ GET /api/account/profile 200 in 323ms
+ GET /api/cart 200 in 432ms
+ GET /api/cart 200 in 358ms
+ GET /api/staff/nav-counts 200 in 828ms
+ GET /api/staff/nav-counts 200 in 938ms
+ GET /api/staff/nav-counts 200 in 2271ms
+ GET /api/staff/nav-counts 200 in 1636ms
+ GET /api/staff/nav-counts 200 in 2257ms
+ GET /api/staff/nav-counts 200 in 1229ms
+ GET /api/staff/nav-counts 200 in 1010ms
+ GET /api/staff/nav-counts 200 in 799ms
+ GET /api/staff/nav-counts 200 in 1176ms
+ GET /api/staff/nav-counts 401 in 702ms
+ ✓ Compiled in 1641ms (1540 modules)
+ ✓ Compiled /manifest.webmanifest in 244ms (866 modules)
+ ✓ Compiled (897 modules)
+ GET /manifest.webmanifest 200 in 463ms
+ GET /api/cart 401 in 1856ms
+ GET /api/cart 401 in 230ms
+ GET /cart 200 in 284ms
+ GET /manifest.webmanifest 200 in 59ms
+ ○ Compiling / ...
+ ✓ Compiled / in 1623ms (1584 modules)
+ GET /manifest.webmanifest 200 in 43ms
+ ✓ Compiled /api/shop/products in 309ms (912 modules)
+ GET /api/shop/products 200 in 1200ms
+ GET /api/shop/products 200 in 1425ms
+ ✓ Compiled /api/cart in 167ms (916 modules)
+ POST /api/cart 200 in 433ms
+ POST /api/cart 200 in 474ms
+ GET /manifest.webmanifest 200 in 63ms
+ POST /api/cart 200 in 219ms
+ POST /api/cart 200 in 246ms
+ ✓ Compiled in 2.1s (1569 modules)
+ ✓ Compiled in 523ms (759 modules)
+ ✓ Compiled /api/cart in 172ms (882 modules)
+ ✓ Compiled /manifest.webmanifest in 186ms (913 modules)
+ GET /manifest.webmanifest 200 in 285ms
+ POST /api/cart 200 in 2163ms
+ ✓ Compiled in 1026ms (1672 modules)
+ POST /api/cart 200 in 761ms
+ POST /api/cart 200 in 873ms
+ ✓ Compiled in 975ms (1672 modules)
+ ✓ Compiled in 0ms (913 modules)
+ ✓ Compiled in 0ms (913 modules)
+ ✓ Compiled in 1ms (913 modules)
+ POST /api/cart 200 in 1112ms
+ POST /api/cart 200 in 1115ms
+ ✓ Compiled in 1399ms (1672 modules)
+ ✓ Compiled in 1ms (913 modules)
+ ✓ Compiled in 1ms (913 modules)
+ ✓ Compiled in 0ms (913 modules)
+ POST /api/cart 200 in 1275ms
+ ✓ Compiled in 1152ms (1641 modules)
+ POST /api/cart 200 in 1216ms
+ ✓ Compiled in 954ms (1641 modules)
+ ✓ Compiled in 1ms (882 modules)
+ ✓ Compiled in 0ms (882 modules)
+ ✓ Compiled in 0ms (882 modules)
+ POST /api/cart 200 in 1583ms
+ ✓ Compiled in 1090ms (1641 modules)
+ POST /api/cart 200 in 3522ms
+ ✓ Compiled in 1342ms (1641 modules)
+ POST /api/cart 200 in 837ms
+ POST /api/cart 200 in 877ms
+ GET / 200 in 862ms
+ ○ Compiling /manifest.webmanifest ...
+ ✓ Compiled /manifest.webmanifest in 1370ms (844 modules)
+ GET /manifest.webmanifest 200 in 1492ms
+ ✓ Compiled /api/shop/products in 346ms (912 modules)
+ GET /api/shop/products 200 in 1455ms
+ GET /api/shop/products 200 in 1466ms

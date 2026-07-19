@@ -1,14 +1,15 @@
 "use client";
 
 import type { CartLine } from "@/hooks/useCart";
-import { fetchAuthedJson } from "@/lib/api/client";
+import { fetchAuthedJson, fetchJson } from "@/lib/api/client";
 
 export type CreateOrderInput = {
-  userId: string;
   payment_method: string;
   shipping_method: "LBC" | "JNT" | "LALAMOVE" | "PICKUP" | "INTERNATIONAL";
   shipping_region: string | null;
   shipping_details: any;
+  channel?: string;
+  create_as_pending_approval?: boolean;
   voucher_id?: string | null;
   shipping_discount?: number;
   discount_total?: number;
@@ -24,22 +25,41 @@ export type CreateOrderInput = {
   insurance_fee_user: number;
 };
 
+type CreateOrderOptions = {
+  guest?: boolean;
+};
+
 export async function createOrderFromCart(
   input: CreateOrderInput,
-  cartLines: CartLine[]
+  cartLines: CartLine[],
+  options: CreateOrderOptions = {}
 ) {
   const lineIds = cartLines.map((line) => String(line.id ?? "")).filter(Boolean);
+  const guestItems = cartLines
+    .map((line) => ({
+      variant_id: String(line.variant_id ?? line.variant?.id ?? "").trim(),
+      qty: Math.max(1, Number(line.qty ?? 0) || 0),
+      protector_selected: Boolean(line.protector_selected),
+    }))
+    .filter((item) => item.variant_id && item.qty > 0);
   if (!lineIds.length) {
     throw new Error("No cart items selected.");
   }
 
-  const payload = await fetchAuthedJson<{ ok: true; order: any }>(
-    "/api/orders/create",
-    {
-      method: "POST",
-      body: JSON.stringify({ input, lineIds }),
-    }
-  );
+  const requestInit = {
+    method: "POST",
+    body: JSON.stringify({ input, lineIds, guestItems }),
+  };
+
+  const payload = options.guest
+    ? await fetchJson<{ ok: true; order: any }>("/api/orders/create", {
+        ...requestInit,
+        headers: { "Content-Type": "application/json" },
+      })
+    : await fetchAuthedJson<{ ok: true; order: any }>(
+        "/api/orders/create",
+        requestInit
+      );
 
   return payload.order as any;
 }

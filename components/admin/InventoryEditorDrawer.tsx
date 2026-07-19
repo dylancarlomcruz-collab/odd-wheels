@@ -85,6 +85,7 @@ const SHIP_OPTIONS = [
   "MINI_GT",
   "SMALL_BOX_FIGURE",
   "KAIDO",
+  "BBR",
   "POPRACE",
   "TARMAC_BOX",
   "ACRYLIC_TRUE_SCALE",

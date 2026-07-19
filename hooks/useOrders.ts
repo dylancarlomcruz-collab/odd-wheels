@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { fetchJson } from "@/lib/api/client";
 import { supabase } from "@/lib/supabase/browser";
 import { useAuth } from "@/components/auth/AuthProvider";
 
@@ -54,6 +55,31 @@ export type OrderItemPreview = {
     } | null;
   } | null;
 };
+
+const GUEST_ORDER_ACCESS_TOKEN_KEY = "guest_access_token";
+const GUEST_ORDER_ACCESS_CREATED_AT_KEY = "guest_access_created_at";
+
+function sanitizeShippingDetails(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+
+  const details = { ...(value as Record<string, unknown>) };
+  delete details[GUEST_ORDER_ACCESS_TOKEN_KEY];
+  delete details[GUEST_ORDER_ACCESS_CREATED_AT_KEY];
+  return details;
+}
+
+function sanitizeOrderRecord<T extends Record<string, any> | null>(order: T): T {
+  if (!order || !("shipping_details" in order)) {
+    return order;
+  }
+
+  return {
+    ...order,
+    shipping_details: sanitizeShippingDetails(order.shipping_details),
+  } as T;
+}
 
 export function useOrders() {
   const { user } = useAuth();
@@ -173,17 +199,21 @@ export function useOrders() {
   return { orders, itemsByOrderId, loading };
 }
 
-export function useOrder(orderId: string) {
+export function useOrder(
+  orderId: string,
+  options: { guestAccessToken?: string | null } = {}
+) {
   const { user } = useAuth();
   const [order, setOrder] = React.useState<any>(null);
   const [items, setItems] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const guestAccessToken = String(options.guestAccessToken ?? "").trim();
 
   React.useEffect(() => {
     let mounted = true;
 
     async function run() {
-      if (!user) {
+      if (!user && !guestAccessToken) {
         setOrder(null);
         setItems([]);
         setLoading(false);
@@ -191,6 +221,28 @@ export function useOrder(orderId: string) {
       }
 
       setLoading(true);
+
+      if (guestAccessToken) {
+        try {
+          const payload = await fetchJson<{ ok: true; order: any; items: any[] }>(
+            `/api/orders/${encodeURIComponent(orderId)}?access=${encodeURIComponent(
+              guestAccessToken
+            )}`
+          );
+          if (!mounted) return;
+          setOrder(sanitizeOrderRecord(payload.order ?? null));
+          setItems(Array.isArray(payload.items) ? payload.items : []);
+        } catch (error) {
+          if (!mounted) return;
+          console.error(error);
+          setOrder(null);
+          setItems([]);
+        } finally {
+          if (!mounted) return;
+          setLoading(false);
+        }
+        return;
+      }
 
       const { data: o, error: oErr } = await supabase
         .from("orders")
@@ -211,7 +263,7 @@ export function useOrder(orderId: string) {
       if (oErr) console.error(oErr);
       if (iErr) console.error(iErr);
 
-      setOrder(o ?? null);
+      setOrder(sanitizeOrderRecord(o ?? null));
       setItems((it as any) ?? []);
       setLoading(false);
     }
@@ -220,7 +272,7 @@ export function useOrder(orderId: string) {
     return () => {
       mounted = false;
     };
-  }, [user?.id, orderId]);
+  }, [guestAccessToken, orderId, user?.id]);
 
   return { order, items, loading };
 }
