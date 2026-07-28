@@ -924,6 +924,10 @@ begin
     from public.orders
     where payment_status <> 'PAID'
       and status in ('AWAITING_PAYMENT','PAYMENT_SUBMITTED')
+      and not (
+        lower(trim(coalesce(shipping_details->>'source', ''))) = 'facebook_checkout'
+        and coalesce(inventory_deducted, false) = true
+      )
       and expires_at is not null
       and expires_at <= now()
       and expired_at is null
@@ -988,6 +992,7 @@ declare
   v_deadline timestamptz;
   v_sold_out uuid[] := '{}';
   v_remaining int;
+  v_is_facebook_checkout boolean := false;
 begin
   if not public.is_staff() then
     raise exception 'Not authorized';
@@ -1005,6 +1010,8 @@ begin
   if coalesce(v_order.inventory_deducted, false) then
     return jsonb_build_object('ok', true, 'already_deducted', true, 'order_id', p_order_id);
   end if;
+
+  v_is_facebook_checkout := lower(trim(coalesce(v_order.shipping_details->>'source', ''))) = 'facebook_checkout';
 
   for v_item in
     select variant_id, qty from public.order_items where order_id = p_order_id
@@ -1029,13 +1036,31 @@ begin
 
   v_deadline := now() + interval '12 hours';
 
-  update public.orders
-    set status = 'AWAITING_PAYMENT',
-        reserved_expires_at = v_deadline,
-        payment_deadline = v_deadline,
-        expires_at = v_deadline,
-        inventory_deducted = true
-  where id = p_order_id;
+  if v_is_facebook_checkout then
+    update public.orders
+      set status = 'PAID',
+          order_status = 'PAID',
+          payment_status = 'PAID',
+          paid_at = coalesce(paid_at, now()),
+          shipping_status = 'PREPARING TO SHIP',
+          reserved_expires_at = null,
+          payment_deadline = null,
+          expires_at = null,
+          expired_at = null,
+          cancelled_reason = null,
+          inventory_deducted = true
+    where id = p_order_id;
+  else
+    update public.orders
+      set status = 'AWAITING_PAYMENT',
+          order_status = 'AWAITING_PAYMENT',
+          shipping_status = 'PREPARING TO SHIP',
+          reserved_expires_at = v_deadline,
+          payment_deadline = v_deadline,
+          expires_at = v_deadline,
+          inventory_deducted = true
+    where id = p_order_id;
+  end if;
 
   if array_length(v_sold_out, 1) is not null then
     perform public.fn_cleanup_sold_out_variants(v_sold_out);
@@ -1047,6 +1072,22 @@ begin
   return jsonb_build_object('ok', true, 'order_id', p_order_id);
 end;
 $$;
+
+update public.orders
+set status = 'PAID',
+    order_status = 'PAID',
+    payment_status = 'PAID',
+    paid_at = coalesce(paid_at, now()),
+    shipping_status = 'PREPARING TO SHIP',
+    reserved_expires_at = null,
+    payment_deadline = null,
+    expires_at = null,
+    expired_at = null,
+    cancelled_reason = null
+where lower(trim(coalesce(shipping_details->>'source', ''))) = 'facebook_checkout'
+  and coalesce(inventory_deducted, false) = true
+  and upper(coalesce(status, '')) in ('AWAITING_PAYMENT', 'PAYMENT_SUBMITTED')
+  and upper(coalesce(payment_status, '')) <> 'PAID';
 
 revoke execute on function public.fn_cleanup_sold_out_variants(uuid[]) from public;
 revoke execute on function public.fn_customer_reorder_remaining(uuid) from public;
@@ -4029,6 +4070,7 @@ declare
   v_tier text;
   v_order_user_id uuid;
   v_order_approval_enabled boolean := true;
+  v_is_facebook_checkout boolean := false;
 begin
   select * into v_order from public.orders where id = p_order_id for update;
   if not found then
@@ -4061,6 +4103,8 @@ begin
     return jsonb_build_object('ok', true, 'already_deducted', true, 'order_id', p_order_id);
   end if;
 
+  v_is_facebook_checkout := lower(trim(coalesce(v_order.shipping_details->>'source', ''))) = 'facebook_checkout';
+
   for v_item in
     select variant_id, qty from public.order_items where order_id = p_order_id
   loop
@@ -4084,13 +4128,31 @@ begin
 
   v_deadline := now() + interval '12 hours';
 
-  update public.orders
-    set status = 'AWAITING_PAYMENT',
-        reserved_expires_at = v_deadline,
-        payment_deadline = v_deadline,
-        expires_at = v_deadline,
-        inventory_deducted = true
-  where id = p_order_id;
+  if v_is_facebook_checkout then
+    update public.orders
+      set status = 'PAID',
+          order_status = 'PAID',
+          payment_status = 'PAID',
+          paid_at = coalesce(paid_at, now()),
+          shipping_status = 'PREPARING TO SHIP',
+          reserved_expires_at = null,
+          payment_deadline = null,
+          expires_at = null,
+          expired_at = null,
+          cancelled_reason = null,
+          inventory_deducted = true
+    where id = p_order_id;
+  else
+    update public.orders
+      set status = 'AWAITING_PAYMENT',
+          order_status = 'AWAITING_PAYMENT',
+          shipping_status = 'PREPARING TO SHIP',
+          reserved_expires_at = v_deadline,
+          payment_deadline = v_deadline,
+          expires_at = v_deadline,
+          inventory_deducted = true
+    where id = p_order_id;
+  end if;
 
   if array_length(v_sold_out, 1) is not null then
     perform public.fn_cleanup_sold_out_variants(v_sold_out);

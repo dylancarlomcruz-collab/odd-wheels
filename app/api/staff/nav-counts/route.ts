@@ -16,7 +16,13 @@ export async function GET(req: Request) {
     if ("error" in authResult) return authResult.error;
 
     const { sb } = authResult;
-    const [pendingOrders, sellTrade, preparingShipA, preparingShipB] =
+    const [
+      pendingOrders,
+      sellTrade,
+      preparingShipA,
+      preparingShipB,
+      preparingShipFacebook,
+    ] =
       await Promise.all([
         sb
           .from("orders")
@@ -38,13 +44,22 @@ export async function GET(req: Request) {
           .eq("payment_status", "PAID")
           .not("status", "in", "(CANCELLED,VOIDED)")
           .is("shipping_status", null),
+        sb
+          .from("orders")
+          .select("id", { count: "exact", head: true })
+          .neq("payment_status", "PAID")
+          .eq("inventory_deducted", true)
+          .contains("shipping_details", { source: "facebook_checkout" })
+          .not("status", "in", "(CANCELLED,VOIDED)")
+          .in("shipping_status", PREPARING_SHIPPING_STATUSES),
       ]);
 
     const firstError =
       pendingOrders.error ||
       sellTrade.error ||
       preparingShipA.error ||
-      preparingShipB.error;
+      preparingShipB.error ||
+      preparingShipFacebook.error;
     if (firstError) {
       return NextResponse.json(
         {
@@ -63,7 +78,8 @@ export async function GET(req: Request) {
           sellTradePending: Number(sellTrade.count ?? 0),
           pendingShipping:
             Number(preparingShipA.count ?? 0) +
-            Number(preparingShipB.count ?? 0),
+            Number(preparingShipB.count ?? 0) +
+            Number(preparingShipFacebook.count ?? 0),
         },
       },
       { status: 200 }

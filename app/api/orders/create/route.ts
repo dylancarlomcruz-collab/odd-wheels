@@ -459,6 +459,7 @@ export async function POST(req: Request) {
       order_status: createAsPendingApproval
         ? "PENDING_APPROVAL"
         : "AWAITING_PAYMENT",
+      shipping_status: "PREPARING TO SHIP",
       fulfillment_status: "PENDING",
       carrier: carrierFromShippingMethod(input.shipping_method),
       tracking_number: null,

@@ -4,8 +4,10 @@ import * as React from "react";
 import { supabase } from "@/lib/supabase/browser";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import { toast } from "@/components/ui/toast";
 
 type AuditLogRow = {
   id: string;
@@ -35,6 +37,8 @@ type OrderRow = {
 
 type OrderItemRow = {
   order_id: string;
+  variant_id: string | null;
+  item_id: string | null;
   qty: number | null;
   item_name: string | null;
   product_title: string | null;
@@ -55,6 +59,8 @@ const ACTION_OPTIONS = [
   { value: "ORDER_VOIDED", label: "Voided" },
   { value: "ORDER_CANCELLED", label: "Cancelled" },
 ] as const;
+
+const CART_EVENT = "oddwheels:cart-updated";
 
 function formatActionLabel(value: string) {
   return String(value || "")
@@ -156,6 +162,13 @@ function getEntryAction(entry: OrderLogEntry) {
   return entry.log?.action ?? "ORDER_CREATED";
 }
 
+function emitCartUpdated() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(CART_EVENT, { detail: { source: "admin-order-logs" } })
+  );
+}
+
 export default function AdminOrderLogsPage() {
   const [logs, setLogs] = React.useState<AuditLogRow[]>([]);
   const [ordersById, setOrdersById] = React.useState<Record<string, OrderRow>>({});
@@ -164,6 +177,7 @@ export default function AdminOrderLogsPage() {
   const [error, setError] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState("");
   const [actionFilter, setActionFilter] = React.useState("ALL");
+  const [addingCartOrderId, setAddingCartOrderId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let mounted = true;
@@ -216,7 +230,7 @@ export default function AdminOrderLogsPage() {
       const { data: itemsData, error: itemsLoadError } = orderIds.length
         ? await supabase
             .from("order_items")
-            .select("order_id,qty,item_name,product_title")
+            .select("order_id,variant_id,item_id,qty,item_name,product_title")
             .in("order_id", orderIds)
         : { data: [], error: null };
 
@@ -246,6 +260,140 @@ export default function AdminOrderLogsPage() {
       mounted = false;
     };
   }, []);
+
+  async function addOrderToAdminCart(entry: OrderLogEntry) {
+    const orderId = String(entry.orderId || "").trim();
+    if (!orderId) return;
+    if (addingCartOrderId === orderId) return;
+
+    const variantQtyToAdd = new Map<string, number>();
+    for (const item of entry.items) {
+      const variantId = String(item.variant_id ?? item.item_id ?? "").trim();
+      const qty = Math.max(0, Number(item.qty ?? 0));
+      if (!variantId || qty <= 0) continue;
+      variantQtyToAdd.set(variantId, (variantQtyToAdd.get(variantId) ?? 0) + qty);
+    }
+
+    if (!variantQtyToAdd.size) {
+      toast({
+        intent: "error",
+        title: "Nothing to add",
+        message: "This order does not have any variant lines that can be added to the admin cart.",
+      });
+      return;
+    }
+
+    setAddingCartOrderId(orderId);
+    try {
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError) throw authError;
+
+      const userId = String(user?.id ?? "").trim();
+      if (!userId) {
+        throw new Error("Staff session not found. Please sign in again.");
+      }
+
+      const variantIds = Array.from(variantQtyToAdd.keys());
+      const [existingRes, inventoryRes] = await Promise.all([
+        supabase
+          .from("cart_items")
+          .select("id,variant_id,qty")
+          .eq("user_id", userId)
+          .in("variant_id", variantIds),
+        supabase.from("product_variants").select("id,qty").in("id", variantIds),
+      ]);
+
+      if (existingRes.error) throw existingRes.error;
+      if (inventoryRes.error) throw inventoryRes.error;
+
+      const existingMap = new Map<string, { id: string; qty: number }>();
+      for (const row of (existingRes.data as any[] | null) ?? []) {
+        if (!row?.id || !row?.variant_id) continue;
+        existingMap.set(String(row.variant_id), {
+          id: String(row.id),
+          qty: Math.max(0, Number(row.qty ?? 0)),
+        });
+      }
+
+      const inventoryMap = new Map<string, number>();
+      for (const row of (inventoryRes.data as any[] | null) ?? []) {
+        if (!row?.id) continue;
+        inventoryMap.set(String(row.id), Math.max(0, Number(row.qty ?? 0)));
+      }
+
+      const writes: PromiseLike<any>[] = [];
+      let addedVariants = 0;
+      let addedUnits = 0;
+      let cappedVariants = 0;
+
+      for (const variantId of variantIds) {
+        const qtyToAdd = Math.max(0, Number(variantQtyToAdd.get(variantId) ?? 0));
+        const available = Math.max(0, Number(inventoryMap.get(variantId) ?? 0));
+        if (!qtyToAdd || !available) continue;
+
+        const existing = existingMap.get(variantId);
+        if (existing?.id) {
+          const nextQty = Math.max(1, Math.min(existing.qty + qtyToAdd, available));
+          if (nextQty !== existing.qty) {
+            writes.push(supabase.from("cart_items").update({ qty: nextQty }).eq("id", existing.id));
+            addedVariants += 1;
+            addedUnits += nextQty - existing.qty;
+            if (nextQty < existing.qty + qtyToAdd) cappedVariants += 1;
+          }
+          continue;
+        }
+
+        const nextQty = Math.max(1, Math.min(qtyToAdd, available));
+        writes.push(
+          supabase.from("cart_items").insert({
+            user_id: userId,
+            variant_id: variantId,
+            qty: nextQty,
+            protector_selected: false,
+          })
+        );
+        addedVariants += 1;
+        addedUnits += nextQty;
+        if (nextQty < qtyToAdd) cappedVariants += 1;
+      }
+
+      const results = await Promise.all(writes);
+      const failed = results.find((result: any) => result?.error);
+      if (failed?.error) throw failed.error;
+
+      if (!writes.length) {
+        toast({
+          intent: "error",
+          title: "Nothing added",
+          message: "No stock is currently available for this order's items.",
+        });
+        return;
+      }
+
+      emitCartUpdated();
+      toast({
+        intent: "success",
+        title: "Added to admin cart",
+        message:
+          cappedVariants > 0
+            ? `${addedVariants} variant(s) and ${addedUnits} unit(s) were added. ${cappedVariants} variant(s) were capped by current stock.`
+            : `${addedVariants} variant(s) and ${addedUnits} unit(s) were added to your admin cart.`,
+        action: { label: "View cart", href: "/cart" },
+      });
+    } catch (e: any) {
+      toast({
+        intent: "error",
+        title: "Admin cart update failed",
+        message: e?.message ?? "Could not add this order to the admin cart.",
+      });
+    } finally {
+      setAddingCartOrderId(null);
+    }
+  }
 
   const entries = React.useMemo<OrderLogEntry[]>(() => {
     const latestLogByOrderId: Record<string, AuditLogRow> = {};
@@ -352,6 +500,11 @@ export default function AdminOrderLogsPage() {
                 const shortOrderId =
                   orderId && orderId !== "-" ? String(orderId).slice(0, 8) : "-";
                 const action = getEntryAction(entry);
+                const hasCartableItems = items.some((item) => {
+                  const variantId = String(item.variant_id ?? item.item_id ?? "").trim();
+                  return Boolean(variantId) && Math.max(0, Number(item.qty ?? 0)) > 0;
+                });
+                const isAddingToCart = addingCartOrderId === orderId;
 
                 return (
                   <div
@@ -363,8 +516,18 @@ export default function AdminOrderLogsPage() {
                         <div className="text-sm font-semibold">{customerName}</div>
                         <div className="text-xs text-white/50">Order #{shortOrderId}</div>
                       </div>
-                      <div className="text-right text-xs text-white/50">
-                        {formatDate(entry.log?.created_at ?? order?.created_at)}
+                      <div className="flex flex-col items-end gap-2">
+                        <div className="text-right text-xs text-white/50">
+                          {formatDate(entry.log?.created_at ?? order?.created_at)}
+                        </div>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => void addOrderToAdminCart(entry)}
+                          disabled={!hasCartableItems || isAddingToCart}
+                        >
+                          {isAddingToCart ? "Adding..." : "Add to Admin Cart"}
+                        </Button>
                       </div>
                     </div>
 

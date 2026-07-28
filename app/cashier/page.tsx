@@ -27,6 +27,19 @@ function isCancelled(status: string) {
   return status === "CANCELLED" || status === "VOIDED";
 }
 
+function isApprovedFacebookCheckoutOrder(order: any) {
+  const details =
+    order?.shipping_details &&
+    typeof order.shipping_details === "object" &&
+    !Array.isArray(order.shipping_details)
+      ? (order.shipping_details as Record<string, unknown>)
+      : null;
+  return (
+    String(details?.source ?? "").trim().toLowerCase() === "facebook_checkout" &&
+    Boolean(order?.inventory_deducted)
+  );
+}
+
 export default function CashierDashboardPage() {
   const { orders, loading, reload } = useAllOrders();
 
@@ -35,7 +48,9 @@ export default function CashierDashboardPage() {
     const paymentSubmitted = orders.filter((o) => o.status === "PAYMENT_SUBMITTED").length;
     const awaitingPayment = orders.filter((o) => o.status === "AWAITING_PAYMENT").length;
     const pendingShipping = orders.filter((o) => {
-      if (o.payment_status !== "PAID") return false;
+      if (o.payment_status !== "PAID" && !isApprovedFacebookCheckoutOrder(o)) {
+        return false;
+      }
       if (isCancelled(String(o.status ?? "").toUpperCase())) return false;
       return normalizeShippingStatus(o.shipping_status) === "PREPARING_TO_SHIP";
     }).length;
