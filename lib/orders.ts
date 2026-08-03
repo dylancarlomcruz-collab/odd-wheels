@@ -29,6 +29,37 @@ type CreateOrderOptions = {
   guest?: boolean;
 };
 
+type OrderLinkOptions = {
+  accessToken?: string | null;
+};
+
+function withAccessToken(path: string, options: OrderLinkOptions = {}) {
+  const token = String(options.accessToken ?? "").trim();
+  if (!token) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}access=${encodeURIComponent(token)}`;
+}
+
+export function buildOrderDetailHref(
+  orderId: string,
+  options: OrderLinkOptions = {}
+) {
+  return withAccessToken(
+    `/orders/${encodeURIComponent(String(orderId ?? "").trim())}`,
+    options
+  );
+}
+
+export function buildOrderPaymentHref(
+  orderId: string,
+  options: OrderLinkOptions = {}
+) {
+  return withAccessToken(
+    `/orders/${encodeURIComponent(String(orderId ?? "").trim())}/payment`,
+    options
+  );
+}
+
 export async function createOrderFromCart(
   input: CreateOrderInput,
   cartLines: CartLine[],

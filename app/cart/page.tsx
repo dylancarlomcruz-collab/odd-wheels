@@ -63,7 +63,7 @@ import {
   SHOP_ADD_TO_CART_DISABLED_MESSAGE,
   SHOP_CHECKOUT_DISABLED_MESSAGE,
 } from "@/lib/shopControls";
-import { createOrderFromCart } from "@/lib/orders";
+import { buildOrderPaymentHref, createOrderFromCart } from "@/lib/orders";
 
 function normalizeValue(value: string | null | undefined) {
   const normalized = String(value ?? "").trim().toUpperCase();
@@ -2703,12 +2703,14 @@ function CartContent() {
         saveGuestOrderAccess(orderId, guestAccessToken);
       }
       if (typeof window !== "undefined") {
-        if (isLoggedIn) {
-          window.location.assign(orderId ? `/orders/${orderId}` : "/orders");
+        if (isLoggedIn && orderId) {
+          window.location.assign(buildOrderPaymentHref(orderId));
         } else if (orderId && guestAccessToken) {
           window.location.assign(
-            `/orders/${orderId}?access=${encodeURIComponent(guestAccessToken)}`
+            buildOrderPaymentHref(orderId, { accessToken: guestAccessToken })
           );
+        } else {
+          window.location.assign("/orders");
         }
       }
     } catch (error: any) {

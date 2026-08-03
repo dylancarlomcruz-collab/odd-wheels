@@ -128,6 +128,23 @@ function getItemPrice(it: any): number {
   return direct ?? lineTotal ?? 0;
 }
 
+function isFacebookCheckoutOrder(order: any) {
+  const details = parseJsonMaybe(order?.shipping_details) ?? {};
+  return String(details?.source ?? "").trim().toLowerCase() === "facebook_checkout";
+}
+
+function canReviewPayment(order: any) {
+  const status = String(order?.status ?? "").trim().toUpperCase();
+  const paymentStatus = String(order?.payment_status ?? "").trim().toUpperCase();
+  return (
+    paymentStatus !== "PAID" &&
+    (
+      ["PAYMENT_SUBMITTED", "PAYMENT_REVIEW"].includes(status) ||
+      (status === "AWAITING_PAYMENT" && isFacebookCheckoutOrder(order))
+    )
+  );
+}
+
 export default function CashierOrdersPage() {
   const { orders, itemsByOrderId, loading, reload } = useAllOrders();
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
@@ -177,13 +194,14 @@ export default function CashierOrdersPage() {
     toast({ intent: "success", message: "Phone copied." });
   }
 
-  const actionableOrders = orders.filter((o) =>
-    ["PENDING_APPROVAL", "PENDING_STAFF_APPROVAL", "PAYMENT_SUBMITTED", "PAYMENT_REVIEW"].includes(
-      String(o.status ?? "").toUpperCase()
-    )
+  const actionableOrders = orders.filter(
+    (o) =>
+      ["PENDING_APPROVAL", "PENDING_STAFF_APPROVAL"].includes(
+        String(o.status ?? "").toUpperCase()
+      ) || canReviewPayment(o)
   );
   const pendingApproval = actionableOrders.filter((o) => o.status === "PENDING_APPROVAL");
-  const paymentSubmitted = actionableOrders.filter((o) => o.status === "PAYMENT_SUBMITTED");
+  const paymentReview = actionableOrders.filter((o) => canReviewPayment(o));
 
   return (
     <div className="space-y-6">
@@ -203,8 +221,8 @@ export default function CashierOrdersPage() {
               <div className="text-2xl font-semibold">{pendingApproval.length}</div>
             </div>
             <div className="rounded-2xl border border-white/10 bg-bg-900/30 p-4">
-              <div className="text-sm text-white/60">Receipt submitted</div>
-              <div className="text-2xl font-semibold">{paymentSubmitted.length}</div>
+              <div className="text-sm text-white/60">Payment review</div>
+              <div className="text-2xl font-semibold">{paymentReview.length}</div>
             </div>
           </div>
 
@@ -375,7 +393,7 @@ export default function CashierOrdersPage() {
                         </Button>
                       ) : null}
 
-                      {o.status === "PAYMENT_SUBMITTED" ? (
+                      {canReviewPayment(o) ? (
                         <>
                           <Button variant="secondary" onClick={() => approvePayment(o.id, true)}>
                             Approve payment

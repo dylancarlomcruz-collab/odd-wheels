@@ -295,6 +295,23 @@ function getStatusMeta(status: string) {
   );
 }
 
+function isFacebookCheckoutOrder(order: any) {
+  const details = parseJsonMaybe(order?.shipping_details) ?? {};
+  return String(details?.source ?? "").trim().toLowerCase() === "facebook_checkout";
+}
+
+function canReviewPayment(order: any) {
+  const status = String(order?.status ?? "").trim().toUpperCase();
+  const paymentStatus = String(order?.payment_status ?? "").trim().toUpperCase();
+  return (
+    paymentStatus !== "PAID" &&
+    (
+      ["PAYMENT_SUBMITTED", "PAYMENT_REVIEW"].includes(status) ||
+      (status === "AWAITING_PAYMENT" && isFacebookCheckoutOrder(order))
+    )
+  );
+}
+
 export default function AdminOrdersPage() {
   const { orders, itemsByOrderId, loading, reload } = useAllOrders();
   const [voidReason, setVoidReason] = React.useState<Record<string, string>>({});
@@ -370,7 +387,7 @@ export default function AdminOrdersPage() {
   const awaitingPayment = orders.filter((o) => o.status === "AWAITING_PAYMENT");
   const approvedReceipts = orders.filter((o) => {
     const paymentStatus = String(o.payment_status ?? "").toUpperCase();
-    return paymentStatus === "PAID" && Boolean(String(o.receipt_url ?? "").trim());
+    return paymentStatus === "PAID";
   });
   const voidedOrders = orders.filter((o) => o.status === "VOIDED");
   const visibleOrders = React.useMemo(() => {
@@ -378,7 +395,7 @@ export default function AdminOrdersPage() {
     if (statusFilter === APPROVED_RECEIPTS_FILTER) {
       return orders.filter((o) => {
         const paymentStatus = String(o.payment_status ?? "").toUpperCase();
-        return paymentStatus === "PAID" && Boolean(String(o.receipt_url ?? "").trim());
+        return paymentStatus === "PAID";
       });
     }
     return orders.filter((o) => o.status === statusFilter);
@@ -581,7 +598,7 @@ export default function AdminOrdersPage() {
             </Button>
           ) : null}
 
-          {o.status === "PAYMENT_SUBMITTED" ? (
+          {canReviewPayment(o) ? (
             <>
               <Button variant="secondary" onClick={() => approvePayment(o.id, true)}>
                 <CheckCircle2 className="mr-2 h-4 w-4" />
@@ -843,7 +860,7 @@ export default function AdminOrdersPage() {
               </Button>
             ) : null}
 
-            {o.status === "PAYMENT_SUBMITTED" ? (
+            {canReviewPayment(o) ? (
               <>
                 <Button variant="secondary" onClick={() => approvePayment(o.id, true)}>
                   <CheckCircle2 className="h-4 w-4" />
@@ -906,7 +923,7 @@ export default function AdminOrdersPage() {
               const meta =
                 card.status === APPROVED_RECEIPTS_FILTER
                   ? {
-                      label: "Approved receipts",
+                      label: "Approved payments",
                       icon: ClipboardCheck,
                     }
                   : getStatusMeta(card.status);
@@ -928,7 +945,7 @@ export default function AdminOrdersPage() {
                     active
                       ? "Showing this queue"
                       : card.status === APPROVED_RECEIPTS_FILTER
-                        ? "Tap to review paid receipts"
+                        ? "Tap to review paid orders"
                         : "Tap to filter"
                   }
                 />
@@ -967,7 +984,7 @@ export default function AdminOrdersPage() {
                 const courierSummary = shippingContainer || shippingMethod;
                 const receiptUrl = String(o.receipt_url ?? "").trim();
                 const isApprovedReceipt =
-                  String(o.payment_status ?? "").toUpperCase() === "PAID" && Boolean(receiptUrl);
+                  String(o.payment_status ?? "").toUpperCase() === "PAID";
                 return (
                   <div
                     key={o.id}
@@ -997,7 +1014,7 @@ export default function AdminOrdersPage() {
                         {isApprovedReceipt ? (
                           <div className="mt-1 flex items-center gap-2 text-emerald-200">
                             <Receipt className="h-3.5 w-3.5" />
-                            <span>Approved receipt on file</span>
+                            <span>{receiptUrl ? "Approved receipt on file" : "Payment approved"}</span>
                           </div>
                         ) : null}
                       </div>
@@ -1012,7 +1029,7 @@ export default function AdminOrdersPage() {
                         >
                           <ClipboardCopy className="h-6 w-6 text-white" />
                         </Button>
-                        {o.status === "PAYMENT_SUBMITTED" ? (
+                        {canReviewPayment(o) ? (
                           <>
                             <Button
                               variant="secondary"

@@ -24,7 +24,7 @@ import {
 } from "@/components/checkout/LalamoveTimeSlotPicker";
 import { LalamoveMapPickerModal } from "@/components/lalamove/LalamoveMapPickerModal";
 import { formatPHP } from "@/lib/money";
-import { createOrderFromCart } from "@/lib/orders";
+import { buildOrderPaymentHref, createOrderFromCart } from "@/lib/orders";
 import {
   FEES,
   REGION_LABEL,
@@ -2430,7 +2430,8 @@ function CheckoutContent() {
       }
 
       await reload();
-      router.push(`/orders`);
+      const orderId = String(order?.id ?? "").trim();
+      router.push(orderId ? buildOrderPaymentHref(orderId) : "/orders");
     } catch (e: any) {
       console.error(e);
       setMsg(e?.message ?? "Failed to place order");

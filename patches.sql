@@ -1986,6 +1986,123 @@ begin
 end;
 $$;
 
+-- Older installs may have this RPC with a different return type, so drop it first.
+drop function if exists public.fn_staff_review_payment(uuid, boolean, text);
+create or replace function public.fn_staff_review_payment(
+  p_order_id uuid,
+  p_approve boolean,
+  p_note text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order public.orders%rowtype;
+  v_status text;
+  v_note text := nullif(trim(coalesce(p_note, '')), '');
+  v_is_facebook_checkout boolean := false;
+begin
+  if not public.is_staff() then
+    raise exception 'Not authorized';
+  end if;
+
+  select *
+  into v_order
+  from public.orders
+  where id = p_order_id
+  for update;
+
+  if not found then
+    raise exception 'Order not found: %', p_order_id;
+  end if;
+
+  if upper(coalesce(v_order.payment_status, '')) = 'PAID' then
+    return jsonb_build_object('ok', true, 'already_processed', true, 'order_id', p_order_id);
+  end if;
+
+  v_status := upper(trim(coalesce(v_order.status, '')));
+  v_is_facebook_checkout := lower(trim(coalesce(v_order.shipping_details->>'source', ''))) = 'facebook_checkout';
+
+  if p_approve then
+    if not (
+      v_status in ('PAYMENT_SUBMITTED', 'PAYMENT_REVIEW')
+      or (v_is_facebook_checkout and v_status = 'AWAITING_PAYMENT')
+    ) then
+      raise exception 'Order not in PAYMENT_SUBMITTED';
+    end if;
+
+    if coalesce(v_order.inventory_deducted, false) then
+      update public.orders
+        set payment_status = 'PAID',
+            status = 'PAID',
+            order_status = 'PAID',
+            paid_at = coalesce(v_order.paid_at, now()),
+            payment_hold = false,
+            reserved_expires_at = null,
+            payment_deadline = null,
+            expires_at = null,
+            expired_at = null,
+            cancelled_reason = null,
+            shipping_status = coalesce(nullif(trim(v_order.shipping_status), ''), 'PREPARING TO SHIP')
+      where id = p_order_id;
+    else
+      perform public.fn_process_paid_order(p_order_id);
+
+      update public.orders
+        set payment_hold = false,
+            reserved_expires_at = null,
+            payment_deadline = null,
+            expires_at = null,
+            expired_at = null,
+            cancelled_reason = null,
+            shipping_status = coalesce(nullif(trim(shipping_status), ''), 'PREPARING TO SHIP')
+      where id = p_order_id;
+    end if;
+
+    insert into public.audit_logs(actor_user_id, action, meta)
+    values (
+      auth.uid(),
+      'PAYMENT_APPROVED',
+      jsonb_build_object(
+        'order_id', p_order_id,
+        'note', v_note,
+        'facebook_override', v_is_facebook_checkout and v_status = 'AWAITING_PAYMENT'
+      )
+    );
+
+    return jsonb_build_object('ok', true, 'order_id', p_order_id);
+  end if;
+
+  if v_status not in ('PAYMENT_SUBMITTED', 'PAYMENT_REVIEW') then
+    if v_is_facebook_checkout and v_status = 'AWAITING_PAYMENT' then
+      return jsonb_build_object('ok', true, 'unchanged', true, 'order_id', p_order_id);
+    end if;
+    raise exception 'Order not in PAYMENT_SUBMITTED';
+  end if;
+
+  update public.orders
+    set status = 'AWAITING_PAYMENT',
+        order_status = 'AWAITING_PAYMENT',
+        payment_status = 'UNPAID',
+        payment_hold = false
+  where id = p_order_id;
+
+  insert into public.audit_logs(actor_user_id, action, meta)
+  values (
+    auth.uid(),
+    'PAYMENT_REJECTED',
+    jsonb_build_object(
+      'order_id', p_order_id,
+      'note', coalesce(v_note, 'Payment rejected')
+    )
+  );
+
+  return jsonb_build_object('ok', true, 'order_id', p_order_id);
+end;
+$$;
+
 drop function if exists public.fn_staff_void_order(uuid, text);
 create or replace function public.fn_staff_void_order(
   p_order_id uuid,
@@ -2357,6 +2474,8 @@ $$;
 
 revoke execute on function public.pos_create_order(text, text, text, jsonb, text, boolean, jsonb) from public;
 grant execute on function public.pos_create_order(text, text, text, jsonb, text, boolean, jsonb) to authenticated;
+revoke execute on function public.fn_staff_review_payment(uuid, boolean, text) from public;
+grant execute on function public.fn_staff_review_payment(uuid, boolean, text) to authenticated;
 revoke execute on function public.fn_staff_void_order(uuid, text) from public;
 grant execute on function public.fn_staff_void_order(uuid, text) to authenticated;
 
