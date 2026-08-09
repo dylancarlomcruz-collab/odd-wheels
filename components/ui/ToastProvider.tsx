@@ -11,6 +11,7 @@ const AUTO_DISMISS_MS = 2500;
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = React.useState<ToastItem[]>([]);
+  const [isMobile, setIsMobile] = React.useState(false);
   const timers = React.useRef(
     new Map<
       string,
@@ -47,6 +48,17 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("app-toast", onToast as EventListener);
   }, [scheduleRemove]);
 
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const media = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobile(media.matches);
+
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
   function onPause(id: string) {
     const timer = timers.current.get(id);
     if (!timer) return;
@@ -74,9 +86,15 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       {toasts.length ? (
         <div
           className="pointer-events-none fixed left-1/2 z-[35] w-[calc(100%-2rem)] max-w-[440px] -translate-x-1/2 space-y-3"
-          style={{
-            top: "calc(var(--shop-header-height, 4rem) + 0.75rem)",
-          }}
+          style={
+            isMobile
+              ? {
+                  bottom: "1rem",
+                }
+              : {
+                  top: "calc(var(--shop-header-height, 4rem) + 0.75rem)",
+                }
+          }
         >
           {toasts.map((t) => {
             const priceLabel =
