@@ -5,6 +5,7 @@ export type DetailGridItemData = {
   label: React.ReactNode;
   value: React.ReactNode;
   hint?: React.ReactNode;
+  action?: React.ReactNode;
   valueClassName?: string;
   className?: string;
 };
@@ -32,8 +33,11 @@ export function DetailGrid({
           key={typeof item.label === "string" ? `${item.label}-${index}` : index}
           className={cn("surface-subtle p-3 sm:p-3.5", item.className)}
         >
-          <div className="text-[0.7rem] font-medium uppercase tracking-[0.13em] text-white/45">
-            {item.label}
+          <div className="flex items-start justify-between gap-3">
+            <div className="text-[0.7rem] font-medium uppercase tracking-[0.13em] text-white/45">
+              {item.label}
+            </div>
+            {item.action ? <div className="shrink-0">{item.action}</div> : null}
           </div>
           <div className={cn("mt-1 text-sm leading-6 text-white/90 break-words", item.valueClassName)}>
             {item.value}

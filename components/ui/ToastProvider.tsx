@@ -72,7 +72,12 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       {children}
 
       {toasts.length ? (
-        <div className="pointer-events-none fixed top-16 left-1/2 z-[9999] w-[calc(100%-2rem)] max-w-[440px] -translate-x-1/2 space-y-3">
+        <div
+          className="pointer-events-none fixed left-1/2 z-[35] w-[calc(100%-2rem)] max-w-[440px] -translate-x-1/2 space-y-3"
+          style={{
+            top: "calc(var(--shop-header-height, 4rem) + 0.75rem)",
+          }}
+        >
           {toasts.map((t) => {
             const priceLabel =
               typeof t.price === "number" ? formatPHP(t.price) : null;

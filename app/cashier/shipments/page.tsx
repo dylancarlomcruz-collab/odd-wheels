@@ -76,13 +76,21 @@ type ManualOrderEditDraft = {
 };
 type OrderCustomerEditDraft = {
   customerName: string;
-  customerPhone: string;
-  contact: string;
-  address: string;
-  receiverName: string;
-  receiverPhone: string;
-  fullAddress: string;
-  region: string;
+  contactNumber: string;
+  shippingRegion: string;
+  lbcBranchName: string;
+  lbcBranchCity: string;
+  lbcPackage: string;
+  jntHouseStreetUnit: string;
+  jntBarangay: string;
+  jntCity: string;
+  jntProvince: string;
+  jntPostalCode: string;
+  jntPouch: string;
+  lalamoveAddress: string;
+  pickupDay: string;
+  pickupSlot: string;
+  orderNotes: string;
 };
 type OrderItemEditDraft = {
   itemName: string;
@@ -120,13 +128,21 @@ const EMPTY_MANUAL_ORDER_EDIT_DRAFT: ManualOrderEditDraft = {
 };
 const EMPTY_ORDER_CUSTOMER_EDIT_DRAFT: OrderCustomerEditDraft = {
   customerName: "",
-  customerPhone: "",
-  contact: "",
-  address: "",
-  receiverName: "",
-  receiverPhone: "",
-  fullAddress: "",
-  region: "",
+  contactNumber: "",
+  shippingRegion: "",
+  lbcBranchName: "",
+  lbcBranchCity: "",
+  lbcPackage: "",
+  jntHouseStreetUnit: "",
+  jntBarangay: "",
+  jntCity: "",
+  jntProvince: "",
+  jntPostalCode: "",
+  jntPouch: "",
+  lalamoveAddress: "",
+  pickupDay: "",
+  pickupSlot: "",
+  orderNotes: "",
 };
 const EMPTY_ORDER_ITEM_EDIT_DRAFT: OrderItemEditDraft = {
   itemName: "",
@@ -198,19 +214,41 @@ function formatMoneyInput(value: number | null | undefined) {
 
 function createOrderCustomerEditDraft(order: any) {
   const details = parseJsonMaybe(order?.shipping_details) ?? {};
+  const method = getOrderShippingMethod(order, details);
   return {
-    customerName: String(order?.customer_name ?? "").trim(),
-    customerPhone: String(order?.customer_phone ?? "").trim(),
-    contact: String(order?.contact ?? "").trim(),
-    address: String(order?.address ?? "").trim(),
-    receiverName: String(details.receiver_name ?? details.name ?? "").trim(),
-    receiverPhone: String(
-      details.receiver_phone ?? details.phone ?? details.contact ?? ""
+    customerName: getCustomerName(order, details),
+    contactNumber: formatPhoneForCheckoutField(
+      details.receiver_phone ??
+        details.phone ??
+        details.contact ??
+        order?.customer_phone ??
+        order?.contact ??
+        ""
+    ),
+    shippingRegion: String(details.region ?? order?.shipping_region ?? "").trim(),
+    lbcBranchName: String(details.branch_name ?? details.branch ?? "").trim(),
+    lbcBranchCity: String(details.branch_city ?? "").trim(),
+    lbcPackage:
+      method === "LBC"
+        ? String(details.package ?? details.package_size ?? "").trim()
+        : "",
+    jntHouseStreetUnit: String(
+      details.house_street_unit ?? details.address_line ?? ""
     ).trim(),
-    fullAddress: String(
-      details.full_address ?? details.address ?? details.dropoff_address ?? ""
+    jntBarangay: String(details.barangay ?? details.brgy ?? "").trim(),
+    jntCity: String(details.city ?? "").trim(),
+    jntProvince: String(details.province ?? "").trim(),
+    jntPostalCode: String(details.postal_code ?? "").trim(),
+    jntPouch:
+      method === "JNT"
+        ? String(details.package ?? details.package_size ?? "").trim()
+        : "",
+    lalamoveAddress: String(
+      details.dropoff_address ?? cleanAddress(order?.address) ?? ""
     ).trim(),
-    region: String(details.region ?? order?.shipping_region ?? "").trim(),
+    pickupDay: String(details.pickup_day ?? "").trim(),
+    pickupSlot: String(details.pickup_slot ?? "").trim(),
+    orderNotes: String(details.notes ?? details.note ?? details.text ?? "").trim(),
   };
 }
 
@@ -610,6 +648,54 @@ function getCustomerName(o: any, details: Record<string, any>) {
   );
 }
 
+function splitCustomerName(raw: string | null | undefined) {
+  const parts = String(raw ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!parts.length) {
+    return { firstName: "", lastName: "" };
+  }
+  if (parts.length === 1) {
+    return { firstName: parts[0], lastName: "" };
+  }
+  return {
+    firstName: parts.slice(0, -1).join(" "),
+    lastName: parts[parts.length - 1],
+  };
+}
+
+function getCustomerNameParts(o: any, details: Record<string, any>) {
+  const firstName = String(details.first_name ?? "").trim();
+  const lastName = String(details.last_name ?? "").trim();
+  if (firstName || lastName) {
+    return { firstName, lastName };
+  }
+  return splitCustomerName(getCustomerName(o, details));
+}
+
+function normalizeShipmentPhone(raw: string | null | undefined) {
+  const digits = String(raw ?? "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("63") && digits.length >= 12) return digits.slice(2);
+  if (digits.startsWith("0") && digits.length === 11) return digits.slice(1);
+  return digits;
+}
+
+function formatPhoneForCheckoutField(raw: string | null | undefined) {
+  const digits = String(raw ?? "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("63") && digits.length >= 12) return `0${digits.slice(2)}`;
+  if (digits.length === 10) return `0${digits}`;
+  return digits;
+}
+
+function getCustomerPhoneValue(o: any, details: Record<string, any>) {
+  return normalizeShipmentPhone(
+    details.receiver_phone || details.phone || o.customer_phone || o.contact || ""
+  );
+}
+
 function buildManualOrderEditDraft(order: any): ManualOrderEditDraft {
   const details = parseJsonMaybe(order?.shipping_details) ?? {};
   return {
@@ -642,6 +728,7 @@ function pickShippingDays(notices: { title: string; body: string }[]) {
 const B1_LABEL_WIDTH_MM = 50;
 const B1_LABEL_HEIGHT_MM = 30;
 const B1_LABEL_DP_MM = 8;
+const B1_LABEL_CONTENT_SCALE = 0.72;
 
 type ShippingLabelData = {
   customerName: string;
@@ -725,16 +812,18 @@ function createShippingLabelCanvas(data: ShippingLabelData) {
   ctx.fillStyle = "#000000";
   ctx.textBaseline = "top";
 
-  const paddingX = 36;
-  const maxWidth = canvas.width - paddingX * 2;
+  const contentWidth = Math.round(canvas.width * B1_LABEL_CONTENT_SCALE);
+  const contentOffsetX = Math.round((canvas.width - contentWidth) / 2);
+  const paddingX = contentOffsetX + 10;
+  const maxWidth = contentWidth - 20;
   const barcodeValue = String(data.barcodeValue ?? "").trim();
-  let y = 16;
+  let y = 22;
 
   const drawSingleLineField = (label: string, value: string) => {
-    ctx.font = "bold 24px Arial";
+    ctx.font = "bold 20px Arial";
     const lines = wrapCanvasText(ctx, `${label}: ${String(value || "-").trim()}`, maxWidth, 1);
     ctx.fillText(lines[0] ?? `${label}: -`, paddingX, y);
-    y += 32;
+    y += 28;
   };
 
   drawSingleLineField("Name", data.customerName);
@@ -751,7 +840,7 @@ function createShippingLabelCanvas(data: ShippingLabelData) {
       background: "#ffffff",
       lineColor: "#000000",
       width: 2,
-      height: 68,
+      height: 56,
     });
   } catch {
     JsBarcode(barcodeCanvas, fallbackBarcode || "000000000000", {
@@ -761,15 +850,17 @@ function createShippingLabelCanvas(data: ShippingLabelData) {
       background: "#ffffff",
       lineColor: "#000000",
       width: 2,
-      height: 68,
+      height: 56,
     });
   }
 
-  const targetHeight = 68;
-  ctx.drawImage(barcodeCanvas, paddingX, y, maxWidth, targetHeight);
-  y += targetHeight + 2;
+  const targetWidth = Math.min(Math.max(barcodeCanvas.width, 220), maxWidth);
+  const targetHeight = 56;
+  const barcodeX = Math.round((canvas.width - targetWidth) / 2);
+  ctx.drawImage(barcodeCanvas, barcodeX, y, targetWidth, targetHeight);
+  y += targetHeight + 4;
 
-  ctx.font = "16px Arial";
+  ctx.font = "14px Arial";
   ctx.textAlign = "center";
   ctx.fillText(barcodeValue || fallbackBarcode || "000000000000", canvas.width / 2, y);
   ctx.textAlign = "left";
@@ -1668,8 +1759,8 @@ export default function CashierShipmentsPage() {
     window.setTimeout(() => setCopiedId((cur) => (cur === o.id ? null : cur)), 1200);
   }
 
-  async function onCopyPhone(phone: string) {
-    const value = String(phone ?? "").trim();
+  async function onCopyField(label: string, rawValue: string) {
+    const value = String(rawValue ?? "").trim();
     if (!value) return;
 
     const ok = await copyText(value);
@@ -1678,7 +1769,7 @@ export default function CashierShipmentsPage() {
       return;
     }
 
-    toast({ intent: "success", message: "Phone copied." });
+    toast({ intent: "success", message: `${label} copied.` });
   }
 
   function onDraftChange(
@@ -1748,34 +1839,103 @@ export default function CashierShipmentsPage() {
     setSavingOrderCustomer(true);
     try {
       const details = parseJsonMaybe(order.shipping_details) ?? {};
-      const nextAddress =
-        orderCustomerDraft.fullAddress.trim() || orderCustomerDraft.address.trim();
+      const method = getOrderShippingMethod(order, details) || "LBC";
+      const customerName = orderCustomerDraft.customerName.trim();
+      const { firstName, lastName } = splitCustomerName(customerName);
+      const contactNumber = orderCustomerDraft.contactNumber.trim();
+      const shippingRegion = orderCustomerDraft.shippingRegion.trim();
+      const orderNotes = orderCustomerDraft.orderNotes.trim();
+      let nextAddress = "";
+
+      if (method === "LBC") {
+        nextAddress = [
+          orderCustomerDraft.lbcBranchName.trim(),
+          orderCustomerDraft.lbcBranchCity.trim(),
+        ]
+          .filter(Boolean)
+          .join(", ");
+      } else if (method === "JNT") {
+        nextAddress = [
+          orderCustomerDraft.jntHouseStreetUnit.trim(),
+          orderCustomerDraft.jntBarangay.trim()
+            ? `Brgy ${orderCustomerDraft.jntBarangay.trim()}`
+            : "",
+          orderCustomerDraft.jntCity.trim(),
+          orderCustomerDraft.jntProvince.trim(),
+          orderCustomerDraft.jntPostalCode.trim(),
+        ]
+          .filter(Boolean)
+          .join(", ");
+      } else if (method === "LALAMOVE") {
+        nextAddress = orderCustomerDraft.lalamoveAddress.trim();
+      } else if (method === "PICKUP") {
+        nextAddress = String(
+          details.pickup_location ??
+            details.pickup_directory ??
+            order.address ??
+            ""
+        ).trim();
+      }
+
       const nextDetails = {
         ...details,
-        receiver_name: orderCustomerDraft.receiverName.trim() || orderCustomerDraft.customerName.trim(),
-        receiver_phone:
-          orderCustomerDraft.receiverPhone.trim() ||
-          orderCustomerDraft.customerPhone.trim() ||
-          orderCustomerDraft.contact.trim(),
-        phone:
-          orderCustomerDraft.receiverPhone.trim() ||
-          orderCustomerDraft.customerPhone.trim() ||
-          orderCustomerDraft.contact.trim(),
-        contact:
-          orderCustomerDraft.contact.trim() ||
-          orderCustomerDraft.customerPhone.trim() ||
-          orderCustomerDraft.receiverPhone.trim(),
-        full_address: nextAddress,
-        address: nextAddress,
-        region: orderCustomerDraft.region.trim(),
+        receiver_name: customerName || null,
+        first_name: firstName || null,
+        last_name: lastName || null,
+        receiver_phone: contactNumber || null,
+        phone: contactNumber || null,
+        contact: contactNumber || null,
+        notes: orderNotes || null,
+        branch_name:
+          method === "LBC" ? orderCustomerDraft.lbcBranchName.trim() || null : details.branch_name ?? null,
+        branch_city:
+          method === "LBC" ? orderCustomerDraft.lbcBranchCity.trim() || null : details.branch_city ?? null,
+        package:
+          method === "LBC"
+            ? orderCustomerDraft.lbcPackage.trim() || null
+            : method === "JNT"
+              ? orderCustomerDraft.jntPouch.trim() || null
+              : details.package ?? null,
+        house_street_unit:
+          method === "JNT"
+            ? orderCustomerDraft.jntHouseStreetUnit.trim() || null
+            : details.house_street_unit ?? null,
+        barangay:
+          method === "JNT" ? orderCustomerDraft.jntBarangay.trim() || null : details.barangay ?? null,
+        brgy:
+          method === "JNT" ? orderCustomerDraft.jntBarangay.trim() || null : details.brgy ?? null,
+        city: method === "JNT" ? orderCustomerDraft.jntCity.trim() || null : details.city ?? null,
+        province:
+          method === "JNT" ? orderCustomerDraft.jntProvince.trim() || null : details.province ?? null,
+        postal_code:
+          method === "JNT" ? orderCustomerDraft.jntPostalCode.trim() || null : details.postal_code ?? null,
+        address_line:
+          method === "JNT"
+            ? [orderCustomerDraft.jntHouseStreetUnit.trim(), orderCustomerDraft.jntBarangay.trim()]
+                .filter(Boolean)
+                .join(", ") || null
+            : details.address_line ?? null,
+        full_address:
+          method === "JNT" ? nextAddress || null : method === "LALAMOVE" ? null : details.full_address ?? null,
+        address:
+          method === "JNT" ? nextAddress || null : method === "LALAMOVE" ? null : details.address ?? null,
+        dropoff_address:
+          method === "LALAMOVE" ? orderCustomerDraft.lalamoveAddress.trim() || null : details.dropoff_address ?? null,
+        pickup_day:
+          method === "PICKUP" ? orderCustomerDraft.pickupDay.trim() || null : details.pickup_day ?? null,
+        pickup_slot:
+          method === "PICKUP" ? orderCustomerDraft.pickupSlot.trim() || null : details.pickup_slot ?? null,
+        region:
+          method === "LBC" || method === "JNT" ? shippingRegion || null : details.region ?? null,
       };
 
       const payload = {
-        customer_name: orderCustomerDraft.customerName.trim() || null,
-        customer_phone: orderCustomerDraft.customerPhone.trim() || null,
-        contact: orderCustomerDraft.contact.trim() || null,
-        address: orderCustomerDraft.address.trim() || nextAddress || null,
-        shipping_region: orderCustomerDraft.region.trim() || null,
+        customer_name: customerName || null,
+        customer_phone: contactNumber || null,
+        contact: contactNumber || null,
+        address: nextAddress || null,
+        shipping_region:
+          method === "LBC" || method === "JNT" ? shippingRegion || null : null,
         shipping_details: nextDetails,
       };
 
@@ -2651,18 +2811,23 @@ export default function CashierShipmentsPage() {
       if (!order) throw new Error("Order not found.");
 
       const details = parseJsonMaybe(order.shipping_details) ?? {};
+      const shippingStage = resolveShippingStage(order, details);
       const nextDetails = {
         ...details,
         lbc_booking_reference: reference,
         booking_reference: reference,
       };
+      const payload: Record<string, any> = {
+        shipping_details: nextDetails,
+      };
+
+      if (shippingStage === "TO BOOK") {
+        payload.shipping_status = "PREPARING TO SHIP";
+      }
 
       const { error } = await supabase
         .from("orders")
-        .update({
-          shipping_status: "PREPARING TO SHIP",
-          shipping_details: nextDetails,
-        })
+        .update(payload)
         .eq("id", orderId);
       if (error) throw error;
 
@@ -2672,7 +2837,10 @@ export default function CashierShipmentsPage() {
       }));
       toast({
         intent: "success",
-        message: "Booking reference saved. Order moved to To Ship.",
+        message:
+          shippingStage === "TO BOOK"
+            ? "Booking reference saved. Order moved to To Ship."
+            : "Booking reference updated.",
       });
       await reload();
     } catch (err: any) {
@@ -2853,7 +3021,7 @@ export default function CashierShipmentsPage() {
                     className="h-7 w-7 px-0"
                     title="Copy phone number"
                     aria-label="Copy phone number"
-                    onClick={() => onCopyPhone(customerPhone)}
+                    onClick={() => void onCopyField("Phone", customerPhone)}
                   >
                     <ClipboardCopy className="h-3.5 w-3.5" />
                   </Button>
@@ -3237,17 +3405,511 @@ export default function CashierShipmentsPage() {
     const shippingSummary = buildShippingSummary(o, details);
     const createdAt = new Date(o.created_at).toLocaleString("en-PH");
     const customerName = getCustomerName(o, details);
-    const customerPhone =
-      details.receiver_phone || details.phone || o.customer_phone || o.contact || "";
-    const customerAddress = cleanAddress(
-      details.full_address || details.dropoff_address || o.address || details.address
-    );
+    const customerNameParts = getCustomerNameParts(o, details);
+    const customerPhone = getCustomerPhoneValue(o, details);
+    const shippingMethod = getOrderShippingMethod(o, details) || String(o.shipping_method ?? "");
+    const customerAddress = getAddressOrBranch(shippingMethod, details, o);
+    const packaging = formatShippingContainer(shippingMethod, details);
+    const pickupLocation = String(details.pickup_location ?? "").trim();
+    const pickupDirectory = String(details.pickup_directory ?? "").trim();
     const orderTotal = peso(Number(o.total ?? 0));
     const orderStatus = String(o.status ?? "").trim().toUpperCase();
     const canVoidOrder = orderStatus !== "VOIDED" && orderStatus !== "CANCELLED";
+    const customerShipmentSection = (
+      <SectionBlock
+        title="Customer & shipment"
+        description="Core delivery facts arranged for quick scanning."
+      >
+        <DetailGrid
+          items={[
+            {
+              label: "First name",
+              value: customerNameParts.firstName || "-",
+              action: customerNameParts.firstName ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={() => void onCopyField("First name", customerNameParts.firstName)}
+                >
+                  <ClipboardCopy className="h-3.5 w-3.5" />
+                  Copy
+                </Button>
+              ) : null,
+            },
+            {
+              label: "Last name",
+              value: customerNameParts.lastName || "-",
+              action: customerNameParts.lastName ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={() => void onCopyField("Last name", customerNameParts.lastName)}
+                >
+                  <ClipboardCopy className="h-3.5 w-3.5" />
+                  Copy
+                </Button>
+              ) : null,
+            },
+            {
+              label: "Phone",
+              value: customerPhone || "-",
+              hint: customerPhone ? "Normalized without the leading zero." : undefined,
+              action: customerPhone ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={() => void onCopyField("Phone", customerPhone)}
+                >
+                  <ClipboardCopy className="h-3.5 w-3.5" />
+                  Copy
+                </Button>
+              ) : null,
+            },
+            {
+              label: "Address / branch",
+              value: customerAddress || "-",
+              action: customerAddress ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={() => void onCopyField("Address / branch", customerAddress)}
+                >
+                  <ClipboardCopy className="h-3.5 w-3.5" />
+                  Copy
+                </Button>
+              ) : null,
+            },
+            {
+              label: "Shipping method",
+              value: String(o.shipping_method ?? "-"),
+              action: o.shipping_method ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={() => void onCopyField("Shipping method", String(o.shipping_method))}
+                >
+                  <ClipboardCopy className="h-3.5 w-3.5" />
+                  Copy
+                </Button>
+              ) : null,
+            },
+            {
+              label: "Packaging",
+              value: packaging || "-",
+              action: packaging ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={() => void onCopyField("Packaging", packaging)}
+                >
+                  <ClipboardCopy className="h-3.5 w-3.5" />
+                  Copy
+                </Button>
+              ) : null,
+            },
+            {
+              label: "Booking reference",
+              value: bookingReference || "-",
+              action: bookingReference ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={() => void onCopyField("Booking reference", bookingReference)}
+                >
+                  <ClipboardCopy className="h-3.5 w-3.5" />
+                  Copy
+                </Button>
+              ) : null,
+            },
+            {
+              label: "Tracking number",
+              value: String(draft.tracking || o.tracking_number || "-"),
+              action:
+                draft.tracking || o.tracking_number ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-[11px]"
+                    onClick={() =>
+                      void onCopyField(
+                        "Tracking number",
+                        String(draft.tracking || o.tracking_number || "")
+                      )
+                    }
+                  >
+                    <ClipboardCopy className="h-3.5 w-3.5" />
+                    Copy
+                  </Button>
+                ) : null,
+            },
+          ]}
+        />
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <Input
+            label="Customer name"
+            value={orderCustomerDraft.customerName}
+            onChange={(e) =>
+              setOrderCustomerDraft((cur) => ({ ...cur, customerName: e.target.value }))
+            }
+          />
+          <Input
+            label="Contact Number"
+            value={orderCustomerDraft.contactNumber}
+            onChange={(e) =>
+              setOrderCustomerDraft((cur) => ({ ...cur, contactNumber: e.target.value }))
+            }
+            placeholder="09xxxxxxxxx"
+          />
+          {shippingMethod === "LBC" || shippingMethod === "JNT" ? (
+            <Input
+              label="Shipping Region"
+              value={orderCustomerDraft.shippingRegion}
+              onChange={(e) =>
+                setOrderCustomerDraft((cur) => ({ ...cur, shippingRegion: e.target.value }))
+              }
+            />
+          ) : null}
+
+          {shippingMethod === "LBC" ? (
+            <>
+              <Input
+                label="LBC Branch Name"
+                value={orderCustomerDraft.lbcBranchName}
+                onChange={(e) =>
+                  setOrderCustomerDraft((cur) => ({ ...cur, lbcBranchName: e.target.value }))
+                }
+              />
+              <Input
+                label="Branch City"
+                value={orderCustomerDraft.lbcBranchCity}
+                onChange={(e) =>
+                  setOrderCustomerDraft((cur) => ({ ...cur, lbcBranchCity: e.target.value }))
+                }
+              />
+              <Input
+                label="LBC Package"
+                value={orderCustomerDraft.lbcPackage}
+                onChange={(e) =>
+                  setOrderCustomerDraft((cur) => ({ ...cur, lbcPackage: e.target.value }))
+                }
+              />
+            </>
+          ) : null}
+
+          {shippingMethod === "JNT" ? (
+            <>
+              <Input
+                label="House / Street / Unit"
+                value={orderCustomerDraft.jntHouseStreetUnit}
+                onChange={(e) =>
+                  setOrderCustomerDraft((cur) => ({
+                    ...cur,
+                    jntHouseStreetUnit: e.target.value,
+                  }))
+                }
+              />
+              <Input
+                label="Barangay"
+                value={orderCustomerDraft.jntBarangay}
+                onChange={(e) =>
+                  setOrderCustomerDraft((cur) => ({ ...cur, jntBarangay: e.target.value }))
+                }
+              />
+              <Input
+                label="City"
+                value={orderCustomerDraft.jntCity}
+                onChange={(e) =>
+                  setOrderCustomerDraft((cur) => ({ ...cur, jntCity: e.target.value }))
+                }
+              />
+              <Input
+                label="Province"
+                value={orderCustomerDraft.jntProvince}
+                onChange={(e) =>
+                  setOrderCustomerDraft((cur) => ({ ...cur, jntProvince: e.target.value }))
+                }
+              />
+              <Input
+                label="Postal Code"
+                value={orderCustomerDraft.jntPostalCode}
+                onChange={(e) =>
+                  setOrderCustomerDraft((cur) => ({ ...cur, jntPostalCode: e.target.value }))
+                }
+              />
+              <Input
+                label="J&T Pouch"
+                value={orderCustomerDraft.jntPouch}
+                onChange={(e) =>
+                  setOrderCustomerDraft((cur) => ({ ...cur, jntPouch: e.target.value }))
+                }
+              />
+            </>
+          ) : null}
+
+          {shippingMethod === "LALAMOVE" ? (
+            <Textarea
+              label="Lalamove Drop-off Address / Landmark"
+              value={orderCustomerDraft.lalamoveAddress}
+              onChange={(e) =>
+                setOrderCustomerDraft((cur) => ({
+                  ...cur,
+                  lalamoveAddress: e.target.value,
+                }))
+              }
+              className="min-h-[96px] md:col-span-2"
+            />
+          ) : null}
+
+          {shippingMethod === "PICKUP" ? (
+            <>
+              <Input
+                label="Pickup Day"
+                value={orderCustomerDraft.pickupDay}
+                onChange={(e) =>
+                  setOrderCustomerDraft((cur) => ({ ...cur, pickupDay: e.target.value }))
+                }
+              />
+              <Input
+                label="Pickup Timeslot"
+                value={orderCustomerDraft.pickupSlot}
+                onChange={(e) =>
+                  setOrderCustomerDraft((cur) => ({ ...cur, pickupSlot: e.target.value }))
+                }
+              />
+              {pickupLocation ? (
+                <Input
+                  label="Pickup Location"
+                  value={pickupLocation}
+                  disabled
+                  className="md:col-span-2"
+                />
+              ) : null}
+              {pickupDirectory ? (
+                <Input
+                  label="Pickup Directory"
+                  value={pickupDirectory}
+                  disabled
+                  className="md:col-span-2"
+                />
+              ) : null}
+            </>
+          ) : null}
+
+          <Textarea
+            label="Order Notes"
+            value={orderCustomerDraft.orderNotes}
+            onChange={(e) =>
+              setOrderCustomerDraft((cur) => ({ ...cur, orderNotes: e.target.value }))
+            }
+            className="min-h-[96px] md:col-span-2"
+            placeholder="Optional notes for this order"
+          />
+        </div>
+        <div className="mt-4">
+          <Button
+            variant="secondary"
+            onClick={() => saveOrderCustomerDetails(o.id)}
+            disabled={savingOrderCustomer}
+          >
+            {savingOrderCustomer ? "Saving..." : "Save customer details"}
+          </Button>
+        </div>
+      </SectionBlock>
+    );
+    const itemsSection = (
+      <SectionBlock
+        title={`Items (${items.length})`}
+        description="Select an item row to inspect condition and notes, add more items, or remove a line."
+      >
+        <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4">
+          <div className="text-xs uppercase tracking-wide text-white/50">
+            Add inventory item
+          </div>
+          <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_120px_auto]">
+            <Input
+              placeholder="Search title, brand, model, variation, barcode..."
+              value={orderItemSearch}
+              onChange={(e) => setOrderItemSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void searchOrderItemVariants();
+                }
+              }}
+            />
+            <Input
+              type="number"
+              min={1}
+              label="Qty"
+              value={orderItemAddQty}
+              onChange={(e) => setOrderItemAddQty(e.target.value)}
+            />
+            <Button
+              type="button"
+              className="self-end"
+              onClick={() => searchOrderItemVariants()}
+              disabled={searchingOrderItems}
+            >
+              {searchingOrderItems ? "Searching..." : "Search items"}
+            </Button>
+          </div>
+
+          {orderItemSearchResults.length ? (
+            <div className="mt-3 space-y-2">
+              {orderItemSearchResults.map((match) => (
+                <div
+                  key={match.variantId}
+                  className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-bg-900/50 p-3 lg:flex-row lg:items-center"
+                >
+                  <div className="flex min-w-0 flex-1 gap-3">
+                    <div className="h-12 w-12 overflow-hidden rounded-xl border border-white/10 bg-bg-800 flex-shrink-0">
+                      {match.imageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={match.imageUrl}
+                          alt={match.title}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : null}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate font-medium text-white">
+                        {match.title}
+                      </div>
+                      <div className="mt-1 text-xs text-white/60">
+                        {formatConditionLabel(match.condition, { upper: true })} |{" "}
+                        {peso(match.unitPrice)} | Stock: {match.qty}
+                      </div>
+                      <div className="mt-1 text-xs text-white/45">
+                        {[match.brand, match.model, match.variation]
+                          .filter(Boolean)
+                          .join(" - ") || "No extra product details"}
+                        {match.barcode ? ` | Barcode: ${match.barcode}` : ""}
+                      </div>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="gap-1.5"
+                    onClick={() => addVariantToOrder(match)}
+                    disabled={addingOrderItemId === match.variantId}
+                  >
+                    {addingOrderItemId === match.variantId ? (
+                      "Adding..."
+                    ) : (
+                      <>
+                        <Plus className="h-4 w-4" />
+                        Add to order
+                      </>
+                    )}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {orderItemSearchRan && !searchingOrderItems && !orderItemSearchResults.length ? (
+            <div className="mt-3 text-sm text-white/60">No matching in-stock items found.</div>
+          ) : null}
+        </div>
+
+        {items.length === 0 ? (
+          <div className="text-sm text-white/60">No items found for this order.</div>
+        ) : (
+          <div className="space-y-2.5">
+            {items.map((it: any, idx: number) => {
+              const thumb = getItemThumb(it);
+              const title = getItemTitle(it);
+              const condition = formatConditionLabel(
+                it?.condition ?? it?.product_variant?.condition,
+                { upper: true }
+              );
+              const itemCondition = String(
+                it?.condition ?? it?.product_variant?.condition ?? ""
+              ).toLowerCase();
+              const isNearMint = isNearMintCondition(itemCondition);
+              const isWithIssues = isIssueCondition(itemCondition);
+              const notes = String(
+                it?.public_notes ??
+                  it?.product_variant?.public_notes ??
+                  it?.issue_notes ??
+                  it?.product_variant?.issue_notes ??
+                  ""
+              ).trim();
+              const price = getItemPrice(it);
+              const qty = Number(it?.qty ?? 1);
+              const line = Number(it?.line_total ?? price * qty);
+
+              return (
+                <button
+                  key={`${o.id}-${idx}`}
+                  type="button"
+                  className="surface-subtle flex w-full gap-3 p-3 text-left transition hover:border-white/20 hover:bg-bg-900/50 sm:p-3.5"
+                  onClick={() => setSelectedItem(it)}
+                  aria-label={`View details for ${title}`}
+                >
+                  <div className="h-12 w-12 overflow-hidden rounded-xl border border-white/10 bg-bg-800 flex-shrink-0">
+                    {thumb ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={thumb} alt={title} className="h-full w-full object-cover" />
+                    ) : null}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-white truncate">{title}</div>
+                    <div className="mt-1 text-xs text-white/60">
+                      {condition ? `${condition} | ` : ""}
+                      {qty} x {peso(price)} | Line: {peso(line)}
+                    </div>
+                    {notes ? (
+                      <div
+                        className={`mt-1 flex items-center gap-2 text-xs ${
+                          isWithIssues
+                            ? "text-red-200/80"
+                            : isNearMint
+                              ? "text-amber-200/80"
+                              : "text-white/60"
+                        }`}
+                      >
+                        {isWithIssues || isNearMint ? (
+                          <span
+                            className={`h-2 w-2 rounded-full ${isWithIssues ? "bg-red-400" : "bg-amber-400"}`}
+                            aria-hidden="true"
+                          />
+                        ) : null}
+                        <span>Notes: {notes}</span>
+                      </div>
+                    ) : null}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </SectionBlock>
+    );
 
     return (
       <div className="space-y-5">
+        <div className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
+          <div className="min-w-0">{customerShipmentSection}</div>
+          <div className="min-w-0">{itemsSection}</div>
+        </div>
         <SectionBlock>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -3312,99 +3974,6 @@ export default function CashierShipmentsPage() {
             </div>
           </SectionBlock>
         ) : null}
-
-        <SectionBlock
-          title="Customer & shipment"
-          description="Core delivery facts arranged for quick scanning."
-        >
-          <DetailGrid
-            items={[
-              { label: "Customer", value: customerName || "-" },
-              { label: "Phone", value: customerPhone || "-" },
-              { label: "Address / branch", value: customerAddress || "-" },
-              { label: "Shipping method", value: String(o.shipping_method ?? "-") },
-              { label: "Booking reference", value: bookingReference || "-" },
-              { label: "Tracking number", value: String(draft.tracking || o.tracking_number || "-") },
-            ]}
-          />
-          {customerPhone ? (
-            <div className="mt-3">
-              <Button variant="ghost" size="sm" onClick={() => onCopyPhone(customerPhone)}>
-                <ClipboardCopy className="h-3.5 w-3.5" />
-                Copy phone
-              </Button>
-            </div>
-          ) : null}
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <Input
-              label="Customer name"
-              value={orderCustomerDraft.customerName}
-              onChange={(e) =>
-                setOrderCustomerDraft((cur) => ({ ...cur, customerName: e.target.value }))
-              }
-            />
-            <Input
-              label="Customer phone"
-              value={orderCustomerDraft.customerPhone}
-              onChange={(e) =>
-                setOrderCustomerDraft((cur) => ({ ...cur, customerPhone: e.target.value }))
-              }
-            />
-            <Input
-              label="Contact"
-              value={orderCustomerDraft.contact}
-              onChange={(e) =>
-                setOrderCustomerDraft((cur) => ({ ...cur, contact: e.target.value }))
-              }
-            />
-            <Input
-              label="Region"
-              value={orderCustomerDraft.region}
-              onChange={(e) =>
-                setOrderCustomerDraft((cur) => ({ ...cur, region: e.target.value }))
-              }
-            />
-            <Input
-              label="Receiver name"
-              value={orderCustomerDraft.receiverName}
-              onChange={(e) =>
-                setOrderCustomerDraft((cur) => ({ ...cur, receiverName: e.target.value }))
-              }
-            />
-            <Input
-              label="Receiver phone"
-              value={orderCustomerDraft.receiverPhone}
-              onChange={(e) =>
-                setOrderCustomerDraft((cur) => ({ ...cur, receiverPhone: e.target.value }))
-              }
-            />
-            <Input
-              label="Recorded address"
-              value={orderCustomerDraft.address}
-              onChange={(e) =>
-                setOrderCustomerDraft((cur) => ({ ...cur, address: e.target.value }))
-              }
-              className="md:col-span-2"
-            />
-            <Textarea
-              label="Shipping full address / branch"
-              value={orderCustomerDraft.fullAddress}
-              onChange={(e) =>
-                setOrderCustomerDraft((cur) => ({ ...cur, fullAddress: e.target.value }))
-              }
-              className="min-h-[96px] md:col-span-2"
-            />
-          </div>
-          <div className="mt-4">
-            <Button
-              variant="secondary"
-              onClick={() => saveOrderCustomerDetails(o.id)}
-              disabled={savingOrderCustomer}
-            >
-              {savingOrderCustomer ? "Saving..." : "Save customer details"}
-            </Button>
-          </div>
-        </SectionBlock>
 
         {shippingStage === "TO BOOK" ? (
           <SectionBlock title="Booking workflow" description="Add the LBC booking reference to move this order forward.">
@@ -3482,177 +4051,6 @@ export default function CashierShipmentsPage() {
           </SectionBlock>
         ) : null}
 
-        <SectionBlock
-          title={`Items (${items.length})`}
-          description="Select an item row to inspect condition and notes, add more items, or remove a line."
-        >
-          <div className="rounded-2xl border border-white/10 bg-bg-900/40 p-4">
-            <div className="text-xs uppercase tracking-wide text-white/50">
-              Add inventory item
-            </div>
-            <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_120px_auto]">
-              <Input
-                placeholder="Search title, brand, model, variation, barcode..."
-                value={orderItemSearch}
-                onChange={(e) => setOrderItemSearch(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void searchOrderItemVariants();
-                  }
-                }}
-              />
-              <Input
-                type="number"
-                min={1}
-                label="Qty"
-                value={orderItemAddQty}
-                onChange={(e) => setOrderItemAddQty(e.target.value)}
-              />
-              <Button
-                type="button"
-                className="self-end"
-                onClick={() => searchOrderItemVariants()}
-                disabled={searchingOrderItems}
-              >
-                {searchingOrderItems ? "Searching..." : "Search items"}
-              </Button>
-            </div>
-
-            {orderItemSearchResults.length ? (
-              <div className="mt-3 space-y-2">
-                {orderItemSearchResults.map((match) => (
-                  <div
-                    key={match.variantId}
-                    className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-bg-900/50 p-3 lg:flex-row lg:items-center"
-                  >
-                    <div className="flex min-w-0 flex-1 gap-3">
-                      <div className="h-12 w-12 overflow-hidden rounded-xl border border-white/10 bg-bg-800 flex-shrink-0">
-                        {match.imageUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={match.imageUrl}
-                            alt={match.title}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : null}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="truncate font-medium text-white">
-                          {match.title}
-                        </div>
-                        <div className="mt-1 text-xs text-white/60">
-                          {formatConditionLabel(match.condition, { upper: true })} |{" "}
-                          {peso(match.unitPrice)} | Stock: {match.qty}
-                        </div>
-                        <div className="mt-1 text-xs text-white/45">
-                          {[match.brand, match.model, match.variation]
-                            .filter(Boolean)
-                            .join(" - ") || "No extra product details"}
-                          {match.barcode ? ` | Barcode: ${match.barcode}` : ""}
-                        </div>
-                      </div>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="gap-1.5"
-                      onClick={() => addVariantToOrder(match)}
-                      disabled={addingOrderItemId === match.variantId}
-                    >
-                      {addingOrderItemId === match.variantId ? (
-                        "Adding..."
-                      ) : (
-                        <>
-                          <Plus className="h-4 w-4" />
-                          Add to order
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-
-            {orderItemSearchRan && !searchingOrderItems && !orderItemSearchResults.length ? (
-              <div className="mt-3 text-sm text-white/60">No matching in-stock items found.</div>
-            ) : null}
-          </div>
-
-          {items.length === 0 ? (
-            <div className="text-sm text-white/60">No items found for this order.</div>
-          ) : (
-            <div className="space-y-2.5">
-              {items.map((it: any, idx: number) => {
-                const thumb = getItemThumb(it);
-                const title = getItemTitle(it);
-                const condition = formatConditionLabel(
-                  it?.condition ?? it?.product_variant?.condition,
-                  { upper: true }
-                );
-                const itemCondition = String(
-                  it?.condition ?? it?.product_variant?.condition ?? ""
-                ).toLowerCase();
-                const isNearMint = isNearMintCondition(itemCondition);
-                const isWithIssues = isIssueCondition(itemCondition);
-                const notes = String(
-                  it?.public_notes ??
-                    it?.product_variant?.public_notes ??
-                    it?.issue_notes ??
-                    it?.product_variant?.issue_notes ??
-                    ""
-                ).trim();
-                const price = getItemPrice(it);
-                const qty = Number(it?.qty ?? 1);
-                const line = Number(it?.line_total ?? price * qty);
-
-                return (
-                  <button
-                    key={`${o.id}-${idx}`}
-                    type="button"
-                    className="surface-subtle flex w-full gap-3 p-3 text-left transition hover:border-white/20 hover:bg-bg-900/50 sm:p-3.5"
-                    onClick={() => setSelectedItem(it)}
-                    aria-label={`View details for ${title}`}
-                  >
-                    <div className="h-12 w-12 overflow-hidden rounded-xl border border-white/10 bg-bg-800 flex-shrink-0">
-                      {thumb ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={thumb} alt={title} className="h-full w-full object-cover" />
-                      ) : null}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="font-medium text-white truncate">{title}</div>
-                      <div className="mt-1 text-xs text-white/60">
-                        {condition ? `${condition} | ` : ""}
-                        {qty} x {peso(price)} | Line: {peso(line)}
-                      </div>
-                      {notes ? (
-                        <div
-                          className={`mt-1 flex items-center gap-2 text-xs ${
-                            isWithIssues
-                              ? "text-red-200/80"
-                              : isNearMint
-                                ? "text-amber-200/80"
-                                : "text-white/60"
-                          }`}
-                        >
-                          {isWithIssues || isNearMint ? (
-                            <span
-                              className={`h-2 w-2 rounded-full ${isWithIssues ? "bg-red-400" : "bg-amber-400"}`}
-                              aria-hidden="true"
-                            />
-                          ) : null}
-                          <span>Notes: {notes}</span>
-                        </div>
-                      ) : null}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </SectionBlock>
-
         <SectionBlock title="Shipping details" description="Only relevant formatted fields are shown.">
           {shippingSummary.length ? (
             <DetailGrid
@@ -3664,6 +4062,40 @@ export default function CashierShipmentsPage() {
           ) : (
             <div className="text-sm text-white/60">No shipping details available.</div>
           )}
+          {shippingMethod === "LBC" ? (
+            <div className="mt-4 grid gap-3 md:grid-cols-[1.2fr_auto_auto]">
+              <Input
+                label="LBC booking reference"
+                value={draft.bookingReference}
+                placeholder="Enter or scan LBC reference"
+                onChange={(e) => onDraftChange(o.id, "bookingReference", e.target.value)}
+                className="h-10 text-sm"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="self-end"
+                onClick={() => {
+                  setScanMode("booking_reference");
+                  setScanOrderId(o.id);
+                  setScanCourier("");
+                }}
+                disabled={busy}
+              >
+                Scan reference
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="self-end"
+                onClick={() => saveBookingReference(o.id, draft.bookingReference)}
+                disabled={busy || !canSaveBookingReference}
+              >
+                Save reference
+              </Button>
+            </div>
+          ) : null}
         </SectionBlock>
 
         <SectionBlock title="Actions" description="Operational actions are grouped by priority.">
